@@ -13414,8 +13414,21 @@ const BOT_IA_SEM_TEXTO = 'áudio eu ainda não escuto kkkkk manda por escrito qu
 const BOT_IA_FORA = { problema_avisado: 'putz! anotei aqui e já avisei o Bruno pra olhar', problema: 'putz! marca o Bruno aqui que ele resolve', outro: 'deu ruim do meu lado agora, o Google tá congestionado. manda de novo daqui a pouco que eu respondo' };
 const BOT_IA_MARCADO = { vend: 'tô aqui! manda: número, meta ou pedido que eu olho pra vc', cob: 'tô aqui! manda o nome do cliente ou o número do pedido que eu olho pra vc' };
 const BOT_IA_NAO_SEI_QUEM = 'ainda não sei quem é vc aqui, então não consigo abrir pedido nem número. o Bruno precisa te apresentar na dash (Bot de WhatsApp, Quem é quem)';
-// Palavra de PROBLEMA: e o unico gatilho espontaneo (sem marcar o bot). '?', 'pedido', 'cliente',
-// 'numero' e 'app' NAO acendem sozinhos: no grupo dos vendedores quase toda mensagem tem isso.
+// NUMERO CAIU (09/11/2026, print do Bruno com o "2248 caiu" do Kevin: "poderia ter dado uma resposta bem mais curta e sem
+// ser muito repetitiva, porque toda vez que cai um numero ele fala a mesma coisa. O que seria interessante falar aqui e:
+// ja avisei o Bruno"). Quem conta que o numero caiu ganha UMA frase curta desta lista, sorteada sem repetir as ultimas
+// (_botSorteia), e o aviso vai pra direcao de verdade, um por numero (_botIaAvisar com o final). Sem IA: o sistema ja
+// tira da roleta o numero que caiu (_desligaCaidos), entao o "desliga o interruptor" que a IA escrevia era sobra. Se o
+// aviso nao chegou em ninguem, a segunda lista (nunca diz que avisou). O mesmo numero de novo em 5 min ganha so reacao.
+const BOT_IA_CAIU = ['já avisei o Bruno', 'avisado, o Bruno já tá sabendo', 'já passei pro Bruno', 'o Bruno já tá sabendo', 'já mandei pro Bruno', 'anotado, já avisei o Bruno', 'já chamei o Bruno', 'Bruno já foi avisado'];
+const BOT_IA_CAIU_SEM_AVISO = ['marca o Bruno aqui que ele ajeita', 'marca o Bruno aqui, ele ajeita outro'];
+const BOT_IA_CAIU_REPETE_S = 300;
+// FESTA SEM CHAMAR O BOT (09/11/2026, mesmo pedido: "deixar para ele responder realmente quando alguem marcar ele"): a
+// venda comemorada no grupo ganha so uma reacao na mensagem, sem texto e sem IA (o marco tem a comemoracao automatica).
+const BOT_IA_FESTA_REACOES = ['🔥', '🚀', '🍾', '💰', '🙌', '👏'];
+// Palavra de PROBLEMA. Desde 09/11/2026 ela NAO faz o bot entrar sozinho (so o numero caido entra, ver
+// _botIaNumeroCaiu): serve pra quem citou o bot, pra temperatura da IA e pro aviso quando a IA esta fora. '?',
+// 'pedido', 'cliente', 'numero' e 'app' tambem nao acendem nada: no grupo dos vendedores quase toda mensagem tem isso.
 const BOT_IA_PROBLEMA_RE = /\b(caiu|cair|caindo|banid[oa]s?|bloque(?:ou|aram|ad[oa]s?|io)|travou|travando|travad[oa]|desconect(?:ou|ad[oa]|a|ando)|n[aã]o consigo|n[aã]o abre|n[aã]o carrega|n[aã]o funciona|erro|bug|deu ruim|parou de funcionar)\b/i;
 // BLOQUEIO DO CLIENTE (07/11/2026, print do Bruno no grupo dos cobradores: "Lead bloqueou" virou "desliga o interruptor
 // dele no SellWave Web" e aviso de numero caido pra direcao). Aqui "bloqueou" quase sempre e o CLIENTE que bloqueou o
@@ -13429,9 +13442,40 @@ function _botIaTextoProblema(t) {
   if (!/bloque/i.test(s) || (!BOT_IA_BLOQ_CLIENTE_RE.test(s) && BOT_IA_BLOQ_NUMERO_RE.test(s))) return s;
   return s.replace(/\bbloque\w*/gi, 'clientebloqueou');
 }
+// O QUE E "NUMERO CAIU" (09/11/2026, ver BOT_IA_CAIU). Verbo de queda junto do que caiu: numero, chip, whats, zap, conta
+// ou linha ("meu whats caiu"), o final do numero ("2248 caiu", "Meu numero 1859 caiu"), o telefone colado ou "o meu
+// tambem caiu"; banido, "tomei ban" e "pediu QR" valem sozinhos, como o "fui bloqueado" (BOT_IA_BLOQ_NUMERO_RE);
+// restrito e bloqueado pedem o numero junto. Nao e: o que cai e nao e o numero ("caiu o pix", "caiu a ficha", "a internet
+// caiu", "o app caiu", "caiu um lead", "caiu na caixa postal", "caiu a ligacao"), o cliente que bloqueou (o texto chega
+// com "clientebloqueou", ver _botIaTextoProblema) e digito perto de dinheiro ("caiu 1500 no pix"). Recebe o texto ja
+// passado pelo _botIaTextoProblema; devolve { caiu, fim } (fim = os 4 ultimos digitos do numero, quando vieram).
+const BOT_IA_CAIU_TIRA = /\b(?:caiu|cairam|caindo|cai)\s+(?:(?:o|a|os|as|um|uma|uns|umas|na|no|nas|nos|mais|minha|meu)\s+)?(?:pix|ficha|luz|energia|internet|net|wifi|rede|sinal|sistema|site|dash|app|aplicativo|campanhas?|anuncios?|pagamentos?|vendas?|boleto|dinheiro|grana|cartao|chuva|leads?|clientes?|pedidos?|real|golpe|ligacao|chamada|caixa|conversa|labia|papo|lista|spam|fila|fora|audio|video|mensage(?:m|ns))\b|\b(?:pix|luz|energia|internet|net|wifi|rede|sinal|sistema|site|dash|app|aplicativo|campanhas?|anuncios?|pagamentos?|vendas?|boleto|leads?|clientes?|pedidos?|ligacao|chamada)\s+(?:(?:dele|dela|aqui|la|ja|tambem|tbm|tb|do nada)\s+)?(?:caiu|cairam|caindo|cai)\b/g;
+const BOT_IA_CAIU_FORTE = /\b(?:banid[oa]s?|ban|banimento)\b|\b(?:pediu|pedindo|pede|pedia)\s+(?:o\s+|um\s+)?qr\b/;
+const BOT_IA_CAIU_VERBO = /\b(?:caiu|cairam|caindo|desconect(?:ou|ad[oa]s?|aram|ando|a)|deslog(?:ou|ad[oa]s?))\b/;
+const BOT_IA_CAIU_RESTR = /\b(?:restrit[oa]s?|restricao|bloquead[oa]s?|bloqueou|bloquearam)\b/;
+const BOT_IA_CAIU_OQUE = /\b(?:numeros?|chips?|whats|whatsapp|zap|conta|linha)\b/;
+const BOT_IA_CAIU_MEU = /\b(?:meu|minha)\b/;
+const BOT_IA_CAIU_FINAL = /(?:^|\s)(\d{4})(?=\s|$)/;
+const BOT_IA_CAIU_FONE = /\d[\d\s().+-]{7,}\d/;
+const BOT_IA_CAIU_DINHEIRO = /\b(?:pix|reais|rs|pagou|pago|paga|pagamento|boleto|valor)\b/;
+function _botIaNumeroCaiu(texto) {
+  const bruto = String(texto || '');
+  const n = _botIaNorm(bruto).replace(BOT_IA_CAIU_TIRA, ' ');
+  const forte = BOT_IA_CAIU_FORTE.test(n) || BOT_IA_BLOQ_NUMERO_RE.test(bruto);
+  const verbo = BOT_IA_CAIU_VERBO.test(n), restr = BOT_IA_CAIU_RESTR.test(n);
+  if (!forte && !verbo && !restr) return { caiu: false, fim: '' };
+  const dinheiro = BOT_IA_CAIU_DINHEIRO.test(n);
+  const fone = dinheiro ? null : bruto.match(BOT_IA_CAIU_FONE);
+  const m = dinheiro || fone ? null : n.match(BOT_IA_CAIU_FINAL);
+  const fim = fone ? fone[0].replace(/\D/g, '').slice(-4) : (m ? m[1] : '');
+  const oque = !!fim || BOT_IA_CAIU_OQUE.test(n);
+  return { caiu: forte || (verbo && (oque || BOT_IA_CAIU_MEU.test(n))) || (restr && oque), fim };
+}
 // Palavra de COMEMORACAO (06/11/2026, pedido do Bruno: "caso algum deles bata meta, chegue num numero bom, ele tambem
 // participe da comemoracao, de um gritao"): o outro gatilho sem marcar. So palavra forte de festa ("bora" sozinho nao);
-// a IA so entra se o placar confirmar, e no maximo uma tentativa a cada BOT_IA_FESTA_S no grupo.
+// a IA so entra se o placar confirmar, e no maximo uma tentativa a cada BOT_IA_FESTA_S no grupo. Desde 09/11/2026 (o Bruno
+// achou o bot falando demais) a festa sem marcar e so uma REACAO na mensagem, sem IA e sem texto, com venda nova de quem
+// escreveu, uma por pessoa a cada BOT_IA_FESTA_S (ver BOT_IA_FESTA_REACOES).
 const BOT_IA_FESTA_RE = /(\bbati\b|\bbatemos\b|\bfechei\b|\bfechamos\b|\bvendi\b|\bcravei\b|(^|\s)\+1\b|\bporra+\b|\bkrl\b|\bcaralh[oa]+\b|\bbo{2,}r+a+\b|\bbora{2,}\b|\bisso a[ií]+\b|\bcaiu o pix\b|\bpagou+\s*!|\bvoltou+\s*!|\bmais um de volta\b)/i;
 const BOT_IA_FESTA_S = 600;
 // A VENDA FEITA na festa (07/11/2026): palavra de venda ou numero do dia. A FESTA NO MARCO (_botIaMarcoAgora) so cala o
@@ -14340,12 +14384,12 @@ async function _botIaProvocacoesDeHoje(env) {
   } catch (_) { return []; }
 }
 
-// A pessoa esta conversando com o bot? (ele respondeu ela neste grupo ha menos de BOT_IA_CONVERSA_S)
-// Ja houve uma tentativa de festa sem marcar neste grupo ha pouco (respondida ou calada): nao tenta de novo. Na duvida
-// (o banco falhou), nao entra.
-async function _botIaFestaRecente(env, jid) {
+// A pessoa ja ganhou a reacao da festa ha pouco (BOT_IA_FESTA_S): nao reage de novo. Desde 09/11/2026 conta por PESSOA e
+// so a reacao dada (a festa de um nao segura a do outro, e o grito sem venda nao conta). Na duvida (o banco falhou), nao
+// entra.
+async function _botIaFestaRecente(env, jid, deJid) {
   try {
-    const r = await env.DB.prepare("SELECT 1 AS ok FROM bot_chat WHERE jid=? AND motivo LIKE 'festa%' AND ts>? LIMIT 1").bind(String(jid || ''), Math.floor(Date.now() / 1000) - BOT_IA_FESTA_S).first();
+    const r = await env.DB.prepare("SELECT 1 AS ok FROM bot_chat WHERE jid=? AND de_jid=? AND motivo LIKE 'festa: rea%' AND ts>? LIMIT 1").bind(String(jid || ''), String(deJid || ''), Math.floor(Date.now() / 1000) - BOT_IA_FESTA_S).first();
     return !!(r && r.ok);
   } catch (_) { return true; }
 }
@@ -14425,9 +14469,11 @@ function _botIaChamouOutroPeloNome(texto, equipe, deNome) {
   const u = (equipe || []).find((x) => x && _botIaNorm(x.nome).split(' ')[0] === w);
   return u ? String(u.nome || '').trim().split(/\s+/)[0] : '';
 }
+// A pessoa esta conversando com o bot? (ele respondeu ela neste grupo ha menos de BOT_IA_CONVERSA_S). Desde 09/11/2026 so
+// conta resposta de conversa: a frase do numero caido e a reacao (da festa ou qualquer outra) nao abrem conversa.
 async function _botIaEmConversa(env, jid, deJid) {
   try {
-    const r = await env.DB.prepare("SELECT 1 AS ok FROM bot_chat WHERE jid=? AND de_jid=? AND acao IN ('respondeu','pendente') AND ts>? LIMIT 1").bind(String(jid), String(deJid), Math.floor(Date.now() / 1000) - BOT_IA_CONVERSA_S).first();
+    const r = await env.DB.prepare("SELECT 1 AS ok FROM bot_chat WHERE jid=? AND de_jid=? AND acao IN ('respondeu','pendente') AND ts>? AND COALESCE(resposta,'') NOT LIKE '(reagiu com %' AND COALESCE(motivo,'') NOT LIKE 'festa%' AND COALESCE(motivo,'') NOT LIKE 'n_mero caiu%' LIMIT 1").bind(String(jid), String(deJid), Math.floor(Date.now() / 1000) - BOT_IA_CONVERSA_S).first();
     return !!(r && r.ok);
   } catch (_) { return false; }
 }
@@ -14451,11 +14497,16 @@ async function _botIaCitouResposta(env, jid, citado) {
 // AVISO A DIRECAO = push na dash (o caminho do aviso de queda), com teto por pessoa/assunto.
 // `soPara` = grupo de teste: o aviso vai so pra quem ligou o teste, com chave de repeticao propria (um
 // "meu numero caiu" de teste no lugar do Guilherme nao segura o aviso de verdade dele por 30 min).
-async function _botIaAvisar(env, grupo, quem, deNome, texto, resumo, cfg, soPara) {
+// `tema` (09/11/2026): o numero caido manda 'numero' + o final ("numero2248"), entao cada numero tem o seu aviso (antes o
+// "0026 caiu" 6 min depois do "2248 caiu" do mesmo vendedor nao avisava ninguem). Quem escreveu nao recebe aviso da
+// propria mensagem ("as campanhas deram uma travada" do Bruno virou push pro proprio Bruno); no grupo de teste vai pra
+// quem ligou, mesmo sendo ele quem escreve.
+async function _botIaAvisar(env, grupo, quem, deNome, texto, resumo, cfg, soPara, tema) {
   const equipe = await _botEquipe(env);
-  const chefes = equipe.filter((u) => (u.role === 'diretor' || u.role === 'socio') && (!soPara || u.id === soPara));
+  const eu = !soPara && quem && quem.id ? String(quem.id) : '';
+  const chefes = equipe.filter((u) => (u.role === 'diretor' || u.role === 'socio') && (!soPara || u.id === soPara) && u.id !== eu);
   if (!chefes.length) return { entregues: 0, nomes: [] };
-  const assunto = (soPara ? 'teste_' : '') + (quem && quem.id ? quem.id : _botIaNorm(deNome).slice(0, 20)) + ':' + (BOT_IA_NUMERO_RE.test(_botIaTextoProblema(texto)) ? 'numero' : 'geral');
+  const assunto = (soPara ? 'teste_' : '') + (quem && quem.id ? quem.id : _botIaNorm(deNome).slice(0, 20)) + ':' + (tema || (BOT_IA_NUMERO_RE.test(_botIaTextoProblema(texto)) ? 'numero' : 'geral'));
   const agora = Math.floor(Date.now() / 1000);
   let ultimo = 0;
   try { ultimo = Number(await _readConfig(env, 'bot_iaav_' + assunto)) || 0; } catch (_) { ultimo = 0; }
@@ -14465,7 +14516,7 @@ async function _botIaAvisar(env, grupo, quem, deNome, texto, resumo, cfg, soPara
   const body = (soPara ? '[teste] ' : '') + ((quem && quem.nome) || deNome || 'Alguém') + ' no grupo ' + (g.nome || (grupo === 'cob' ? 'dos cobradores' : 'dos vendedores')) + ': "' + String(texto).replace(/\s+/g, ' ').slice(0, 140) + '"' + (resumo ? ' · ' + String(resumo).slice(0, 100) : '');
   let entregues = 0;
   for (const u of chefes) {
-    try { entregues += await _wpParaPessoa(env, u.id, { title: soPara ? 'Barbadinho (teste): pedido de ajuda no grupo' : 'Barbadinho: pedido de ajuda no grupo', body, tag: 'bot-ia-' + assunto.replace(/[^a-z0-9]/gi, ''), url: '/ferramentas/bot' + (grupo === 'cob' ? '?aba=cob' : ''), aviso: true }, 'bot', null); } catch (_) {}
+    try { entregues += await _wpParaPessoa(env, u.id, { title: (soPara ? 'Barbadinho (teste): ' : 'Barbadinho: ') + (/^numero/.test(String(tema || '')) ? 'número caiu' : 'pedido de ajuda no grupo'), body, tag: 'bot-ia-' + assunto.replace(/[^a-z0-9]/gi, ''), url: '/ferramentas/bot' + (grupo === 'cob' ? '?aba=cob' : ''), aviso: true }, 'bot', null); } catch (_) {}
   }
   await _botLog(env, { dia: _brDay(), tipo: 'ia_aviso', nome: chefes.map((u) => u.nome).join(', '), fone: '', via: 'push', status: entregues ? 'enviado' : 'erro', erro: entregues ? '' : 'ninguém da direção com a dash no celular (push)', texto: body });
   return { entregues, nomes: chefes.map((u) => u.nome) };
@@ -14508,7 +14559,7 @@ const BOT_IA_SISTEMA = [
   '4. ZOEIRA: oi, elogio, xingamento de brincadeira, ciúme, política, piada com você ou com alguém do grupo.',
   '',
   'PROBLEMA: acolhe primeiro e resolve, sem duvidar de quem relatou. Abre com uma reação de quem sentiu junto ("putz", "eita", "vish"; vale até um "puta merda") e, se a pessoa está desabafando, um "relaxa" ou "calma, queridão"; depois o próximo passo prático. Nada de kkkk nem festa, e nada de "faz parte". Diga "já avisei o Bruno" SÓ se aviso_entregue for true; senão peça pra marcar o Bruno aqui no grupo. Preencha avisar_direcao com um resumo curto.',
-  '- Número caiu: acredite em quem falou, o app às vezes demora pra registrar a queda. NUNCA diga que não aparece queda, que o número tá ok ou conectado: isso soa como desmentir. Se os dados mostram que ele ainda recebe lead, diga que ele precisa sair da roleta logo pra não perder lead. O jeito: "puta merda, relaxa queridão! já avisei o Bruno pra ajeitar outro número e você não perder o bonde".',
+  '- Número caiu: acredite em quem falou, o app às vezes demora pra registrar a queda. NUNCA diga que não aparece queda, que o número tá ok ou conectado: isso soa como desmentir. Resposta CURTA, uma frase: o que perguntaram em poucas palavras e "já avisei o Bruno" (só com aviso_entregue true). Nada de mandar desligar interruptor nem de repetir o texto que você já mandou: o sistema tira da roleta o número que caiu.',
   '- Cliente que bloqueou ("lead bloqueou", "a cliente me bloqueou", "deu block"): quem bloqueou foi o cliente, não caiu nada. Nada de interruptor, chip novo ou queda: é cobrança, use o MANUAL.',
   '- No grupo dos cobradores não existe interruptor nem roleta: número de cobrança caiu, é só o Bruno ajeitar outro.',
   '- Pedido que não subiu ou sumiu: diga se ele aparece nos DADOS e em que situação está (aguardando aprovação da direção, a enviar, enviado...). Se não aparece, diga que não achou e peça o nome completo ou o telefone do cliente.',
@@ -14552,8 +14603,8 @@ const BOT_IA_SISTEMA = [
   '',
   'QUANDO RESPONDER:',
   '- Quando te MARCAM (@Barbadinho), responda sempre (responder = true).',
-  '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; agradecimento ou elogio pra você ganha resposta curta e animada ("tmj!", "valeu"); risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
-  '- Sem te chamarem, só entre se for problema que os dados resolvem ou comemoração que os DADOS confirmam (aí entra com um grito curto); papo entre pessoas = responder false. Não responda a mesma coisa duas vezes.',
+  '- Falaram seu nome, citaram uma mensagem sua ou continuaram a conversa com você sem marcar: se é com você ou sobre você (te chamando, perguntando, pedindo, elogiando, zoando ou reclamando de você ou do que você disse), responda curto; agradecimento ou elogio pra você ganha resposta curta e animada ("tmj!", "valeu"); risada solta ("kkkk", "vsf") ou papo entre outras pessoas = responder false.',
+  '- Sem te chamarem você não entra, nem em problema nem em festa (a direção lê o grupo, e a venda comemorada ganha a sua reação): papo entre pessoas = responder false. Não responda a mesma coisa duas vezes.',
   '- Mensagem que marca outra pessoa (@Fulano, @alguém) ou que chama alguém do time pelo nome é com essa pessoa, mesmo com problema ou cliente no meio: responder false.',
   '',
   'Responda SOMENTE com JSON, sem nada antes ou depois: {"leitura": "em até 15 palavras, o que a pessoa quis dizer e com quem está falando (só pra você, não vai pro grupo)", "responder": true ou false, "texto": "a resposta", "curta": "", "minima": "", "reacao": "", "melhor": "texto", "avisar_direcao": "" ou "resumo curto do problema", "buscar": "" ou "nome ou telefone de um pedido que você precisa e não veio"}',
@@ -14589,15 +14640,15 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho +1 fechei as 10" (Guilherme, placar 10) -> ISSO AÍ PORRAAAA 🔥🔥 10 cravadas! tu é foda',
   '"bati as 10, to liberado pro meu jiu jitsu @Barbadinho" (Guilherme, placar 10; você já comemorou as 10 dele há 1 min) -> vai lá, monstro, amassa no tatame também 🥋',
   '"@Barbadinho bati 5 hj krl" (Guilherme, placar 5; intensidade leve) -> boaaa! 5 no bolso e o dia rendendo',
-  '"BOOORA 10 HJ KRL" (Kevin, sem marcar; placar: Kevin 10 hj) -> SEGURA O HOMIII 🐐🔥 10 hj, é os guri porraaa',
+  '"@Barbadinho BOOORA 10 HJ KRL" (Kevin; placar: Kevin 10 hj) -> SEGURA O HOMIII 🐐🔥 10 hj, é os guri porraaa',
   '"bom dia rapaziada" (sem marcar, 0 vendas no time) -> responder false',
   '"@Barbadinho se prepara que hoje vai ter festa" (Kevin, 2 hj) -> tô pronto! a primeira festa sai na 5 e vc tá a 3 dela, chama',
   '"@Barbadinho bati 10 krl" (Kevin, placar 9) -> aqui no placar ainda tá 9. quando a 10 entrar na dash a festa sai sozinha',
   '"@Barbadinho bati a meta do mês krl" (Guilherme, mês 220, bateu 220) -> ISSO AÍ PORRAAAA 🍾💰 220 no mês, Guilherme! tu é foda, agora é buscar os 240',
   '"@Barbadinho tá ladrão hj, foi só 15 aqui" (Kevin, placar 20, aviso_entregue true) -> aqui no placar tá 20 pra vc hj. se a sua conta deu 15, tem coisa errada em algum lugar, já avisei a direção pra conferir',
-  '"4144 caiu @Bruno" (Kevin; queda registrada 11:09, fora da roleta; 2 números recebendo; aviso_entregue true) -> putz! a queda do 4144 já tá registrada e ele saiu da roleta, vc segue com os outros 2 recebendo. já avisei o Bruno pra ajeitar outro',
-  '"@Barbadinho meu 3996 caiu, tava cheio de lead" (Guilherme; o app ainda não registrou a queda; ele ainda recebe lead; aviso_entregue true) -> puta merda, relaxa queridão! já avisei o Bruno pra tirar o 3996 da roleta e ajeitar outro, que é pra vc não perder o bonde',
-  '"caiu meu número de novo pqp" (Kevin; o app ainda não registrou a queda; aviso_entregue false) -> eita, de novo? calma, queridão: marca o Bruno aqui que ele ajeita outro número pra vc não ficar parado',
+  '"@Barbadinho o 4144 caiu?" (Kevin; queda registrada 11:09, fora da roleta; aviso_entregue true) -> caiu sim, já saiu da roleta. já avisei o Bruno',
+  '"@Barbadinho meu 3996 caiu? tava cheio de lead" (Guilherme; o app ainda não registrou a queda; aviso_entregue true) -> relaxa queridão, já avisei o Bruno',
+  '"@Barbadinho caiu meu número de novo? pqp" (Kevin; aviso_entregue false) -> eita. marca o Bruno aqui que ele ajeita',
   '"@Barbadinho o pedido da C1 não subiu" (Guilherme; pedido provável: C1, Bauru/SP, a enviar, aguardando aprovação da direção) -> se for C1 de Bauru/SP, o pedido tá lá: em A Enviar, esperando a aprovação da direção',
   '"@Barbadinho as msg n tão enviando aqui, travou tudo" (aviso_entregue true) -> putz. daqui eu não consigo ver o envio de mensagem, só pedido, número e meta. já avisei a direção',
   '"@Barbadinho sou uma inútil nesse placar kkk" (Barbara, 0 hj, 11:20) -> inútil nada! tá cedo ainda e tem o dia todo pela frente, qualquer coisa dá um grito aqui no grupo',
@@ -14621,7 +14672,7 @@ const BOT_IA_EXEMPLOS = {
   '"@Barbadinho quantos faltam cobrar hj?" (Bryan: 31 na fila, 6 atrasados) -> faltam 31 na sua fila e 6 tão atrasados. bora buscar o próximo!',
   '"@Barbadinho quantos ja cobrei?" (Bryan: 0 de volta hoje, 27 na fila) -> nenhum de volta ainda hj, Bryan. são 27 na fila, bora buscar o primeiro',
   '"@Barbadinho a C1 pagou!! 10 hj" (Bryan: 10 de volta hoje; o pedido de C1 pago) -> ISSO AÍ PORRAAAA 💰🔥 C1 pagou e são 10 de volta hj! tu é foda',
-  '"CAIU O PIX DA C1 KRL" (Bryan, sem marcar; o pedido de C1 pago hoje; 4 de volta hoje) -> boaaa, mais um de volta! já são 4 hj 💰',
+  '"@Barbadinho CAIU O PIX DA C1 KRL" (Bryan; o pedido de C1 pago hoje; 4 de volta hoje) -> boaaa, mais um de volta! já são 4 hj 💰',
   '"@Barbadinho bati minha meta, solta um áudio" (Bryan: 2 de volta hoje) -> áudio eu ainda não mando. aqui eu vejo 2 de volta hj, quando a meta bater a festa sai sozinha',
   '"@Barbadinho o SellWave Web travou aqui, n abre a ficha" (aviso_entregue true) -> putz. daqui eu não enxergo o app, só a sua fila. já avisei a direção pra olhar',
   '"@Barbadinho o lead me bloqueou" (Bryan; pedido em cobrança) -> aí quem bloqueou foi o cliente, não caiu nada do seu lado. tem outro número seu aberto? chama por ele; se não, manda os dados aqui marcando o Heynan ou o Bruno pra chamarem de outro número',
@@ -14764,6 +14815,14 @@ async function _botIaResponder(env, cfg, b, opts) {
   // O sorteio da forma e do tempero da resposta (o teste passa o seu, pra dar sempre o mesmo).
   const sorte = typeof o.sorte === 'number' ? o.sorte : Math.random();
   // 1. Gatilho
+  // O BOT SO FALA QUANDO E COM ELE (09/11/2026, pedido do Bruno: "o bot esta falando demais no grupo (...) deixar para
+  // ele responder realmente quando alguem marcar ele ou quando alguem de fato falar sobre ele ou sobre algo que tem a ver
+  // com ele"; e "a galera falou dele, ele respondeu, eles falaram mais uma coisa e ele respondeu de novo. Isso e beleza").
+  // Medido no dia 09: 6 das 11 respostas no grupo dos vendedores e 3 das 5 nos cobradores sairam sem ninguem chamar
+  // (festa espontanea, "as campanhas deram uma travada", "nao consigo acessar o checkout", "ta dando erro"), e cada uma
+  // abria uma conversa que puxava a proxima. Agora: marcou, falou o nome, citou uma mensagem dele ou segue uma conversa
+  // que comecou assim = a IA; numero caiu = uma frase curta (BOT_IA_CAIU); venda comemorada = so reacao
+  // (BOT_IA_FESTA_REACOES); o resto, inclusive problema que ninguem perguntou pra ele, fica de fora.
   let modo = '';
   if (o.teste) modo = 'chamado';
   else if (b.menciona) modo = 'chamado';
@@ -14773,10 +14832,12 @@ async function _botIaResponder(env, cfg, b, opts) {
     if (pergunta || BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'chamado';
     else if (await _botIaCitouResposta(env, b.jid, b.citado)) modo = 'chamado';
   }
-  if (!modo && !ia.so_marcado[grupo] && BOT_IA_PROBLEMA_RE.test(textoProb)) modo = 'espontaneo';
-  if (!modo && !o.teste && !ia.so_marcado[grupo] && !pergunta && BOT_IA_FESTA_RE.test(textoBusca) && b.jid && !(await _botIaFestaRecente(env, b.jid))) modo = 'festa';
+  const queda = _botIaNumeroCaiu(textoProb);
+  if (!modo && !ia.so_marcado[grupo] && queda.caiu) modo = 'caiu';
+  if (!modo && !o.teste && !ia.so_marcado[grupo] && !pergunta && BOT_IA_FESTA_RE.test(textoBusca) && b.jid && !(await _botIaFestaRecente(env, b.jid, b.de_jid))) modo = 'festa';
   // CONVERSA (06/11, teste do Bruno: "Ta on ai?" logo depois de uma resposta do bot ficou sem resposta): quem
-  // o bot respondeu ha menos de 3 min e escreve de novo, sem marcar, continua a conversa. A IA decide.
+  // o bot respondeu ha menos de 3 min e escreve de novo, sem marcar, continua a conversa. A IA decide. Desde 09/11 so a
+  // conversa de verdade: a frase do numero caido e a reacao nao abrem conversa (_botIaEmConversa).
   if (!modo && !o.teste && b.de_jid && b.jid && await _botIaEmConversa(env, b.jid, b.de_jid)) modo = 'conversa';
   if (!modo) { res.acao = 'visto'; res.motivo = 'não era pra mim'; return res; }
   // FALANDO COM OUTRA PESSOA (ver _botIaMarcouOutroHaPouco): sem marcar o bot nem chamar ele pelo nome, quem marcou ou
@@ -14792,9 +14853,40 @@ async function _botIaResponder(env, cfg, b, opts) {
     if (tipo === 'audio' && modo === 'chamado') { res.acao = 'respondeu'; res.resposta = BOT_IA_SEM_TEXTO; res.motivo = 'áudio'; res.responder = true; return res; }
     res.acao = 'calado'; res.motivo = 'sem texto'; return res;
   }
+  // O blob e quem escreveu: lidos uma vez so, e so quando alguem precisa.
+  let _st = null, _quem = null;
+  const pegaSt = async () => _st || (_st = await _getDashData(env));
+  const pegaQuem = async () => _quem || (_quem = o.quem || await _botIaQuem(env, cfg, await pegaSt(), b.de_jid, b.de_fone));
+  // 2a. NUMERO CAIU (ver BOT_IA_CAIU): uma frase curta e o aviso de verdade pra direcao, sem IA e sem freio (nao gasta
+  // cota). So quem marcou o bot e PERGUNTOU ("@Barbadinho meu numero caiu?") vai pra IA, que ve os numeros dele. Quem
+  // contou e da direcao: fica de fora (e quem resolve).
+  if (queda.caiu && !(marcado && pergunta)) {
+    const qm = await pegaQuem();
+    res.quem_id = qm.id || '';
+    const qual = queda.fim ? ' (final ' + queda.fim + ')' : '';
+    if (qm.chefe && !o.teste && !o.grupoTeste) { res.acao = 'visto'; res.motivo = 'número caiu' + qual + ': quem contou é da direção'; return res; }
+    if (!o.teste) {
+      const ult = await _botIaUltimaPraEle(env, b.jid, b.de_jid);
+      if (ult && agora - Number(ult.ts) < BOT_IA_CAIU_REPETE_S && String(ult.motivo || '').indexOf('número caiu' + qual + ':') === 0) {
+        if (o.reage) { res.acao = 'respondeu'; res.responder = true; res.reacao = '🫡'; res.resposta = '(reagiu com 🫡)'; res.motivo = 'número caiu' + qual + ': o mesmo de agora há pouco, só reação'; return res; }
+        res.acao = 'visto'; res.motivo = 'número caiu' + qual + ': o mesmo de agora há pouco'; return res;
+      }
+    }
+    let av = { entregues: 0, repetido: false };
+    if (!o.teste) {
+      try { av = (await _botIaAvisar(env, grupo, qm, b.de_nome, texto, 'número' + qual + ' caiu', cfg, o.grupoTeste ? (String((cfg.ia && cfg.ia.teste && cfg.ia.teste.por) || '') || '-') : '', 'numero' + queda.fim)) || av; } catch (_) {}
+    }
+    const entregou = Number(av.entregues) > 0;
+    const avisou = !!o.teste || entregou || !!av.repetido;
+    const lista = avisou ? BOT_IA_CAIU : BOT_IA_CAIU_SEM_AVISO;
+    res.resposta = (await _botSorteia(env, avisou ? 'ia_caiu' : 'ia_caiu_sem', lista)) || lista[0];
+    res.acao = 'respondeu'; res.responder = true; res.alerta = entregou ? 1 : 0;
+    res.motivo = 'número caiu' + qual + ': ' + (o.teste ? 'teste, sem aviso' : entregou ? 'avisei a direção' : av.repetido ? 'a direção já tinha sido avisada há pouco' : 'o aviso não chegou em ninguém');
+    return res;
+  }
   // 2b. CADENCIA (ver BOT_IA_SEGUIDAS_S): risada ou "boa" solto e a terceira resposta seguida pra mesma pessoa ficam de
-  // fora, sem gastar IA. Problema relatado, festa, pergunta e mensagem com o nome do bot nao entram na conta de seguidas.
-  if (!marcado && !o.teste && modo !== 'espontaneo') {
+  // fora, sem gastar IA. Festa, pergunta e mensagem com o nome do bot nao entram na conta de seguidas.
+  if (!marcado && !o.teste) {
     if (_botIaSoRiso(texto)) { res.acao = 'visto'; res.motivo = 'só risada ou ok'; return res; }
     if (modo !== 'festa' && !pergunta && !b.menciona && b.de_jid && b.jid) {
       const seg = await _botIaSeguidas(env, b.jid, b.de_jid);
@@ -14803,6 +14895,35 @@ async function _botIaResponder(env, cfg, b, opts) {
         res.acao = 'visto'; res.motivo = 'já respondi essa pessoa ' + seg + ' vezes agora há pouco'; return res;
       }
     }
+  }
+  // 2c. FESTA SEM CHAMAR O BOT (ver BOT_IA_FESTA_REACOES): so uma reacao na mensagem, sem IA, e so na comemoracao de venda
+  // de verdade: palavra de venda ou grito curto (ate 4 palavras, sem problema no meio), com venda nova de quem escreveu.
+  // A do marco ganha o fogo (a comemoracao automatica faz a festa). Sem o bot do PC que reage (1.7.0+), fica calado.
+  if (modo === 'festa' && !marcado) {
+    const grito = BOT_IA_FESTA_VENDA_RE.test(textoBusca) || (_botIaPalavras(textoBusca.replace(/[kK]{3,}/g, ' ')) <= 4 && !BOT_IA_PROBLEMA_RE.test(textoProb));
+    if (!grito) { res.acao = 'visto'; res.motivo = 'festa: não é comemoração de venda'; return res; }
+    const stF = await pegaSt();
+    const qm = await pegaQuem();
+    res.quem_id = qm.id || '';
+    if (!BOT_IA_FESTA_VENDA_RE.test(textoBusca) && !(qm.id && _botIaVendaRecente(stF, qm, grupo))) {
+      res.acao = 'calado'; res.motivo = 'festa: sem venda nova' + (qm.nome ? ' de ' + String(qm.nome).split(' ')[0] : ''); return res;
+    }
+    let marco = null;
+    if (qm.id) {
+      try {
+        const hojeF = _brDay();
+        const dadosF = grupo === 'cob' ? await _botDadosCob(env, hojeF, cfg, 'diario', false, stF) : await _botDados(env, hojeF, cfg, 'diario', false, stF);
+        const eu = ((grupo === 'cob' ? dadosF.cobradores : dadosF.vendedores) || []).find((x) => x.id === qm.id);
+        if (eu) marco = await _botIaMarcoAgora(env, cfg, grupo, qm, Number(eu.pedidos) || 0, hojeF, b.jid);
+      } catch (_) { marco = null; }
+    }
+    const oQue = marco ? 'a comemoração do marco ' + marco.n + ' ' + marco.quando : '';
+    if (oQue) res.viu = [oQue];
+    if (!o.reage) { res.acao = 'calado'; res.motivo = 'festa: ' + (oQue || 'só reação, e o bot do PC não reage'); return res; }
+    const emo = marco ? '🔥' : ((await _botSorteia(env, 'ia_festa_reacao', BOT_IA_FESTA_REACOES)) || '🔥');
+    res.acao = 'respondeu'; res.responder = true; res.reacao = emo; res.resposta = '(reagiu com ' + emo + ')';
+    res.motivo = 'festa: reação' + (oQue ? ' (' + oQue + ')' : '');
+    return res;
   }
   // 3. Freios e cota
   const quotaAte = await _botIaQuotaAte(env);
@@ -14822,12 +14943,9 @@ async function _botIaResponder(env, cfg, b, opts) {
     if (freio) { res.motivo = freio; return res; }
   }
   // 4. Quem perguntou e o contexto (o blob e lido UMA vez e passado adiante)
-  const st = await _getDashData(env);
-  const quem = o.quem || await _botIaQuem(env, cfg, st, b.de_jid, b.de_fone);
+  const st = await pegaSt();
+  const quem = await pegaQuem();
   res.quem_id = quem.id || '';
-  if (modo === 'festa' && !marcado && !o.teste && !BOT_IA_FESTA_VENDA_RE.test(textoBusca) && !(quem.id && _botIaVendaRecente(st, quem, grupo))) {
-    res.acao = 'calado'; res.motivo = 'festa: sem venda nova' + (quem.nome ? ' de ' + String(quem.nome).split(' ')[0] : ''); return res;
-  }
   const equipe = quem.equipe || await _botEquipe(env);
   const ps = _botIaPseudo(Array.isArray(st && st.leads) ? st.leads : [], equipe.map((u) => String(u.nome || '')));
   const g = _botIaGrupoCfg(cfg, grupo);
@@ -14938,7 +15056,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     ...(jaDisse.length ? ['Frases suas que já saíram neste grupo hoje (não repita nenhuma, nem o mesmo começo):', ...jaDisse.map((x) => '- ' + x), ''] : []),
     ...(b.citado ? ['Mensagem citada: "' + ps.texto(String(b.citado).slice(0, 300)) + '"'] : []),
     ...(marcado ? ['Te chamaram nesta mensagem (marcando ou pelo nome; "@Barbadinho" é você): responda.']
-      : b.menciona ? ['Falaram seu nome nesta mensagem sem te marcar ("@Barbadinho" é você): se estão falando COM você (te chamando, perguntando, pedindo, elogiando, zoando você), responda; se falam DE você pra outra pessoa ou é só risada, responder false.']
+      : b.menciona ? ['Falaram seu nome nesta mensagem sem te marcar ("@Barbadinho" é você): se estão falando com você ou de você (te chamando, perguntando, pedindo, elogiando, zoando ou reclamando de você ou do que você disse), responda curto; se é só risada ou seu nome aparece de passagem num assunto de outras pessoas, responder false.']
         : modo === 'festa' ? ['Ninguém te chamou: a mensagem tem cara de comemoração. Se os DADOS confirmam a venda, o marco, a faixa do mês ou o pedido que voltou de quem escreveu, entre na festa com um GRITÃO curto de torcida; se é resposta a algo que você postou (veja as últimas mensagens), responda a isso, curto; se não confirma, é papo entre outras pessoas ou é zoeira com alguém, responder false.']
         : modo === 'conversa' ? ['Essa pessoa estava conversando com você agora há pouco e escreveu de novo sem marcar: se é com você (pergunta, pedido, oi, elogio, brincadeira com você), responda; se é papo com outra pessoa ou só risada, responder false.']
           : modo === 'chamado' ? ['Responderam uma mensagem sua sem te marcar (a citada, que pode ser uma resposta, uma comemoração ou uma provocação sua): responda se for pergunta, pedido ou reação ao que você disse ou postou (zoando, elogiando, devolvendo a provocação), curto; agradecimento ganha no máximo um "tmj"; conversa com outra pessoa = responder false.'] : []),
@@ -15114,7 +15232,7 @@ function _botIaTesteTexto(cfg, equipe) {
   const t = ia.teste || {};
   const como = t.como === 'vend' ? 'vend' : 'cob';
   const pessoa = (equipe || []).find((e) => e.id === String(t.quem_id || t.por || ''));
-  return 'Modo de teste ligado. Aqui eu respondo como se fosse o grupo dos ' + (como === 'vend' ? 'Vendedores' : 'Cobradores') + (pessoa ? ', e quem escrever conta como ' + pessoa.nome : '') + '. ' + (ia.so_marcado && ia.so_marcado[como] ? 'Me marca (@Barbadinho) e pergunta.' : 'Me marca (@Barbadinho) e pergunta; problema de número (caiu, travou) eu respondo mesmo sem marcar.');
+  return 'Modo de teste ligado. Aqui eu respondo como se fosse o grupo dos ' + (como === 'vend' ? 'Vendedores' : 'Cobradores') + (pessoa ? ', e quem escrever conta como ' + pessoa.nome : '') + '. ' + (ia.so_marcado && ia.so_marcado[como] ? 'Me marca (@Barbadinho) e pergunta.' : 'Me marca (@Barbadinho) e pergunta; número caído eu respondo mesmo sem marcar, curtinho.');
 }
 
 // ─── O TEXTO DA PROVOCACAO (o tick e o "Ver provocação" da tela usam o mesmo). Sem IA, a frase reserva ───

@@ -183,8 +183,11 @@ function monta(mundo) {
     if (/SELECT texto, msg_id FROM bot_chat WHERE jid=\? AND de_jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && x.de_jid === a[1] && Number(x.ts) > Number(a[2])).sort(desc).slice(0, 6).map((x) => ({ texto: x.texto, msg_id: x.msg_id })), meta: {} };
     if (/UPDATE bot_chat SET motivo=\? WHERE id=\?/.test(sql)) { const x = chat.find((r) => r.id === Number(a[1])); if (!x) return vazio; x.motivo = a[0]; return um; }
     if (/SELECT resposta FROM bot_chat WHERE jid=\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && Number(x.ts) > Number(a[1]) && (x.acao === a[2] || x.acao === a[3])).sort(desc).slice(0, 30).map((x) => ({ resposta: x.resposta })), meta: {} };
-    if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND motivo LIKE 'festa%'/.test(sql)) return { results: chat.some((x) => x.jid === a[0] && /^festa/.test(String(x.motivo || '')) && Number(x.ts) > Number(a[1])) ? [{ ok: 1 }] : [], meta: {} };
-    if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND de_jid=\?/.test(sql)) return { results: chat.some((x) => x.jid === a[0] && x.de_jid === a[1] && ['respondeu', 'pendente'].includes(x.acao) && Number(x.ts) > Number(a[2])) ? [{ ok: 1 }] : [], meta: {} };
+    if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND de_jid=\? AND motivo LIKE 'festa: rea%'/.test(sql)) return { results: chat.some((x) => x.jid === a[0] && x.de_jid === a[1] && /^festa: rea/.test(String(x.motivo || '')) && Number(x.ts) > Number(a[2])) ? [{ ok: 1 }] : [], meta: {} };
+    if (/SELECT 1 AS ok FROM bot_chat WHERE jid=\? AND de_jid=\? AND acao IN/.test(sql)) {
+      const semReacao = /NOT LIKE '\(reagiu com %'/.test(sql), semFesta = /NOT LIKE 'festa%'/.test(sql), semCaiu = /NOT LIKE 'n_mero caiu%'/.test(sql);
+      return { results: chat.some((x) => x.jid === a[0] && x.de_jid === a[1] && ['respondeu', 'pendente'].includes(x.acao) && Number(x.ts) > Number(a[2]) && !(semReacao && /^\(reagiu com /.test(String(x.resposta || ''))) && !(semFesta && /^festa/.test(String(x.motivo || ''))) && !(semCaiu && /^n.mero caiu/.test(String(x.motivo || '')))) ? [{ ok: 1 }] : [], meta: {} };
+    }
     if (/COUNT\(\*\) AS n FROM bot_chat WHERE acao='provocou'/.test(sql)) return { results: [{ n: chat.filter((x) => x.acao === 'provocou' && x.dia === a[0]).length }], meta: {} };
     if (/SELECT acao, COUNT\(\*\) AS n FROM bot_chat WHERE grupo=\? AND dia=\?/.test(sql)) {
       const conta = {};
@@ -287,7 +290,7 @@ function monta(mundo) {
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade, _botIaSemVocativo, BOT_IA_ASSUNTO_VENDA_RE, BOT_IA_GRITO_RE, _botIaTextoProblema, _botIaFichaCurta, _botIaChamouOutroPeloNome, BOT_IA_MARCA_OUTRO_RE, _botIaLinhaDoTempo, _botIaSoRiso, _botIaEscolheForma, _botIaTempero, _botIaRepete, _botIaFormaDe, _botIaMarcoAgora, BOT_IA_QUEM_MANDA_RE, _botIaVersaoOk, _botIaComMidia, _botIaCitouResposta, _botIaReacaoOk, BOT_IA_TOM_VEND, BOT_IA_TOM_COB };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade, _botIaSemVocativo, BOT_IA_ASSUNTO_VENDA_RE, BOT_IA_GRITO_RE, _botIaTextoProblema, _botIaFichaCurta, _botIaChamouOutroPeloNome, BOT_IA_MARCA_OUTRO_RE, _botIaLinhaDoTempo, _botIaSoRiso, _botIaEscolheForma, _botIaTempero, _botIaRepete, _botIaFormaDe, _botIaMarcoAgora, BOT_IA_QUEM_MANDA_RE, _botIaVersaoOk, _botIaComMidia, _botIaCitouResposta, _botIaReacaoOk, BOT_IA_TOM_VEND, BOT_IA_TOM_COB, BOT_IA_CAIU, BOT_IA_CAIU_SEM_AVISO, BOT_IA_FESTA_REACOES, _botIaNumeroCaiu };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
 }
 
@@ -388,14 +391,14 @@ titulo('3. O gatilho: quando o bot abre a boca');
   let r = await api._botIaResponder(env, cfg, pacote({ texto: 'bom dia galera, hoje vai ser top' }));
   conf(r.acao === 'visto' && chamadas.length === 0, 'papo do grupo sem marcar o bot e sem problema: visto, e a IA nem e chamada');
   r = await api._botIaResponder(env, cfg, pacote({ texto: 'meu numero caiu' }));
-  conf(r.acao === 'respondeu' && chamadas.length === 1, '"meu numero caiu" sem marcar, com espontaneo liberado: chama a IA');
+  conf(r.acao === 'respondeu' && api.BOT_IA_CAIU.includes(r.resposta) && chamadas.length === 0, '"meu numero caiu" sem marcar: a frase curta do numero caido, sem IA (09/11)');
   r = await api._botIaResponder(env, cfg, pacote({ texto: 'esse cliente ja pagou o pedido?' }));
-  conf(r.acao === 'visto' && chamadas.length === 1, '"?", cliente e pedido NAO acendem sozinhos no grupo dos vendedores');
+  conf(r.acao === 'visto' && chamadas.length === 0, '"?", cliente e pedido NAO acendem sozinhos no grupo dos vendedores');
   const soMarcado = cfgDe(api, { ia: { ...CFG_RAW.ia, so_marcado: { vend: true, cob: true } } });
   r = await api._botIaResponder(env, soMarcado, pacote({ texto: 'meu numero caiu' }));
-  conf(r.acao === 'visto' && chamadas.length === 1, 'com "so quando marcarem" ligado, nem o numero caido acende sem mencao');
-  r = await api._botIaResponder(env, soMarcado, pacote({ texto: 'meu numero caiu', menciona: true }));
-  conf(r.acao === 'respondeu' && chamadas.length === 2, 'mencao ao bot chama a IA');
+  conf(r.acao === 'visto' && chamadas.length === 0, 'com "so quando marcarem" ligado, nem o numero caido acende sem mencao');
+  r = await api._botIaResponder(env, soMarcado, pacote({ texto: 'meu numero caiu?', menciona: true, marcado: true }));
+  conf(r.acao === 'respondeu' && chamadas.length === 1, 'mencao ao bot com pergunta chama a IA');
 }
 {
   // Responder a uma mensagem do bot: resposta do bot = conversa; resumo/marco = so se parecer pergunta.
@@ -453,7 +456,7 @@ const linhaChat = (o) => ({ ts: agoraS() - 60, dia: DIA, grupo: 'vend', jid: GV,
   r = await api._botIaResponder(env, cfg, pacote({ texto: 'oi de novo', menciona: true }));
   conf(r.acao === 'calado' && /sem cota/.test(r.motivo) && chamadas.length === 0, 'a segunda no mesmo bloco de hora fica calada');
   r = await api._botIaResponder(env, cfg, pacote({ texto: 'meu numero caiu' }));
-  conf(r.acao === 'calado' && chamadas.length === 0, 'espontaneo em pausa de cota: calado, sem aviso');
+  conf(r.acao === 'respondeu' && api.BOT_IA_CAIU.includes(r.resposta) && chamadas.length === 0, 'numero caido em pausa de cota: a frase curta sai igual (nao precisa da IA)');
   conf(!!cfgdb['bot_ia_quotaviso_' + GV.replace(/\D/g, '').slice(-12) + '_' + Math.floor(agoraS() / 3600)], 'a reserva do aviso e por grupo de verdade (jid) e por hora (app_config)');
 }
 
@@ -501,7 +504,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
     conn: [{ nk: '5515988880001', st: 'caiu', ts: agoraS() - 300 }],
     queda: [{ nk: '5515988880001', em: agoraS() - 300, motivo: 'caiu', feito: 1 }],
     uso: [{ nk: '5515988880002', user_id: GUI, nome: 'Guilherme', desde: agoraS() - 3600, ate: agoraS() + 600 }] });
-  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   const user = chamadas[0].user;
   conf(/Números de Guilherme \(3 cadastrados, 1 em uso ou aquecimento, 1 recebendo lead agora, 1 com queda registrada\):/.test(user), '"meu numero caiu": o cabecalho dos numeros do vendedor, com prova');
   conf(/\(15\) \.\.\.-0001: em uso · RECEBENDO lead agora · interruptor: ligado em 2 de 2 pressels/.test(user), 'o numero em uso: recebe lead, interruptor ligado em 2 de 2 (a pressel pausada nao conta)');
@@ -516,7 +519,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
 }
 {
   const { api, env, chamadas } = monta({ ...MUNDO, conn: [{ nk: '5515988880001', st: 'pronto', ts: agoraS() - 60 }] });
-  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   conf(/pronto \(conectado\) às 10:59/.test(chamadas[0].user), 'so com o app dizendo "pronto" o contexto fala em conectado');
 }
 {
@@ -527,7 +530,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   ];
   const wa_statuses = [{ id: 'st_ban1', label: 'Banido', papel: 'banido' }, { id: 'st_res1', label: 'Restrito', papel: 'restrito' }];
   const { api, env, chamadas } = monta({ ...MUNDO, chips, wa_statuses });
-  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   const user = chamadas[0].user;
   conf(/\.\.\.-0001: banido/.test(user) && /\.\.\.-0002: restrito \(fora da roleta\)/.test(user), 'banido e restrito pela tag (o papel dela), nao pelo id');
 }
@@ -541,7 +544,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
     { at: KEVIN, nk: '77770001', acao: 'desliga', por_nome: 'Kevin Marques', ts: agoraS() - 60 },
   ];
   const { api, env, chamadas } = monta({ ...MUNDO, pressels, numlog });
-  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   const user = chamadas[0].user;
   conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; fica de plantão pra madrugada e religa quando ele abrir o app\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, o motivo e o app (de plantao), nao queda');
   conf(/\.\.\.-0001: [^\n]*última mudança no interruptor: desligado por Sistema \(SellWave Web fechado\) em 05\/11 10:00/.test(user), 'quem mexeu no interruptor por ultimo, e quando (o registro mais novo do numero)');
@@ -557,7 +560,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
     { id: 'pb', afl: 'afl_x', vendedores: [] },
   ];
   const { api, env, chamadas } = monta({ ...MUNDO, pressels });
-  await api._botIaResponder(env, cfgDe(api), pacote({ texto: 'meu numero caiu' }));
+  await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   const user = chamadas[0].user;
   conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; [^)]*\) · interruptor: desligado em todas as pressels/.test(user), 'pressel de afiliado nao liga o numero da casa');
 }
@@ -701,9 +704,9 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   ({ r } = await pergunta({ ia: [{ json: { responder: false, texto: '' } }] }));
   conf(r.acao === 'respondeu' && /^tô aqui!/.test(r.resposta) && /saiu a resposta padrão/.test(r.motivo), 'MARCADO e a IA calou (responder:false): sai a resposta padrao do grupo, nunca silencio');
   {
-    const m = monta({ ...MUNDO, ia: [{ json: { responder: false, texto: '' } }] });
-    const r2 = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'meu numero caiu', menciona: false }));
-    conf(r2.acao === 'calado' && /a IA preferiu/.test(r2.motivo) && !r2.resposta, 'sem marcar (entrou sozinho) e a IA calou: calado de verdade');
+    const m = monta({ ...MUNDO, chat: [{ ts: agoraS() - 60, dia: DIA, grupo: 'vend', jid: GV, msg_id: 'cvz', de_jid: '5515999990001@s.whatsapp.net', de_nome: 'Guilherme', quem_id: GUI, texto: '@Barbadinho fala', acao: 'respondeu', resposta: 'fala!', motivo: 'leu: oi', chamadas: 1 }], ia: [{ json: { responder: false, texto: '' } }] });
+    const r2 = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'e o meu app, ta travando de novo', menciona: false }));
+    conf(r2.acao === 'calado' && /a IA preferiu/.test(r2.motivo) && !r2.resposta, 'sem marcar (na conversa) e a IA calou: calado de verdade');
     conf(/Te chamaram nesta mensagem/.test((await pergunta({ ia: [JSON_OK] })).chamadas[0].user) && !/Te chamaram nesta mensagem|Falaram seu nome|Responderam uma mensagem sua/.test(m.chamadas[0].user), 'a IA sabe quando foi marcada e quando entrou sozinha');
     conf(/Quando te MARCAM \(@Barbadinho\), responda sempre/.test(m.chamadas[0].system) && /no condicional/.test(m.chamadas[0].system) && /Prometer mudar seu jeito/.test(m.chamadas[0].system), 'as regras: marcado responde sempre; provavel no condicional; nao promete mudar o jeito');
   }
@@ -742,13 +745,13 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   // Aviso a direcao = push na dash pra cada diretor/socio, registrado, e 1 por assunto a cada 30 min.
   const m = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'Relaxa, tem 2 numeros ligados. Já avisei a direção.', avisar_direcao: 'numero do Guilherme caiu' } }] });
   const cfg = cfgDe(m.api);
-  let r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: 'meu numero caiu' }));
+  let r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   conf(r.alerta === 1 && m.pushes.length === 2 && m.pushes.map((p) => p.userId).sort().join() === 'dir,socio_x4dy6d', 'avisar_direcao: push pra CADA diretor/socio da casa (nao pro afiliado), alerta 1');
-  conf(/Barbadinho: pedido de ajuda no grupo/.test(m.pushes[0].payload.title) && /Guilherme no grupo GlicoSix - Vendedores: "meu numero caiu" · numero do Guilherme caiu/.test(m.pushes[0].payload.body), 'o push diz quem, em que grupo, o que e o resumo da IA');
+  conf(/Barbadinho: pedido de ajuda no grupo/.test(m.pushes[0].payload.title) && /Guilherme no grupo GlicoSix - Vendedores: "@Barbadinho meu numero caiu\?" · numero do Guilherme caiu/.test(m.pushes[0].payload.body), 'o push diz quem, em que grupo, o que e o resumo da IA');
   conf(m.envios.length === 1 && m.envios[0].tipo === 'ia_aviso' && m.envios[0].status === 'enviado' && m.envios[0].via === 'push', 'registro em bot_envios tipo ia_aviso');
   conf(!!m.cfgdb['bot_iaav_' + GUI + ':numero'], 'a marca do assunto (pessoa:numero) fica em app_config');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: 'meu numero caiu de novo' }));
-  conf(r.alerta === 1 && m.pushes.length === 2 && m.envios.length === 1, 'a segunda vez em 30 min nao manda de novo (e a linha continua com alerta)');
+  conf(r.alerta === 0 && m.pushes.length === 2 && m.envios.length === 1 && m.api.BOT_IA_CAIU.includes(r.resposta) && /já tinha sido avisada/.test(r.motivo), 'a segunda vez em 30 min nao manda de novo, e a frase curta ainda diz que avisou (o aviso de antes vale)');
 }
 {
   const { r, chamadas } = await pergunta({ ia: [{ status: 429 }, JSON_OK] });
@@ -928,12 +931,14 @@ titulo('13. GET /api/bot/chat e POST /api/bot/ia/teste');
 {
   // Pergunte ao bot: o mesmo caminho SEM freio, sem visto, sem mandar nada, sem avisar.
   const m = monta({ ...MUNDO, chat: Array.from({ length: 8 }, (_, i) => linhaChat({ msg_id: 't' + i })), ia: [{ json: { responder: true, texto: 'Tem 2 ligados.', avisar_direcao: 'numero caiu' } }] });
-  const r = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'vend', texto: 'meu numero caiu', quem_id: GUI }), m.env);
+  const r = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'vend', texto: 'meu numero caiu?', quem_id: GUI }), m.env);
   conf(r._json.ok === true && r._json.responder === true && r._json.resposta === 'Tem 2 ligados.' && m.chamadas.length === 1, 'com 8 chamadas na hora o teste ainda chama a IA (sem freio)');
   conf(!r._json.viu.includes('placar de hoje') && r._json.viu.includes('números de Guilherme'), 'e devolve o que viu (os numeros; numero caido nao precisa do placar)');
   conf(/Quem perguntou: Guilherme \(vendedor\)/.test(m.chamadas[0].user) && /aviso_entregue: false/.test(m.chamadas[0].user), 'o quem_id escolhido na tela vira a pessoa, e aviso_entregue e false no teste');
   conf(m.chat.length === 9 && m.chat[8].acao === 'teste' && m.chat[8].quem_id === GUI && m.chat[8].alerta === 1, 'grava acao "teste" (nenhuma linha visto)');
   conf(m.pushes.length === 0 && m.envios.length === 0 && m.fila.length === 0, 'nao avisa a direcao nem manda nada');
+  const curta = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'vend', texto: '2248 caiu', quem_id: GUI }), m.env);
+  conf(curta._json.responder === true && m.api.BOT_IA_CAIU.includes(curta._json.resposta) && m.chamadas.length === 1 && m.pushes.length === 0 && /teste, sem aviso/.test(curta._json.motivo), 'Pergunte ao bot com "2248 caiu": a frase curta, sem IA e sem aviso (09/11)');
   const vazio = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'vend', texto: '   ', quem_id: GUI }), m.env);
   conf(vazio._status === 400, 'sem pergunta: 400');
 }
@@ -1029,8 +1034,8 @@ const CFG_TESTE = (t, extra) => ({ ...CFG_RAW, ia: { ...CFG_RAW.ia, responde: { 
   const m = monta({ ...MUNDO, cfg: CFG_TESTE({ como: 'vend', quem_id: GUI }), ia: [{ json: { responder: true, texto: 'Relaxa, vou avisar.', avisar_direcao: 'numero caiu' } }] });
   const cfg = m.api._botNormaliza(m.mundo.cfg, null);
   const r = await m.api._botIaMensagem(m.env, cfg, msg({ jid: TG, texto: 'meu numero caiu', ...BRUNO_WA }));
-  conf(r.resposta === 'Relaxa, vou avisar.', 'como Vendedores, "meu numero caiu" sem marcar responde (igual ao grupo de verdade)');
-  conf(/Quem perguntou: Guilherme \(vendedor\)/.test(m.chamadas[0].user) && /Grupo: Vendedores/.test(m.chamadas[0].user), 'e conta como o Guilherme, no grupo dos Vendedores');
+  conf(m.api.BOT_IA_CAIU.includes(r.resposta) && m.chamadas.length === 0, 'como Vendedores, "meu numero caiu" sem marcar responde com a frase curta (igual ao grupo de verdade)');
+  conf(m.chat[m.chat.length - 1].quem_id === GUI && m.chat[m.chat.length - 1].grupo === 'vend', 'e conta como o Guilherme, no grupo dos Vendedores');
   conf(m.pushes.length === 1 && m.pushes[0].userId === 'socio_x4dy6d' && /^\[teste\] Guilherme/.test(m.pushes[0].payload.body) && /teste/.test(m.pushes[0].payload.title), 'aviso a direcao: so pra quem ligou o teste, marcado [teste]');
   conf(!m.cfgdb['bot_iaav_' + GUI + ':numero'] && !!m.cfgdb['bot_iaav_teste_' + GUI + ':numero'], 'a repeticao do aviso de teste tem chave propria (nao segura o aviso de verdade do Guilherme)');
 }
@@ -1341,7 +1346,7 @@ titulo('23. Numero caiu: acolhe e resolve, nunca desmente quem relatou');
   const sys = api._botIaSistema(api._botNormaliza(CFG_RAW, null), 'vend');
   conf(/acolhe primeiro e resolve, sem duvidar de quem relatou/.test(sys) && /NUNCA diga que não aparece queda/.test(sys), 'a regra: acolher e nunca usar a falta de registro de queda pra desmentir');
   conf(/não perder o bonde/.test(sys) && /quando fizer sentido e tiver graça/.test(sys) && /nunca em duas respostas seguidas/.test(sys), 'trocadilho quando fizer sentido, sem forcar e nunca dois seguidos');
-  conf((api.BOT_IA_EXEMPLOS.vend.join('\n').match(/bonde/g) || []).length === 1, 'so um exemplo com trocadilho (o desabafo do numero caido)');
+  conf((api.BOT_IA_EXEMPLOS.vend.join('\n').match(/bonde/g) || []).length === 0 && /Resposta CURTA, uma frase/.test(sys) && !/desliga o interruptor/i.test(api.BOT_IA_EXEMPLOS.vend.join('\n')), 'numero caido curto (09/11): nenhum exemplo com trocadilho nem interruptor, e o prompt pede uma frase');
   const ex = api.BOT_IA_EXEMPLOS.vend.join('\n');
   conf(!/ainda não aparece queda/.test(ex) && /relaxa queridão/.test(ex), 'nenhum exemplo desmente a queda; o exemplo de numero caido acolhe');
 }
@@ -1351,7 +1356,10 @@ titulo('24. A IA fora: marcado e problema nunca ficam no vacuo');
 {
   const m = monta({ ...MUNDO, ia: [{ status: 503 }] });
   const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'caiu meu numero de novo pqp' }));
-  conf(r.acao === 'respondeu' && /já avisei o Bruno/.test(r.resposta) && m.pushes.length >= 1 && m.chamadas.length === 3, 'problema com a IA fora (503 nos 3 modelos): resposta reserva e aviso a direcao mesmo assim');
+  conf(r.acao === 'respondeu' && m.api.BOT_IA_CAIU.includes(r.resposta) && m.pushes.length >= 1 && m.chamadas.length === 0, 'numero caido nao depende da IA: com o Gemini fora (503) a frase curta e o aviso saem igual');
+  const m1 = monta({ ...MUNDO, chat: [{ ts: agoraS() - 60, dia: DIA, grupo: 'vend', jid: GV, msg_id: 'cvy', de_jid: '5515999990001@s.whatsapp.net', de_nome: 'Guilherme', quem_id: GUI, texto: '@Barbadinho oi', acao: 'respondeu', resposta: 'fala!', motivo: 'leu: oi', chamadas: 1 }], ia: [{ status: 503 }] });
+  const r1 = await m1.api._botIaResponder(m1.env, cfgDe(m1.api), pacote({ texto: 'o app travou aqui de novo' }));
+  conf(r1.acao === 'respondeu' && /já avisei o Bruno/.test(r1.resposta) && m1.pushes.length >= 1 && m1.chamadas.length === 3, 'problema na conversa com a IA fora (503 nos 3 modelos): resposta reserva e aviso a direcao mesmo assim');
   const m2 = monta({ ...MUNDO, ia: [{ status: 503 }] });
   const r2 = await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: '@Barbadinho quantas vendas eu tenho?', menciona: true, marcado: true }));
   conf(r2.acao === 'respondeu' && /manda de novo daqui a pouco/.test(r2.resposta) && m2.pushes.length === 0, 'marcado com a IA fora: avisa que deu ruim e pede pra mandar de novo (sem aviso a direcao)');
@@ -1361,7 +1369,7 @@ titulo('24. A IA fora: marcado e problema nunca ficam no vacuo');
   conf(r3.acao === 'erro' && !r3.resposta, 'conversa sem marcar e sem problema com a IA fora: fica quieto (nao enche o grupo)');
   const m4 = monta({ ...MUNDO, ia: [{ status: 503 }], push: false });
   const r4 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'meu numero caiu' }));
-  conf(r4.acao === 'respondeu' && /marca o Bruno aqui/.test(r4.resposta), 'sem push possivel: pede pra marcar o Bruno');
+  conf(r4.acao === 'respondeu' && m4.api.BOT_IA_CAIU_SEM_AVISO.includes(r4.resposta) && /marca o Bruno aqui/.test(r4.resposta) && r4.alerta === 0, 'sem push que chegue: pede pra marcar o Bruno (nunca diz que avisou)');
 }
 
 // ══ 25. A CHAVE DO BOT (06/11) ═════════════════════════════════════════════════════════
@@ -1602,18 +1610,24 @@ titulo('33. Revisao da meta do mes: 80% arredondado, frase do Bruno com "semana"
 titulo('34. Festa sem marcar: so palavra forte, so com o placar, uma tentativa a cada 10 min');
 {
   const m = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'SEGURA O HOMIII 🐐🔥' } }] });
-  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'BOOORA +1 KRL', menciona: false }));
-  conf(r.responder && r.resposta === 'SEGURA O HOMIII 🐐🔥' && r.motivo === 'festa espontânea' && /cara de comemoração/.test(m.chamadas[0].user), 'comemoracao sem marcar: a IA entra (com o placar) e o emoji sai junto');
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'BOOORA +1 KRL', menciona: false }), { reage: true });
+  conf(r.responder && m.api.BOT_IA_FESTA_REACOES.includes(r.reacao) && r.resposta === '(reagiu com ' + r.reacao + ')' && r.motivo === 'festa: reação' && m.chamadas.length === 0, 'comemoracao sem marcar (09/11): so uma reacao, sem texto e sem IA');
+  const m1 = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r1 = await m1.api._botIaResponder(m1.env, cfgDe(m1.api), pacote({ texto: 'BOOORA +1 KRL', menciona: false }));
+  conf(r1.acao === 'calado' && /bot do PC não reage/.test(r1.motivo) && m1.chamadas.length === 0, 'sem o bot do PC que reage: calado (nunca vira texto)');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   const r2 = await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ texto: 'bora almoçar galera', menciona: false }));
   conf(r2.acao === 'visto' && m2.chamadas.length === 0, '"bora" sozinho nao e festa: nem chama a IA');
   const m3 = monta({ ...MUNDO, ia: [JSON_OK] });
   const r3 = await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: 'porra, ja pagou?', menciona: false }));
   conf(r3.acao === 'visto' && m3.chamadas.length === 0, 'pergunta nao e festa');
-  const chat = [linhaChat({ msg_id: 'f1', grupo: 'vend', jid: GV, acao: 'calado', motivo: 'festa: a IA preferiu não responder', ts: agoraS() - 120 })];
+  const chat = [linhaChat({ msg_id: 'f1', grupo: 'vend', jid: GV, acao: 'respondeu', resposta: '(reagiu com 🔥)', motivo: 'festa: reação', ts: agoraS() - 120 })];
   const m4 = monta({ ...MUNDO, chat, ia: [JSON_OK] });
-  const r4 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'ISSO AÍ PORRAAA fechei', menciona: false }));
-  conf(r4.acao === 'visto' && m4.chamadas.length === 0, 'tentativa de festa ha 2 min no grupo: nao tenta de novo');
+  const r4 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'ISSO AÍ PORRAAA fechei', menciona: false }), { reage: true });
+  conf(r4.acao === 'respondeu' && !!r4.reacao && m4.chamadas.length === 0, 'a reacao de festa de OUTRA pessoa ha 2 min nao segura a desta (09/11: por pessoa)');
+  const m4b = monta({ ...MUNDO, chat: [linhaChat({ msg_id: 'f2', grupo: 'vend', jid: GV, de_jid: '5515999990001@s.whatsapp.net', de_nome: 'Guilherme', acao: 'respondeu', resposta: '(reagiu com 🔥)', motivo: 'festa: reação', ts: agoraS() - 120 })], ia: [JSON_OK] });
+  const r4b = await m4b.api._botIaResponder(m4b.env, cfgDe(m4b.api), pacote({ texto: 'ISSO AÍ PORRAAA fechei', menciona: false }), { reage: true });
+  conf(r4b.acao === 'visto' && !r4b.reacao && m4b.chamadas.length === 0, 'a mesma pessoa ja ganhou a reacao ha 2 min: fica quieto');
   const m5 = monta({ ...MUNDO, ia: [JSON_OK] });
   const r5 = await m5.api._botIaResponder(m5.env, cfgDe(m5.api, { ia: { ...CFG_RAW.ia, so_marcado: { vend: true, cob: true } } }), pacote({ texto: 'BOOORA +1 KRL', menciona: false }));
   conf(r5.acao === 'visto' && m5.chamadas.length === 0, 'com "so quando marcarem" ligado, festa sem marcar nao entra');
@@ -1802,7 +1816,7 @@ titulo('40. Marcou outra pessoa: o bot fica de fora; "lead bloqueou" nao e numer
   r = await m.api._botIaResponder(m.env, cfgCob(m.api), { ...pacote({ texto: 'Ent bloqueou', ...BRY }), grupo: 'cob' });
   conf(r.acao === 'visto' && m.chamadas.length === 0, '"Ent bloqueou": visto');
   r = await m.api._botIaResponder(m.env, cfgCob(m.api), { ...pacote({ texto: 'meu numero foi bloqueado', ...BRY }), grupo: 'cob' });
-  conf(r.acao === 'respondeu' && m.chamadas.length === 1, '"meu numero foi bloqueado" continua chamando (problema de numero)');
+  conf(r.acao === 'respondeu' && m.api.BOT_IA_CAIU.includes(r.resposta) && m.chamadas.length === 0, '"meu numero foi bloqueado" continua sendo numero caido: a frase curta, sem IA');
   const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
   await m2.api._botIaResponder(m2.env, cfgCob(m2.api), { ...pacote({ texto: '@Barbadinho o lead me bloqueou', menciona: true, marcado: true, ...BRY }), grupo: 'cob' });
   const u2 = m2.chamadas[0].user;
@@ -1821,15 +1835,15 @@ titulo('40. Marcou outra pessoa: o bot fica de fora; "lead bloqueou" nao e numer
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: '@Bruno o que vc acha disso?', responde: true, citado: 'Relaxa.' }));
   conf(r.acao === 'visto' && m.chamadas.length === 0, 'citou o bot mas marcou o Bruno: e com o Bruno');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: '@Barbadinho @Bruno meu numero caiu', menciona: true, marcado: true }));
-  conf(r.acao === 'respondeu' && m.chamadas.length === 1, 'marcou o bot E outra pessoa: o bot responde');
+  conf(r.acao === 'respondeu' && m.api.BOT_IA_CAIU.includes(r.resposta) && m.chamadas.length === 0, 'marcou o bot E outra pessoa: o bot responde (a frase curta do numero caido)');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: 'Kevin, meu numero caiu' }));
-  conf(r.acao === 'visto' && r.motivo === 'falando com outra pessoa (chamou Kevin)' && m.chamadas.length === 1, 'chamou alguem do time pelo nome no comeco ("Kevin, ..."): fica de fora');
+  conf(r.acao === 'visto' && r.motivo === 'falando com outra pessoa (chamou Kevin)' && m.chamadas.length === 0, 'chamou alguem do time pelo nome no comeco ("Kevin, ..."): fica de fora');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: 'galera, meu numero caiu' }));
-  conf(r.acao === 'respondeu' && m.chamadas.length === 2, '"galera, ..." nao e ninguem do time: o problema chama');
+  conf(r.acao === 'respondeu' && m.api.BOT_IA_CAIU.includes(r.resposta), '"galera, ..." nao e ninguem do time: o numero caido responde');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: 'barbadinho, meu numero caiu', menciona: true }));
-  conf(r.acao === 'respondeu' && m.chamadas.length === 3, '"barbadinho, ..." e chamar o bot');
+  conf(r.acao === 'respondeu' && m.api.BOT_IA_CAIU.includes(r.resposta), '"barbadinho, ..." e chamar o bot');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: 'mandei pro fulano@gmail.com e meu numero caiu' }));
-  conf(r.acao === 'respondeu' && m.chamadas.length === 4, 'e-mail no meio do texto nao e marcacao');
+  conf(r.acao === 'respondeu' && m.api.BOT_IA_CAIU.includes(r.resposta) && m.chamadas.length === 0, 'e-mail no meio do texto nao e marcacao');
 }
 {
   // O print inteiro: a ficha, "@alguém @Bruno" e, segundos depois, o resto (sem marcar o bot).
@@ -1848,10 +1862,10 @@ titulo('40. Marcou outra pessoa: o bot fica de fora; "lead bloqueou" nao e numer
   conf(m3.chamadas.length === 1, 'marcou o Bruno e depois o bot: a conversa segue com o bot');
   const m4 = monta({ ...MUNDO, chat: [linha({ msg_id: 'v1', texto: '@Bruno bom dia', ts: agoraS() - 400 })], ia: [JSON_OK] });
   r = await m4.api._botIaMensagem(m4.env, cfgCob(m4.api), msg({ ...ELI, texto: 'meu numero caiu' }));
-  conf(m4.chamadas.length === 1, 'marcou alguem ha mais de 3 min: o problema volta a chamar');
+  conf(m4.api.BOT_IA_CAIU.includes(r.resposta), 'marcou alguem ha mais de 3 min: o numero caido volta a ter resposta');
   const m5 = monta({ ...MUNDO, chat: [linhaChat({ grupo: 'cob', jid: GC, de_jid: '111222333444@lid', de_nome: 'Bryan', acao: 'visto', resposta: '', chamadas: 0, msg_id: 'o1', texto: '@Bruno bom dia', ts: agoraS() - 20 })], ia: [JSON_OK] });
   r = await m5.api._botIaMensagem(m5.env, cfgCob(m5.api), msg({ ...ELI, texto: 'meu numero caiu' }));
-  conf(m5.chamadas.length === 1, 'a marcacao de OUTRA pessoa nao cala quem escreve agora');
+  conf(m5.api.BOT_IA_CAIU.includes(r.resposta), 'a marcacao de OUTRA pessoa nao cala quem escreve agora');
 }
 {
   // A ficha colada no grupo vai pra IA so como "mandou a ficha" (o nome fora da base escapava da troca por C1).
@@ -1933,7 +1947,7 @@ titulo('41. Ve o que ele postou, nao responde toda linha, varia o tamanho, reage
   conf(r7.acao === 'respondeu' && m2.chamadas.length === 2, 'falou o nome do bot na sequencia: a IA decide (a cadencia so vale pra quem nem citou o bot)');
   const m3 = monta({ ...MUNDO, chat: duas, ia: [JSON_OK] });
   const r8 = await m3.api._botIaResponder(m3.env, cfgDe(m3.api), pacote({ texto: 'meu numero caiu' }));
-  conf(r8.acao === 'respondeu' && m3.chamadas.length === 1, 'problema relatado nunca cai na cadencia');
+  conf(r8.acao === 'respondeu' && m3.api.BOT_IA_CAIU.includes(r8.resposta) && m3.chamadas.length === 0, 'numero caido nunca cai na cadencia (a frase curta sai)');
   const m4 = monta({ ...MUNDO, chat: [duas[0], { ...duas[1], resposta: '(reagiu com 😂)' }], ia: [JSON_OK] });
   const r9 = await m4.api._botIaResponder(m4.env, cfgDe(m4.api), pacote({ texto: 'vai tomando por de dentro' }));
   conf(r9.acao === 'respondeu' && m4.chamadas.length === 1, 'reacao nao conta como resposta seguida');
@@ -2018,7 +2032,7 @@ titulo('41. Ve o que ele postou, nao responde toda linha, varia o tamanho, reage
   conf(r4.reacao === '🔥' && /acabou de sair/.test(r4.motivo) && m4.chamadas.length === 0, 'a comemoracao do marco saiu ha 1 min: reage, nao repete o grito');
   const m5 = monta({ ...base, config: feito10, outbox: [{ ts: agoraS() - 900, tipo: 'marco', jid: GV, texto: '🔥 Guilherme CRAVOU 10 VENDAS!' }], ia: [JSON_OK] });
   const r5 = await m5.api._botIaResponder(m5.env, cfg, pacote({ texto: '+1' }), { reage: true, sorte: 0 });
-  conf(r5.acao === 'respondeu' && m5.chamadas.length === 1, 'comemoracao do marco de 15 min atras: festa normal, com a IA');
+  conf(r5.acao === 'respondeu' && m5.api.BOT_IA_FESTA_REACOES.includes(r5.reacao) && r5.motivo === 'festa: reação' && m5.chamadas.length === 0, 'comemoracao do marco de 15 min atras: a reacao normal da festa, sem IA (09/11)');
   const m6 = monta({ ...base, ia: [JSON_OK] });
   const r6 = await m6.api._botIaResponder(m6.env, cfg, pacote({ texto: 'fechei mais uma pro time, vamo que vamo porra' }), { reage: true });
   conf(r6.reacao === '🔥' && m6.chamadas.length === 0, 'venda dita com muitas palavras ("fechei mais uma pro time...") tambem e o +1 do marco: reage 🔥');
@@ -2027,8 +2041,8 @@ titulo('41. Ve o que ele postou, nao responde toda linha, varia o tamanho, reage
   const r7 = await m7.api._botIaResponder(m7.env, cfgDe(m7.api), pacote({ texto: 'Boraa rapeizes', de_jid: '5515999990009@s.whatsapp.net', de_fone: '5515999990009', de_nome: 'Bruno' }));
   conf(r7.acao === 'calado' && /^festa: sem venda nova/.test(r7.motivo) && m7.chamadas.length === 0, '"Boraa rapeizes" (Bruno, 22h37, sem venda): nem chama a IA');
   const m8 = monta({ ...mundoProv(3, 3), ia: [JSON_OK] });
-  const r8 = await m8.api._botIaResponder(m8.env, monta({}).api._botNormaliza(mundoProv(3, 3).cfg, null), pacote({ texto: 'BOOORA PORRA' }));
-  conf(r8.acao === 'respondeu' && m8.chamadas.length === 1, 'grito do Guilherme com venda de 3 min atras: a festa entra');
+  const r8 = await m8.api._botIaResponder(m8.env, monta({}).api._botNormaliza(mundoProv(3, 3).cfg, null), pacote({ texto: 'BOOORA PORRA' }), { reage: true });
+  conf(r8.acao === 'respondeu' && m8.api.BOT_IA_FESTA_REACOES.includes(r8.reacao) && m8.chamadas.length === 0, 'grito do Guilherme com venda de 3 min atras: a festa entra (com a reacao)');
   const m9 = monta({ ...mundoProv(3, 40), ia: [JSON_OK] });
   const r9 = await m9.api._botIaResponder(m9.env, monta({}).api._botNormaliza(mundoProv(3, 40).cfg, null), pacote({ texto: 'BOOORA PORRA' }));
   conf(r9.acao === 'calado' && m9.chamadas.length === 0, 'grito do Guilherme com a ultima venda de 40 min atras: nao e festa');
@@ -2051,7 +2065,7 @@ titulo('41. Ve o que ele postou, nao responde toda linha, varia o tamanho, reage
   const ob = [{ ts: agoraS() - 30, tipo: 'marco', jid: GV, texto }];
   const m2 = monta({ ...base, config: { ...base.config, ['bot_marcos_' + DIA]: JSON.stringify({ [GUI]: 5 }) }, outbox: ob, ia: [JSON_OK] });
   const r2 = await m2.api._botIaResponder(m2.env, cfg5, pacote({ texto: 'Milagre nada, trabalhando pra krl aqui rapaz kkkk' }), { reage: true });
-  conf(r2.acao === 'respondeu' && !r2.reacao && m2.chamadas.length === 1 && /Barbadinho \(comemoração automática\): 🍾 PODE CHAMAR O PADRE/.test(m2.chamadas[0].user), 'sem citar, logo depois da comemoracao: "trabalhando pra krl aqui" nao e o grito da festa, vai pra IA (que ve a comemoracao nas ultimas mensagens)');
+  conf(r2.acao === 'visto' && !r2.reacao && !r2.resposta && m2.chamadas.length === 0, 'sem citar, logo depois da comemoracao: "trabalhando pra krl aqui" nao e grito de festa nem e com o bot, fica quieto (09/11; citando, a IA responde)');
   const m3 = monta({ ...base, config: { ...base.config, ['bot_marcos_' + DIA]: JSON.stringify({ [GUI]: 5 }) }, outbox: ob, ia: [JSON_OK] });
   const r3 = await m3.api._botIaResponder(m3.env, cfg5, pacote({ texto: 'ISSO AÍ PORRAAA' }), { reage: true });
   conf(r3.reacao === '🔥' && m3.chamadas.length === 0, 'o grito curto logo depois da comemoracao automatica dele: reage 🔥, nao grita de novo');
@@ -2090,6 +2104,89 @@ titulo('41. Ve o que ele postou, nao responde toda linha, varia o tamanho, reage
   const m = monta({ ...MUNDO, outbox: [{ ts: agoraS() - 60, tipo: 'livre', jid: GV, texto: 'galera, a Joselina Da Silva pagou' }], ia: [JSON_OK] });
   await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: '@Barbadinho viu isso?', menciona: true, marcado: true }));
   conf(!/joselina/i.test(m.chamadas[0].user) && /Barbadinho \(recado da direção pelo bot\): galera, a C\d+ pagou/.test(m.chamadas[0].user), 'o que o bot postou passa pela mesma troca de nome de cliente (C1)');
+}
+
+// ══ 42. O BOT SO FALA QUANDO E COM ELE (09/11) ═════════════════════════════════════════
+titulo('42. So fala quando e com ele: numero caido curto, festa so com reacao, problema sem chamar fica de fora');
+{
+  const { api } = monta({});
+  const t = (s) => api._botIaNumeroCaiu(api._botIaTextoProblema(s));
+  const sim = [['2248 caiu', '2248'], ['0026 caiu', '0026'], ['Meu número 1859 caiu', '1859'], ['meu whats caiu', ''], ['o meu tambem caiu', ''], ['tomei ban', ''], ['tô bloqueado', ''], ['pediu QR de novo', ''], ['(15) 98888-0001 caiu', '0001'], ['caiu a conexão do 2248', '2248'], ['caiu meu 3996, tava cheio de lead', '3996']];
+  const nao = ['CAIU O PIX DA C1 KRL', 'caiu a ficha', 'a internet caiu aqui', 'o app caiu', 'caiu um lead no 2248', 'Lead bloqueou', 'Hoje ta muito devagar, as campanhas deram uma travada', 'mas mesmo assim ta dando erro :(', '+55 16 99609-4932 - caiu a ligação', 'caiu 1500 no pix', 'caiu de novo', 'o número do cliente caiu na caixa postal', 'meu pix caiu'];
+  conf(sim.every(([s, fim]) => t(s).caiu && t(s).fim === fim), 'numero caido (com o final certo): ' + sim.filter(([s, fim]) => !(t(s).caiu && t(s).fim === fim)).map((x) => x[0]).join(' | '));
+  conf(nao.every((s) => !t(s).caiu), 'nao e numero caido: ' + nao.filter((s) => t(s).caiu).join(' | '));
+  conf(api.BOT_IA_CAIU.every((x) => x.length <= 32 && /Bruno/.test(x) && !/interruptor|roleta|kkk/i.test(x)) && api.BOT_IA_CAIU_SEM_AVISO.every((x) => /marca o Bruno/.test(x) && !/avisei|avisado|sabendo/.test(x)), 'as frases: curtas, falam do Bruno, sem interruptor; a de sem aviso nunca diz que avisou');
+}
+{
+  // O dia 09 no grupo dos vendedores, pela rota do agente: o 2248 e o 0026 do Kevin, 6 min de diferenca.
+  const KEV = { de_jid: '5515977770001@s.whatsapp.net', de_fone: '5515977770001', de_nome: 'Kevin' };
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  const cfg = cfgDe(m.api);
+  const antes = RELOGIO.agora;
+  let r = await m.api._botIaMensagem(m.env, cfg, msg({ ...KEV, texto: '2248 caiu' }), { versao: '1.7.0' });
+  const a = r.resposta;
+  conf(m.api.BOT_IA_CAIU.includes(a) && m.chamadas.length === 0, '"2248 caiu": uma frase curta da lista (' + a + '), sem IA');
+  conf(m.pushes.length === 2 && /^Barbadinho: número caiu$/.test(m.pushes[0].payload.title) && /^Kevin Marques no grupo GlicoSix - Vendedores: "2248 caiu" · número \(final 2248\) caiu$/.test(m.pushes[0].payload.body), 'e o aviso de verdade pra direcao, com o final do numero');
+  const row = m.chat[m.chat.length - 1];
+  conf(row.acao === 'pendente' && row.motivo === 'número caiu (final 2248): avisei a direção' && row.alerta === 1 && row.quem_id === KEVIN, 'a linha guarda o motivo, o alerta e quem e');
+  await m.api._botIaAck(m.env, { chat_id: r.chat_id, ok: true, msg_id: 'K1' });
+  RELOGIO.agora += 6 * 60000;
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ ...KEV, texto: '0026 caiu', ts: agoraS() }), { versao: '1.7.0' });
+  conf(m.api.BOT_IA_CAIU.includes(r.resposta) && r.resposta !== a && m.pushes.length === 4 && m.chamadas.length === 0, 'o "0026 caiu" 6 min depois: OUTRA frase (' + r.resposta + ') e outro aviso (cada numero tem o seu)');
+  await m.api._botIaAck(m.env, { chat_id: r.chat_id, ok: true, msg_id: 'K2' });
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ ...KEV, texto: 'caiu o 0026 mesmo, pqp', ts: agoraS() }), { versao: '1.7.0' });
+  conf(r.resposta === '' && r.reacao === '🫡' && m.pushes.length === 4, 'o mesmo numero de novo em seguida: so uma reacao, sem aviso repetido');
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ ...KEV, texto: 'pqp hoje ta osso', ts: agoraS() }), { versao: '1.7.0' });
+  conf(r.resposta === '' && !r.reacao && m.chamadas.length === 0, 'a frase do numero caido nao abre conversa: o desabafo seguinte fica de fora');
+  const m2 = monta({ ...MUNDO, ia: [JSON_OK] });
+  const r2 = await m2.api._botIaMensagem(m2.env, cfg, msg({ ...KEV, texto: '2248 caiu' }), { versao: '1.6.1' });
+  conf(m2.api.BOT_IA_CAIU.includes(r2.resposta) && !r2.reacao, 'o bot do PC antigo (sem reacao) tambem recebe a frase curta');
+  RELOGIO.agora = antes;
+}
+{
+  // Problema que ninguem perguntou pro bot fica de fora (no dia 09 era o Bruno e o Bryan falando com a direcao).
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  const BRU = { de_jid: '777777777777@lid', de_fone: '5515999990009', de_nome: 'Bruno' };
+  let r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ ...BRU, texto: 'Hoje ta muito devagar, as campanhas deram uma travada' }));
+  conf(r.acao === 'visto' && r.motivo === 'não era pra mim' && m.chamadas.length === 0 && m.pushes.length === 0, '"as campanhas deram uma travada" (Bruno, sem chamar o bot): visto, sem IA e sem aviso');
+  const cfgCob = cfgDe(m.api, { ia: { ...CFG_RAW.ia, so_marcado: { vend: false, cob: false } } });
+  const BRY = { jid: GC, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' };
+  for (const texto of ['+55 11 96847-3130 / ~Ismael Nunes - Não consigo acessar o checkout dele para enviar o boleto', 'mas mesmo assim ta dando erro :(', 'não to conseguindo acessar o checkout do Ismael Nunes']) {
+    r = await m.api._botIaResponder(m.env, cfgCob, { ...pacote({ ...BRY, texto }), grupo: 'cob' });
+    conf(r.acao === 'visto' && m.chamadas.length === 0 && m.pushes.length === 0, 'cobranca, sem chamar o bot: "' + texto.slice(0, 42) + '..." fica de fora');
+  }
+  r = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ ...BRU, texto: '2248 caiu' }));
+  conf(r.acao === 'visto' && /quem contou é da direção/.test(r.motivo) && m.pushes.length === 0, 'numero caido contado pela direcao: fica de fora (e quem resolve)');
+  const sys = m.api._botIaSistema(cfgDe(m.api), 'vend');
+  conf(/Sem te chamarem você não entra, nem em problema nem em festa/.test(sys) && !/só entre se for problema que os dados resolvem/.test(sys), 'o prompt: sem te chamarem, nao entra');
+  // O aviso pela IA nunca vai pra quem escreveu (o Bruno ganhou push da propria mensagem no dia 09).
+  const m2 = monta({ ...MUNDO, ia: [{ json: { responder: true, texto: 'putz, ja avisei o Heynan', avisar_direcao: 'campanhas travadas' } }] });
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api), pacote({ ...BRU, texto: '@Barbadinho as campanhas travaram?', menciona: true, marcado: true }));
+  conf(m2.pushes.length === 1 && m2.pushes[0].userId === 'dir', 'o aviso da IA vai pro outro da direcao, nunca pra quem escreveu');
+}
+{
+  // 09:17 do dia 09: "vendi pra esse mentiroso ai kkkkk" sem chamar o bot ganhou texto e abriu conversa. Agora: so reacao,
+  // e a pergunta seguinte, sem o nome do bot, fica de fora; depois de chamar o bot pelo nome, a conversa vale.
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  const cfg = cfgDe(m.api);
+  let r = await m.api._botIaMensagem(m.env, cfg, msg({ texto: 'vendi pra esse mentiroso ai kkkkk' }), { versao: '1.7.0' });
+  conf(r.resposta === '' && m.api.BOT_IA_FESTA_REACOES.includes(r.reacao) && m.chamadas.length === 0, 'venda comemorada sem chamar o bot: so a reacao ' + r.reacao + ', sem texto e sem IA');
+  await m.api._botIaAck(m.env, { chat_id: r.chat_id, ok: true, msg_id: 'G1' });
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ texto: 'Quem é o cara do momento?' }), { versao: '1.7.0' });
+  conf(r.resposta === '' && !r.reacao && m.chamadas.length === 0, '"Quem é o cara do momento?" logo depois, sem o nome do bot: fica de fora');
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ texto: 'Bom dia barbadinho u.u', menciona: true }), { versao: '1.7.0' });
+  conf(!!r.resposta && m.chamadas.length === 1, '"Bom dia barbadinho" (chamou pelo nome): a IA responde');
+  await m.api._botIaAck(m.env, { chat_id: r.chat_id, ok: true, msg_id: 'G2' });
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ texto: 'Quem é o cara do momento?' }), { versao: '1.7.0' });
+  conf(m.chamadas.length === 2 && /Essa pessoa estava conversando com você agora há pouco/.test(m.chamadas[1].user), 'agora sim e conversa: a mesma pergunta vai pra IA decidir');
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ texto: 'Milagre nada, trabalhando pra krl aqui rapaz kkkk', de_jid: '5515977770001@s.whatsapp.net', de_fone: '5515977770001', de_nome: 'Kevin' }), { versao: '1.7.0' });
+  conf(r.resposta === '' && !r.reacao && m.chamadas.length === 2, 'frase comprida com palavrao, sem venda e sem chamar o bot: nem reacao');
+}
+{
+  // Falar DELE (16:01 do dia 09, "Barbadinho ta viajando ja, vou ver aqui"): e com ele, a IA responde curto.
+  const m = monta({ ...MUNDO, ia: [JSON_OK] });
+  await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'kkkk o barbadinho ta viajando hj', menciona: true, marcado: false }));
+  conf(/se estão falando com você ou de você/.test(m.chamadas[0].user) && /responda curto/.test(m.chamadas[0].user), 'o nome no meio da frase: falar dele tambem e com ele (a IA decide, curto)');
 }
 
 // ══ 15. TEXTO ══════════════════════════════════════════════════════════════════════════
