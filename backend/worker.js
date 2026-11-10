@@ -19695,9 +19695,13 @@ async function _centralPing(env, b) {
   const pedidos = [];
   let fila = [];
   try { fila = ((await env.DB.prepare("SELECT id, ts FROM central_pedidos WHERE status = 'pend' ORDER BY id LIMIT 10").all()).results) || []; } catch (_) { fila = []; }
+  // O RELOGIO DE NOVO, DEPOIS DA LEITURA (10/11/2026, achado no ar): no worker o Date.now() so anda
+  // depois de cada ida ao banco, e o `agora` la de cima e de ANTES das gravacoes do ping. Um pedido que
+  // entrou no meio delas saia com idade -1, e o carteiro recusava como "atrasado" um pedido de agora.
+  const agoraF = Math.floor(Date.now() / 1000);
   if (fila.length) {
     ativo = true;
-    const velhos = fila.filter((x) => agora - (Number(x.ts) || 0) > CENTRAL_PEDIDO_VIDA_S).map((x) => Number(x.id));
+    const velhos = fila.filter((x) => agoraF - (Number(x.ts) || 0) > CENTRAL_PEDIDO_VIDA_S).map((x) => Number(x.id));
     if (velhos.length) {
       try { await env.DB.prepare("UPDATE central_pedidos SET status = 'expirado', corpo = '' WHERE status = 'pend' AND id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(velhos)).run(); } catch (_) {}
     }
@@ -19707,10 +19711,10 @@ async function _centralPing(env, b) {
       let r = [];
       try {
         r = ((await env.DB.prepare("UPDATE central_pedidos SET status = 'pego', pego_ts = ? WHERE status = 'pend' AND id IN (SELECT value FROM json_each(?)) RETURNING id, ts, metodo, caminho, corpo")
-          .bind(agora, JSON.stringify(novos)).all()).results) || [];
+          .bind(agoraF, JSON.stringify(novos)).all()).results) || [];
       } catch (_) { r = []; }
       for (const x of r.sort((a, c) => Number(a.id) - Number(c.id))) {
-        pedidos.push({ id: Number(x.id), metodo: String(x.metodo || 'GET'), caminho: String(x.caminho || ''), corpo: x.corpo ? _centralJson(x.corpo, {}) : null, idade: agora - (Number(x.ts) || 0) });
+        pedidos.push({ id: Number(x.id), metodo: String(x.metodo || 'GET'), caminho: String(x.caminho || ''), corpo: x.corpo ? _centralJson(x.corpo, {}) : null, idade: Math.max(0, agoraF - (Number(x.ts) || 0)) });
       }
     }
   }

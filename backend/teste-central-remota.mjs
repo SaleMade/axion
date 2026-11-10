@@ -205,6 +205,14 @@ await resposta({ id: r.d.pedidos[0].id, codigo: 409, resposta: { erro: 'Esse nú
 const rApp2 = await pApp2;
 vale('a recusa da central volta com o codigo e o texto dela', rApp2.d.feito === true && rApp2.d.codigo === 409 && /tarefa rodando/.test(rApp2.d.resposta.erro), JSON.stringify(rApp2.d));
 
+// O RELOGIO PARADO DO WORKER (achado no ar em 10/11): o Date.now() la so anda entre idas ao banco, e um
+// pedido que entra no meio do ping parecia ter idade -1. O carteiro recusava como "atrasado".
+const adiante = sq.prepare("INSERT INTO central_pedidos (ts, por, metodo, caminho, corpo, status) VALUES (?, 'dir', 'GET', '/api/tarefas', '', 'pend') RETURNING id").get(agoraS() + 2).id;
+r = await ping();
+const pAd = (r.d.pedidos || []).find((p) => p.id === adiante);
+vale('pedido com a hora um pouco a frente sai com idade 0, nunca negativa', pAd && pAd.idade === 0, JSON.stringify(r.d.pedidos));
+await resposta({ id: adiante, codigo: 200, resposta: { tarefas: [] } });
+
 _log('\nPEDIDO VELHO NAO RODA\n');
 const velho = sq.prepare("INSERT INTO central_pedidos (ts, por, metodo, caminho, corpo, status) VALUES (?, 'dir', 'POST', '/api/acao', ?, 'pend') RETURNING id").get(agoraS() - 3600, JSON.stringify({ acao: 'excluir', numero: '15992503977', confirmacao: '3977' })).id;
 r = await ping();
