@@ -11543,7 +11543,10 @@ function _botCfgPadrao() {
 const BOT_MIDIA_RE = /^[a-f0-9]{24}\.(jpg|png|webp|mp4)$/;
 const BOT_MIDIA_MIME = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4' };
 const BOT_MIDIA_EXT = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4' };
-const BOT_MIDIA_MAX = { imagem: 5 * 1048576, video: 16 * 1048576 };
+// DOCUMENTO (10/11/2026): o mesmo mp4 pode ir como ARQUIVO em vez de video. O WhatsApp recomprime
+// video; como documento ele chega do jeito que saiu daqui. So muda o jeito de mandar, o arquivo e o
+// mesmo, entao a key continua .mp4 e quem decide e o campo `tipo` guardado na fila.
+const BOT_MIDIA_MAX = { imagem: 5 * 1048576, video: 16 * 1048576, documento: 64 * 1048576 };
 const _botMidiaTipo = (key) => (/\.mp4$/.test(String(key)) ? 'video' : 'imagem');
 function _botMidias(v) {
   const vistos = new Set();
@@ -11552,7 +11555,9 @@ function _botMidias(v) {
 }
 // A faixa do dia: a MAIOR que o total alcancou e que tem imagem (null = vale a lista padrao).
 const _botFaixaDoDia = (rel, total) => ((rel && Array.isArray(rel.faixas)) ? rel.faixas : []).filter((f) => f && f.n <= (Number(total) || 0) && Array.isArray(f.midias) && f.midias.length).sort((a, b) => b.n - a.n)[0] || null;
-const _botMidia1 = (m) => (m && BOT_MIDIA_RE.test(String(m.key || ''))) ? { key: String(m.key), tipo: _botMidiaTipo(m.key) } : null;
+const _botMidia1 = (m) => (m && BOT_MIDIA_RE.test(String(m.key || '')))
+  ? { key: String(m.key), tipo: String(m.tipo) === 'documento' ? 'documento' : _botMidiaTipo(m.key), nome: _botTexto300(m.nome, 120).trim() }
+  : null;
 // Frase e imagem andam juntas: as duas listas sao limpas no mesmo passo (frase vazia e repetida saem,
 // e a imagem dela junto), senao a imagem escorrega pra frase de baixo.
 function _botParesFrases(frases, fm, max) {
@@ -19306,10 +19311,13 @@ async function handleBotWa(req, env) {
     return json({ ok: true, host: _botHost(u2), versao });
   }
   if (m === 'POST' && acao === 'enviar') {
-    // `grupo: 'cob'` manda pro grupo dos cobradores (03/11/2026); sem isso, pro do time, como sempre.
-    const cobr = String(b.grupo || '') === 'cob';
-    const g = cobr ? ((cfg.cobranca && cfg.cobranca.grupo) || {}) : (cfg.grupo || {});
-    if (!g.id) return err(cobr ? 'Escolha e salve o grupo dos cobradores antes' : 'Escolha e salve o grupo antes');
+    // `grupo: 'cob'` manda pro grupo dos cobradores (03/11/2026); `grupo: 'teste'` pro grupo de teste
+    // (10/11/2026, pra mandar coisa sem o time ver); sem isso, pro do time, como sempre.
+    const alvo = String(b.grupo || '');
+    const cobr = alvo === 'cob';
+    const g = alvo === 'teste' ? { id: String((cfg.ia && cfg.ia.teste && cfg.ia.teste.id) || ''), nome: String((cfg.ia && cfg.ia.teste && cfg.ia.teste.nome) || 'Grupo de teste') }
+      : cobr ? ((cfg.cobranca && cfg.cobranca.grupo) || {}) : (cfg.grupo || {});
+    if (!g.id) return err(alvo === 'teste' ? 'Escolha e salve o grupo de teste antes' : cobr ? 'Escolha e salve o grupo dos cobradores antes' : 'Escolha e salve o grupo antes');
     const midia = _botMidia1(b.midia);
     if (b.midia && !midia) return err('Anexo inválido. Anexe de novo.');
     const texto = _botTexto300(b.texto, 4000).trim() || (midia ? '' : BOT_TEXTO_TESTE);
@@ -19344,18 +19352,21 @@ async function handleBotMidia(req, env) {
   const mime = String(req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   const ext = BOT_MIDIA_EXT[mime];
   if (!ext) return err(mime === 'image/gif' ? 'GIF não anima no WhatsApp. Mande o GIF como vídeo MP4.' : 'Só imagem (JPG, PNG ou WEBP) ou vídeo MP4.');
-  const tipo = ext === 'mp4' ? 'video' : 'imagem';
+  // ?doc=1 manda como ARQUIVO (sem o WhatsApp recomprimir). Vale so pra mp4.
+  const comoDoc = url.searchParams.get('doc') === '1' && ext === 'mp4';
+  const tipo = comoDoc ? 'documento' : (ext === 'mp4' ? 'video' : 'imagem');
   const max = BOT_MIDIA_MAX[tipo];
   const declarado = Number(req.headers.get('content-length') || 0);
-  if (declarado > max) return err((tipo === 'video' ? 'Vídeo' : 'Imagem') + ' muito grande. O limite é ' + Math.round(max / 1048576) + ' MB.');
+  const _qual = tipo === 'documento' ? 'Arquivo' : (tipo === 'video' ? 'Vídeo' : 'Imagem');
+  if (declarado > max) return err(_qual + ' muito grande. O limite é ' + Math.round(max / 1048576) + ' MB.');
   let buf;
   try { buf = await req.arrayBuffer(); } catch (_) { return err('Não consegui ler o arquivo'); }
   if (!buf || !buf.byteLength) return err('Arquivo vazio');
-  if (buf.byteLength > max) return err((tipo === 'video' ? 'Vídeo' : 'Imagem') + ' muito grande. O limite é ' + Math.round(max / 1048576) + ' MB.');
+  if (buf.byteLength > max) return err(_qual + ' muito grande. O limite é ' + Math.round(max / 1048576) + ' MB.');
   const nova = [...crypto.getRandomValues(new Uint8Array(12))].map((x) => x.toString(16).padStart(2, '0')).join('') + '.' + ext;
   try { await env.MEDIA.put('bot/' + nova, buf, { httpMetadata: { contentType: BOT_MIDIA_MIME[ext] } }); }
   catch (e) { return err('Não deu pra guardar o arquivo: ' + String((e && e.message) || e), 502); }
-  const nome = _botTexto300(url.searchParams.get('nome'), 80).trim();
+  const nome = _botTexto300(url.searchParams.get('nome'), 120).trim();
   console.log('BOT_MIDIA por=' + String(u.id) + ' key=' + nova + ' tam=' + buf.byteLength);
   return json({ ok: true, midia: { key: nova, tipo, nome }, url: url.origin + '/api/bot/midia/' + nova, tam: buf.byteLength });
 }
@@ -19402,7 +19413,7 @@ async function handleBotAgente(req, env) {
           if (Number(x.tent) >= BOT_AGENTE_TENT_MAX) { await _botAgenteAck(env, Number(x.id), false, '', 'o bot do PC tentou ' + BOT_AGENTE_TENT_MAX + ' vezes e não conseguiu', false); continue; }
           let md = null; try { md = _botMidia1(x.midia ? JSON.parse(x.midia) : null); } catch (_) { md = null; }
           const it = { id: Number(x.id), jid: String(x.jid), texto: String(x.texto), tipo: String(x.tipo || '') };
-          if (md) it.midia = { url: origem + '/api/bot/midia/' + md.key, tipo: md.tipo, mime: BOT_MIDIA_MIME[md.key.split('.').pop()] };
+          if (md) it.midia = { url: origem + '/api/bot/midia/' + md.key, tipo: md.tipo, mime: BOT_MIDIA_MIME[md.key.split('.').pop()], nome: md.nome || '' };
           cands.push(it);
         }
         // RESERVA ATOMICA (14/10/2026): so leva o item quem conseguiu marcar a reserva; dois pings ao
