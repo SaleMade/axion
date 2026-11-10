@@ -19440,6 +19440,337 @@ async function handleBotAgente(req, env) {
 }
 // ═══════════════════════════════════════ fim do bot ═══════════════════════════════════════
 
+// ═══════════════════════════ CENTRAL DE CELULARES NO APP (10/11/2026) ═══════════════════════════
+//
+// O pedido do Bruno: "hoje a gente tem a central de Celulares: eu gostaria que voce fizesse a mesma
+// versao dela, so que para aplicativo de celular". A central (Sale base de Numeros/ldplayer) e uma
+// pagina servida pelo painel-servidor.mjs no notebook dele, em 127.0.0.1: abre, desliga, troca a
+// proxy, cria e exclui os celulares do LDPlayer. O celular dele nao alcanca o notebook, entao:
+//
+//   app (/app/celulares) --sessao da direcao--> worker <--ping com token-- agente no PC
+//                                                                (central-remota.mjs)
+//                                                                     | repassa
+//                                                                     v
+//                                                          painel-servidor.mjs (sem janela)
+//
+// O WORKER NAO DECIDE NADA DA CENTRAL. Ele guarda o retrato que o agente manda (central_estado: a
+// lista dos celulares, as tarefas, a saude) e a fila de pedidos do app (central_pedidos). Quem
+// confere e executa e o MESMO painel-servidor da janela do PC, com as MESMAS regras (excluir so com
+// os 4 digitos da dupla confirmacao, proxy testada antes de salvar, os avisos do criar). Por isso o
+// app e a mesma central, e nao uma copia que diverge no primeiro dia em que alguem mexer numa.
+//
+// PEDIDO VELHO NAO RODA. Um "excluir" esperando na fila com o PC desligado, que rodasse duas horas
+// depois quando o notebook ligasse, seria o pior defeito possivel aqui. Pedido nao pego em
+// CENTRAL_PEDIDO_VIDA_S expira (o worker nao entrega e o agente recusa pela idade que vai junto), e
+// pedido entregue nunca volta pra fila: se o agente cair no meio, a tela diz que o PC nao respondeu.
+//
+// O AGENTE SO TRABALHA QUANDO ALGUEM OLHA. Sem a tela aberta ele pinga de 5 em 5 s (uma leitura do
+// banco) e o painel-servidor nem roda; com a tela aberta (central_ver ha menos de CENTRAL_ATIVO_S)
+// ele pinga de 1 em 1 s, sobe o painel sem janela e manda o retrato quando ele muda.
+const CENTRAL_VIVO_S = 30;           // sem ping ha 30 s = PC desligado ou sem internet (o agente pinga de 1 a 5 s)
+const CENTRAL_ATIVO_S = 90;          // a tela foi aberta ha menos disso = o agente fica no modo rapido
+const CENTRAL_PEDIDO_VIDA_S = 45;    // pedido nao pego nesse tempo expira: nunca roda atrasado
+const CENTRAL_ESPERA_MS = 20000;     // o POST do app espera a resposta ate isso; depois a tela pergunta de novo
+const CENTRAL_ESTADO_MAX = 400000;   // o retrato inteiro, em caracteres (uns 25 celulares e 25 tarefas)
+const CENTRAL_SEM_PUSH_S = 20;       // quem olhou a tela nos ultimos 20 s ja viu o fim da tarefa nela: sem push
+// O QUE O APP PODE PEDIR, e mais nada. A mesma lista mora no agente (defesa em dobro). Fora de
+// proposito: /api/proteger (abre o pedido de administrador do Windows, que so da pra aceitar NA FRENTE
+// do PC), /api/janela e /api/ping (coisas da janela do PC).
+const CENTRAL_ROTAS = {
+  GET: ['/api/numeros', '/api/numero', '/api/proxy/da-dash', '/api/saude', '/api/tarefas'],
+  POST: ['/api/proxy/ler', '/api/proxy/testar', '/api/acao', '/api/proxy', '/api/criar'],
+};
+// O caminho que o app mandou, limpo: rota da lista + a query dela. null = recusado.
+function _centralRotaOk(metodo, caminho) {
+  const lista = CENTRAL_ROTAS[String(metodo || '').toUpperCase()];
+  if (!lista || typeof caminho !== 'string' || caminho.length > 300 || !caminho.startsWith('/api/')) return null;
+  let u;
+  try { u = new URL(caminho, 'http://central.local'); } catch (_) { return null; }
+  if (u.origin !== 'http://central.local' || !lista.includes(u.pathname)) return null;
+  return u.pathname + u.search;
+}
+// So a direcao DA CASA: a central e do notebook do Bruno, nao existe no mundo de um afiliado.
+const _centralPode = (u) => !!u && isDirector(u) && !_mundoDeQuem(u) && !u._comoDe;
+const _centralTxt = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f]/g, ' ').slice(0, max);
+const _centralJson = (s, padrao) => { try { const v = JSON.parse(s || ''); return v == null ? padrao : v; } catch (_) { return padrao; } };
+
+let _centralTabOk = false;
+async function _centralTabela(env) {
+  if (_centralTabOk) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS central_pedidos (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, por TEXT, metodo TEXT, caminho TEXT, corpo TEXT, status TEXT, pego_ts INTEGER, feito_ts INTEGER, codigo INTEGER, resposta TEXT, tarefa TEXT, avisado INTEGER DEFAULT 0)').run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_central_pedidos_status ON central_pedidos(status, id)').run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_central_pedidos_tarefa ON central_pedidos(tarefa)').run();
+  _centralTabOk = true;
+}
+// O token do agente mora em app_config central_agente_token (quem grava e a instalacao do agente no
+// PC, o mesmo valor do central-remota.json de la). Leitura que falha devolve null: nao e "sem token".
+// Guardado 60 s por isolate: o agente pinga de 1 em 1 s com a tela aberta.
+let _centralTokCache = { v: '', t: 0 };
+async function _centralToken(env) {
+  if (_centralTokCache.v && Date.now() - _centralTokCache.t < 60000) return _centralTokCache.v;
+  try {
+    await _ensureConfigTable(env);
+    const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'central_agente_token'").first();
+    const v = String((row && row.value) || '');
+    _centralTokCache = { v, t: v ? Date.now() : 0 };
+    return v;
+  } catch (_) { return null; }
+}
+function _centralAgenteDe(v) {
+  const o = _centralJson(v, null);
+  const agora = Math.floor(Date.now() / 1000);
+  const ts = Number(o && o.ts) || 0;
+  return { vivo: !!ts && (agora - ts) < CENTRAL_VIVO_S, ts, pc: String((o && o.pc) || ''), versao: String((o && o.versao) || ''), servidor: !!(o && o.servidor) };
+}
+// QUEM ESTA OLHANDO: { "<id do usuario>": ts }. Uma gravacao a cada 15 s por pessoa, no maximo.
+async function _centralMarcaVer(env, u, mapaAtual) {
+  const agora = Math.floor(Date.now() / 1000);
+  const ver = (mapaAtual && typeof mapaAtual === 'object') ? { ...mapaAtual } : {};
+  const meu = Number(ver[String(u.id)]) || 0;
+  if (agora - meu < 15) return ver;
+  ver[String(u.id)] = agora;
+  // so quem olhou na ultima hora fica no mapa
+  for (const k of Object.keys(ver)) if (agora - (Number(ver[k]) || 0) > 3600) delete ver[k];
+  try { await _writeConfig(env, 'central_ver', JSON.stringify(ver)); } catch (_) { /* olhar nao pode falhar por isso */ }
+  return ver;
+}
+// DDD + 8 finais, a chave do swweb_proxies e do ldplayer_celulares (mesma do _waNumKey).
+const _centralNk = (d) => { const s = String(d || '').replace(/\D/g, ''); return s.length >= 10 ? s.slice(0, 2) + s.slice(-8) : ''; };
+
+// GET /api/central/estado (app): o PC esta ligado? + o ultimo retrato da central.
+async function _centralEstadoApp(req, env, u) {
+  const agora = Math.floor(Date.now() / 1000);
+  const m = await _readConfigMuitas(env, ['central_agente', 'central_estado', 'central_ver', 'swweb_proxies', LDPLAYER_CELULARES]);
+  await _centralMarcaVer(env, u, _centralJson(m.central_ver, {}));
+  const pc = _centralAgenteDe(m.central_agente);
+  const est = _centralJson(m.central_estado, null);
+  let estado = null;
+  if (est && typeof est === 'object') {
+    // CELULAR COM OUTRA PROXY, pela MESMA regra da gaveta da Contingencia (banco-proxies.jsx,
+    // EstadoCelular): a dash trocou a proxy do numero e o celular ficou com a velha. A senha nunca
+    // sai daqui: so o sim/nao.
+    const proxies = _centralJson(m.swweb_proxies, {});
+    const celulares = _centralJson(m[LDPLAYER_CELULARES], {});
+    const numeros = (Array.isArray(est.numeros) ? est.numeros : []).map((n) => {
+      const nk = _centralNk(n && n.numero);
+      const px = nk ? proxies[nk] : null;
+      const cel = nk ? celulares[nk] : null;
+      const pxId = String((px && px.id) || '');
+      return { ...n, celOutra: !!(cel && typeof cel === 'object' && pxId && String(cel.px_id || '') !== pxId) };
+    });
+    estado = { em: Number(est.em) || 0, numeros, tarefas: Array.isArray(est.tarefas) ? est.tarefas : [], saude: (est.saude && typeof est.saude === 'object') ? est.saude : {} };
+  }
+  return json({ ok: true, agora, pc, estado });
+}
+
+// Espera o agente responder um pedido, olhando o banco a cada 350 ms.
+async function _centralEspera(env, id, ms) {
+  const fim = Date.now() + ms;
+  for (;;) {
+    let r = null;
+    try { r = await env.DB.prepare('SELECT status, codigo, resposta, ts FROM central_pedidos WHERE id = ?').bind(id).first(); } catch (_) { r = null; }
+    if (!r) return { ok: false, id, erro: 'Esse pedido não existe mais.' };
+    if (r.status === 'feito') return { ok: true, id, feito: true, codigo: Number(r.codigo) || 0, resposta: _centralJson(r.resposta, null) };
+    if (r.status === 'expirado') return { ok: false, id, expirado: true, erro: 'O PC da central não pegou o pedido a tempo. Nada foi feito; tente de novo.' };
+    const agora = Math.floor(Date.now() / 1000);
+    if (r.status === 'pend' && agora - (Number(r.ts) || 0) > CENTRAL_PEDIDO_VIDA_S) {
+      // a volta seguinte relê: ou expirou agora, ou o agente pegou no mesmo instante
+      try { await env.DB.prepare("UPDATE central_pedidos SET status='expirado', corpo='' WHERE id=? AND status='pend'").bind(id).run(); } catch (_) {}
+    }
+    if (Date.now() >= fim) return { ok: true, id, esperando: true, status: String(r.status || '') };
+    await new Promise((res) => setTimeout(res, 350));
+  }
+}
+// POST /api/central/pedido (app): { metodo, caminho, corpo } -> a resposta do painel do PC.
+async function _centralPedidoApp(req, env, u) {
+  let b;
+  try { b = await req.json(); } catch (_) { return err('Pedido inválido'); }
+  const metodo = String((b && b.metodo) || 'GET').toUpperCase();
+  const caminho = _centralRotaOk(metodo, b && b.caminho);
+  if (!caminho) return err('Isso a central não faz pelo aplicativo', 400);
+  let corpo = '';
+  if (metodo === 'POST') {
+    corpo = JSON.stringify((b.corpo && typeof b.corpo === 'object' && !Array.isArray(b.corpo)) ? b.corpo : {});
+    if (corpo.length > 20000) return err('Pedido grande demais', 400);
+  }
+  const m = await _readConfigMuitas(env, ['central_agente', 'central_ver']);
+  if (!_centralAgenteDe(m.central_agente).vivo) return json({ ok: false, offline: true, erro: 'O PC da central está desligado ou sem internet.' }, 503);
+  await _centralTabela(env);
+  const agora = Math.floor(Date.now() / 1000);
+  const ins = await env.DB.prepare("INSERT INTO central_pedidos (ts, por, metodo, caminho, corpo, status) VALUES (?, ?, ?, ?, ?, 'pend') RETURNING id")
+    .bind(agora, String(u.id), metodo, caminho, corpo).first();
+  const id = Number(ins && ins.id) || 0;
+  if (!id) return err('Não consegui guardar o pedido. Tente de novo.', 500);
+  // pedir tambem e olhar: o agente entra no modo rapido ja no proximo ping
+  await _centralMarcaVer(env, u, _centralJson(m.central_ver, {}));
+  console.log('CENTRAL_PEDIDO id=' + id + ' por=' + String(u.id) + ' ' + metodo + ' ' + caminho.split('?')[0]);
+  return json(await _centralEspera(env, id, CENTRAL_ESPERA_MS));
+}
+
+// O AVISO NO CELULAR quando termina uma tarefa que o APP disparou (abrir leva 1 a 2 min, criar uns 3:
+// ele pode bloquear a tela e ser avisado). Tarefa disparada pela janela do PC nao avisa ninguem.
+const CENTRAL_FEITO = { abrir: 'aberto', desligar: 'desligado', criar: 'criado', proxy: 'com a proxy nova', excluir: 'excluído', apagar: 'apagado' };
+function _centralTextoAviso(t, numeros) {
+  const dig = String((t && t.numero) || '').replace(/\D/g, '');
+  const n = (Array.isArray(numeros) ? numeros : []).find((x) => x && String(x.numero || '') === dig);
+  const bonito = dig.length >= 10 ? '(' + dig.slice(0, 2) + ') ' + dig.slice(2, dig.length - 4) + '-' + dig.slice(-4) : dig;
+  const nome = (n && Number(n.idx) ? String(n.idx).padStart(2, '0') + ' - ' : '') + bonito;
+  const linhas = (Array.isArray(t && t.linhas) ? t.linhas : []).map((l) => String(l || '').trim()).filter(Boolean);
+  const ultima = _centralTxt(linhas[linhas.length - 1] || '', 160);
+  if (t.status === 'erro') {
+    const motivo = [...linhas].reverse().find((l) => /^(ERRO|ATENCAO|NAO ESTA PRONTO|NAO ABRI|SEM INTERNET)/i.test(l)) || ultima;
+    return { title: 'Não deu certo: ' + _centralTxt(t.titulo || nome, 80), body: _centralTxt(motivo, 160) || 'Veja em Atividade.' };
+  }
+  return { title: 'Celular ' + nome + ' ' + (CENTRAL_FEITO[t.tipo] || 'pronto'), body: ultima || 'Pronto.' };
+}
+async function _centralAvisaTarefas(env, est, ver) {
+  const fins = (est.tarefas || []).filter((t) => t && (t.status === 'pronto' || t.status === 'erro') && /^[0-9a-f]{12}$/.test(String(t.id || '')));
+  if (!fins.length) return;
+  let pend = [];
+  try {
+    pend = ((await env.DB.prepare('SELECT id, por, tarefa FROM central_pedidos WHERE avisado = 0 AND tarefa IN (SELECT value FROM json_each(?))')
+      .bind(JSON.stringify(fins.map((t) => String(t.id)))).all()).results) || [];
+  } catch (_) { return; }
+  const agora = Math.floor(Date.now() / 1000);
+  for (const p of pend) {
+    const t = fins.find((x) => String(x.id) === String(p.tarefa));
+    if (!t) continue;
+    // marca ANTES de mandar: dois pings ao mesmo tempo nao avisam em dobro
+    let marcou = false;
+    try { const r = await env.DB.prepare('UPDATE central_pedidos SET avisado = 1 WHERE id = ? AND avisado = 0').bind(p.id).run(); marcou = !!(r && r.meta && r.meta.changes > 0); } catch (_) { marcou = false; }
+    if (!marcou) continue;
+    if (agora - (Number(ver && ver[String(p.por)]) || 0) < CENTRAL_SEM_PUSH_S) continue;   // estava olhando: a tela ja mostrou
+    const a = _centralTextoAviso(t, est.numeros);
+    try { await _wpParaPessoa(env, String(p.por), { title: a.title, body: a.body, aviso: true, tag: 'central-' + t.id, icon: '/icons/venda-192.png?v=2', url: '/app/celulares' }, 'celulares'); } catch (_) {}
+    console.log('CENTRAL_AVISO pedido=' + p.id + ' tarefa=' + t.id + ' ' + t.status + ' "' + a.title + '"');
+  }
+}
+
+// So o que a tela usa de cada celular e de cada tarefa (o retrato vem de um PC; aqui ele e podado).
+function _centralPoda(est) {
+  const numeros = (Array.isArray(est.numeros) ? est.numeros : []).slice(0, 300).map((n) => {
+    const px = n && n.proxy && typeof n.proxy === 'object' ? n.proxy : null;
+    const wa = n && n.wa && typeof n.wa === 'object' ? n.wa : null;
+    return {
+      nome: _centralTxt(n && n.nome, 60), numero: String((n && n.numero) || '').replace(/\D/g, '').slice(0, 13),
+      idx: Number(n && n.idx) || 0, ligado: !!(n && n.ligado), pronto: !!(n && n.pronto), regerado: !!(n && n.regerado),
+      proxy: px ? { tipo: _centralTxt(px.tipo, 10), host: _centralTxt(px.host, 80), porta: Number(px.porta) || 0, usuario: _centralTxt(px.usuario, 40), tem_senha: !!px.tem_senha } : null,
+      apelido: _centralTxt(n && n.apelido, 40),
+      wa: wa ? { estado: _centralTxt(wa.estado, 20), em: Number(wa.em) || 0 } : null,
+      ocupado: !!(n && n.ocupado), tarefa: _centralTxt(n && n.tarefa, 20),
+    };
+  }).filter((n) => n.numero);
+  const tarefas = (Array.isArray(est.tarefas) ? est.tarefas : []).slice(0, 40).map((t) => ({
+    id: _centralTxt(t && t.id, 20), titulo: _centralTxt(t && t.titulo, 120), tipo: _centralTxt(t && t.tipo, 20),
+    numero: String((t && t.numero) || '').replace(/\D/g, '').slice(0, 13), status: _centralTxt(t && t.status, 12),
+    linhas: (Array.isArray(t && t.linhas) ? t.linhas : []).slice(-12).map((l) => _centralTxt(l, 300)),
+    inicio: Number(t && t.inicio) || 0, fim: Number(t && t.fim) || 0,
+  }));
+  const s = est.saude && typeof est.saude === 'object' ? est.saude : {};
+  return { numeros, tarefas, saude: { portaAberta: s.portaAberta === true ? true : s.portaAberta === false ? false : null, conferido: Number(s.conferido) || 0 } };
+}
+
+let _centralFaxinaEm = 0;
+// POST /api/central/agente/ping (agente, token): estado do PC + retrato -> { ativo, pedidos }.
+async function _centralPing(env, b) {
+  const agora = Math.floor(Date.now() / 1000);
+  const m = await _readConfigMuitas(env, ['central_agente', 'central_ver']);
+  const antes = _centralJson(m.central_agente, null);
+  const atual = { ts: agora, pc: _centralTxt(b.pc, 60), versao: _centralTxt(b.versao, 20), servidor: !!b.servidor };
+  const mudou = !antes || typeof antes !== 'object' || ['pc', 'versao', 'servidor'].some((k) => String(antes[k]) !== String(atual[k]));
+  // ping de 1 em 1 s: so grava quando muda ou a cada 10 s (o "vivo" tem 30 s de folga)
+  if (mudou || agora - (Number(antes.ts) || 0) >= 10) await _writeConfig(env, 'central_agente', JSON.stringify(atual));
+  const ver = _centralJson(m.central_ver, {});
+  await _centralTabela(env);
+  if (b.estado && typeof b.estado === 'object') {
+    const est = { em: agora, ..._centralPoda(b.estado) };
+    const s = JSON.stringify(est);
+    if (s.length <= CENTRAL_ESTADO_MAX) {
+      await _writeConfig(env, 'central_estado', s);
+      await _centralAvisaTarefas(env, est, ver);
+    } else console.log('CENTRAL_ESTADO grande demais: ' + s.length);
+  }
+  let ativo = Object.values(ver && typeof ver === 'object' ? ver : {}).some((ts) => agora - (Number(ts) || 0) < CENTRAL_ATIVO_S);
+  // A FILA: leitura barata primeiro; as gravacoes so quando ha pedido esperando.
+  const pedidos = [];
+  let fila = [];
+  try { fila = ((await env.DB.prepare("SELECT id, ts FROM central_pedidos WHERE status = 'pend' ORDER BY id LIMIT 10").all()).results) || []; } catch (_) { fila = []; }
+  if (fila.length) {
+    ativo = true;
+    const velhos = fila.filter((x) => agora - (Number(x.ts) || 0) > CENTRAL_PEDIDO_VIDA_S).map((x) => Number(x.id));
+    if (velhos.length) {
+      try { await env.DB.prepare("UPDATE central_pedidos SET status = 'expirado', corpo = '' WHERE status = 'pend' AND id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(velhos)).run(); } catch (_) {}
+    }
+    const novos = fila.filter((x) => !velhos.includes(Number(x.id))).map((x) => Number(x.id));
+    if (novos.length) {
+      // RESERVA ATOMICA: so leva quem conseguiu marcar 'pego' (dois agentes nunca levam o mesmo pedido)
+      let r = [];
+      try {
+        r = ((await env.DB.prepare("UPDATE central_pedidos SET status = 'pego', pego_ts = ? WHERE status = 'pend' AND id IN (SELECT value FROM json_each(?)) RETURNING id, ts, metodo, caminho, corpo")
+          .bind(agora, JSON.stringify(novos)).all()).results) || [];
+      } catch (_) { r = []; }
+      for (const x of r.sort((a, c) => Number(a.id) - Number(c.id))) {
+        pedidos.push({ id: Number(x.id), metodo: String(x.metodo || 'GET'), caminho: String(x.caminho || ''), corpo: x.corpo ? _centralJson(x.corpo, {}) : null, idade: agora - (Number(x.ts) || 0) });
+      }
+    }
+  }
+  // faxina: pedido de mais de 2 dias sai (no maximo uma vez a cada 10 min por isolate)
+  if (Date.now() - _centralFaxinaEm > 600000) {
+    _centralFaxinaEm = Date.now();
+    try { await env.DB.prepare('DELETE FROM central_pedidos WHERE ts < ?').bind(agora - 2 * 86400).run(); } catch (_) {}
+    try { await env.DB.prepare("UPDATE central_pedidos SET status = 'expirado', corpo = '' WHERE status = 'pego' AND pego_ts < ?").bind(agora - 1800).run(); } catch (_) {}
+  }
+  return { ok: true, ativo, pedidos, vida: CENTRAL_PEDIDO_VIDA_S };
+}
+// POST /api/central/agente/resposta (agente, token): { id, codigo, resposta }.
+async function _centralResposta(env, b) {
+  const id = Number(b && b.id) || 0;
+  if (!id) return { ok: false };
+  const resp = b.resposta === undefined ? null : b.resposta;
+  let s = 'null';
+  try { s = JSON.stringify(resp); } catch (_) { s = 'null'; }
+  if (s.length > 100000) s = JSON.stringify({ erro: 'A resposta da central veio grande demais.' });
+  // o id da tarefa que o painel criou (abrir, proxy, criar...): e por ele que o aviso de "terminou" acha quem pediu
+  const tarefa = (resp && typeof resp === 'object' && /^[0-9a-f]{12}$/.test(String(resp.id || ''))) ? String(resp.id) : null;
+  await _centralTabela(env);
+  // corpo = '' AGORA: a proxy colada (com a senha) nao fica guardada depois de usada
+  const r = await env.DB.prepare("UPDATE central_pedidos SET status = 'feito', feito_ts = ?, codigo = ?, resposta = ?, corpo = '', tarefa = ? WHERE id = ? AND status = 'pego'")
+    .bind(Math.floor(Date.now() / 1000), Number(b.codigo) || 0, s, tarefa, id).run();
+  return { ok: !!(r && r.meta && r.meta.changes > 0) };
+}
+
+async function handleCentral(req, env, path) {
+  const sub = path.replace(/^\/api\/central\//, '').replace(/\/+$/, '');
+  if (sub.startsWith('agente/')) {
+    // O AGENTE NO PC: token proprio (nunca o da Cloudflare), sem sessao de usuario.
+    const tok = String(req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+    const esperado = await _centralToken(env);
+    if (!esperado || esperado.length < 32 || !tok || tok !== esperado) return err('Token da central inválido', 401);
+    if (req.method !== 'POST') return err('Use POST', 405);
+    let b = {};
+    try { b = await req.json(); } catch (_) { b = {}; }
+    if (!b || typeof b !== 'object') b = {};
+    const acao = sub.slice('agente/'.length);
+    if (acao === 'ping') return json(await _centralPing(env, b));
+    if (acao === 'resposta') return json(await _centralResposta(env, b));
+    return err('Rota do agente desconhecida', 404);
+  }
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (!_centralPode(u)) return err('Só a direção mexe na central de celulares', 403);
+  if (req.method === 'GET' && sub === 'estado') return _centralEstadoApp(req, env, u);
+  if (req.method === 'POST' && sub === 'pedido') return _centralPedidoApp(req, env, u);
+  // a tela pergunta de novo por um pedido que passou dos 20 s (teste de proxy lenta, por exemplo)
+  if (req.method === 'GET' && sub === 'pedido') {
+    const id = Number(new URL(req.url).searchParams.get('id')) || 0;
+    if (!id) return err('Pedido inválido', 400);
+    await _centralTabela(env);
+    return json(await _centralEspera(env, id, 8000));
+  }
+  return err('Rota da central desconhecida', 404);
+}
+// ═══════════════════════════════════ fim da central de celulares ═══════════════════════════════════
+
 // POST /api/criativo/midia — corpo CRU (o arquivo), content-type = o do arquivo.
 // Sobe pro Gemini Files e devolve a URI. Nada fica guardado do nosso lado: o criativo é material de
 // campanha, não é dado da operação, e o R2 aqui só viraria lixo acumulando.
@@ -37320,6 +37651,8 @@ export default {
       if (path === '/api/bot/template' && (req.method === 'GET' || req.method === 'POST')) return handleBotTemplate(req, env);
       if (path.startsWith('/api/bot/wa/')) return handleBotWa(req, env);   // WhatsApp Web do bot (grupo)
       if (path.startsWith('/api/bot/agente/')) return handleBotAgente(req, env);   // o bot no PC (token, sem sessao)
+      // CENTRAL DE CELULARES NO APP (10/11/2026): o app pede, o agente do PC do Bruno executa. Ver handleCentral.
+      if (path.startsWith('/api/central/')) return handleCentral(req, env, path);
       if (path.startsWith('/api/bot/config/')) return handleBotCfgVersoes(req, env);   // versao, historico e restaurar da config do bot
       if (path.startsWith('/api/bot/midia')) return handleBotMidia(req, env);   // imagem/video das mensagens do bot (GET publico, pro bot do PC)
 
