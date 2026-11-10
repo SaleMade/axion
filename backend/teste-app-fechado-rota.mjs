@@ -165,6 +165,33 @@ vale('o Kevin abre o app', r.st === 200 && r.d.ok === true, r.st + ' ' + JSON.st
 r = await chama(TK.dir, '/api/pressel/num', { at: 'kev', num: AQ_NUM, on: true });
 vale('com o app do Kevin aberto, o mesmo clique LIGA de verdade (sem plantao)', r.st === 200 && r.d.on === true && !r.d.plantao && !(vAq(1).off && vAq(1).off[AQ]) && !(vAq(1).app_off && vAq(1).app_off[AQ]), r.st + ' ' + JSON.stringify(r.d).slice(0, 120));
 
+
+// 7) LIGAR TIRA O DONO DO PLANTAO, ABRIR NAO (10/11/2026). Dois numeros de producao do Kevin com a
+//    marca do plantao (o app dele fechou com os dois ligados). Ele ja esta com o app aberto (secao 6)
+//    e liga UM: a marca dos DOIS sai, pelas duas rotas do interruptor.
+const E2 = '97973451', NUM2 = '(15) 99797-3451';
+const marcaOsDois = () => {
+  const d = ler();
+  if (!d.chips.some((c) => c.id === 'cE2')) d.chips.push({ id: 'cE2', num: NUM2, at: 'kev', em_uso: true, wa_st: 'st_uso', idx: 4 });
+  for (const p of d.pressels) {
+    let v = (p.vendedores || []).find((x) => x.at === 'kev');
+    if (!v) { v = { at: 'kev', ativo: true }; (p.vendedores = p.vendedores || []).push(v); }
+    v.off = { ...(v.off || {}), [E]: true, [E2]: true };
+    v.app_off = { [E]: true, [E2]: true };
+  }
+  sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d));
+};
+const marcas = (pid) => Object.keys(vAq(pid).app_off || {}).sort().join();
+marcaOsDois();
+vale('antes: os dois numeros do Kevin de plantao nas duas pressels', marcas(1) === [E, E2].sort().join() && marcas(2) === [E, E2].sort().join(), marcas(1) + ' / ' + marcas(2));
+r = await chama(TK.kev, '/api/pressel/meu-numero', { num: NUM, on: true });
+vale('o Kevin liga UM numero pela tela dele: 200', r.st === 200, r.st + ' ' + (r.d.error || ''));
+vale('e a marca dos DOIS sai nas duas pressels (ele voltou)', !marcas(1) && !marcas(2), marcas(1) + ' / ' + marcas(2));
+vale('o outro numero continua desligado: so volta se ele ligar', !!(vAq(1).off && vAq(1).off[E2]) && !!(vAq(2).off && vAq(2).off[E2]));
+marcaOsDois();
+r = await chama(TK.dir, '/api/pressel/num', { at: 'kev', num: NUM2, on: true });
+vale('pela rota do interruptor (a do SellWave Web e da direcao) e igual: ligou um, a marca dos dois sai', r.st === 200 && r.d.on === true && !marcas(1) && !marcas(2), r.st + ' ' + marcas(1) + ' / ' + marcas(2));
+
 _log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram.');
 if (falhas.length) { _log('\nFALHOU:\n- ' + falhas.join('\n- ')); process.exit(1); }
 process.exit(0);

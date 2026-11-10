@@ -13,9 +13,11 @@
 //     madrugada - o pior caso possivel, porque ninguem esta olhando.
 //  2. O PLANTAO E ULTIMO RECURSO. Se ele entrar junto com gente apta, a roleta passa a dividir lead
 //     com numero desligado em pleno dia e o interruptor para de valer.
-//  3. QUEM ABRIU O APP SAI DO PLANTAO. Sem isso, de manha o vendedor abre o app, nao liga a chave, e
-//     continua recebendo - exatamente a regra de 31/10 ("quando acessar de novo, tem que ligar")
-//     desfeita pela porta de tras.
+//  3. ABRIR O APP NAO TIRA DO PLANTAO; LIGAR UM NUMERO TIRA (10/11/2026). Ate esse dia abrir o app
+//     apagava a marca, e o vendedor que abria o app de noite so pra olhar conversa tirava os numeros
+//     dele do plantao sem saber (a chave ja estava desligada, entao a marca nao voltava ao fechar):
+//     a pressel ficou sem numero da 01h as 07h57 de 10/11 e perdeu 463 visitas pagas. A marca agora
+//     sai quando o dono liga um numero - ai a roleta ja tem gente e o plantao nem e consultado.
 //  4. A MARCA TEM QUE SOBREVIVER. Ela e apagada por clique de gente (certo) mas NAO pode ser apagada
 //     por uma tela que salva a pressel inteira (errado): ai o plantao morre em silencio e a
 //     madrugada seguinte volta a perder lead, sem nada ligando o defeito ao clique de "salvar".
@@ -57,7 +59,7 @@ const conta = (nome, certo, detalhe) => {
 
 const nomes = ['_cobIds', 
   '_swwebAppAbertos', '_swwebLigadosPorDono', '_swwebDesligaDonos', '_desligaAppFechado',
-  '_plantaoDonos', '_plantaoLimpa',
+  '_plantaoSaiDoDono',
   '_estadoLe', '_estadoGrava', '_presselAplicaNum', '_limpaMarcasDesligado', '_amanhaBR',
   '_presselNumLogEnsure', '_presselNumLog', '_emUsoIdsDe', '_foraIdsDe', '_aquecIdsDe',
   '_papelSt', '_papelPeloNomeSt', '_swwebApto', '_chipEmUso',
@@ -96,7 +98,7 @@ sq.exec("INSERT INTO users VALUES ('kevin','Kevin Marques','atendente'),('gui','
 const fabrica = new Function('_getDashData', '_brDay', '_chipAquecendo', '_numDoAquecimento', '_chipsDaPressel',
   'let _dashCache = null; let _apiMorto = new Set(); let _apiMortoEm = 0;\n'
   + consts.map(([, l]) => l).join('\n') + '\n' + blocos.map(([, b]) => b).join('\n')
-  + '\nreturn { _swwebLigadosPorDono, _swwebDesligaDonos, _desligaAppFechado, _plantaoDonos, _plantaoLimpa,'
+  + '\nreturn { _swwebLigadosPorDono, _swwebDesligaDonos, _desligaAppFechado, _plantaoSaiDoDono,'
   + ' _resolvePresselSellers, _presselAplicaNum, _limpaMarcasDesligado, _emUsoIdsDe, _foraIdsDe, _aquecIdsDe, _cobIds, _chipDeCobranca };');
 
 // chip em aquecimento = tem warm_start ou a tag de aquecimento; o teto da rampa nao importa aqui
@@ -280,27 +282,40 @@ conta('e a roleta respeita isso: a 1 usa o K1, a 12 nao',
   numerosDa(1, true).includes(k8(K1)) && !numerosDa(12, true).includes(k8(K1)),
   '1=' + numerosDa(1, true).join() + '  12=' + numerosDa(12, true).join());
 
-console.log('\n8. QUEM ABRE O APP SAI DO PLANTAO');
+console.log('\n8. ABRIR O APP NAO TIRA DO PLANTAO; LIGAR UM NUMERO TIRA (10/11/2026)');
 monta(OPERACAO());
 await F._desligaAppFechado(env);
 conta('a noite: os dois em plantao', appOffDe(1, 'kevin').length === 2 && appOffDe(1, 'gui').length >= 1,
   'kevin=' + appOffDe(1, 'kevin').length + ' gui=' + appOffDe(1, 'gui').length);
-conta('os donos com marca aparecem no _plantaoDonos', [...F._plantaoDonos(estado())].sort().join() === 'gui,kevin',
-  [...F._plantaoDonos(estado())].join());
-// de manha o Kevin abre o app (aluguel vivo) e NAO liga a chave
-AGORA += 10 * 3600;
+// as 23h o Kevin abre o app (aluguel vivo) pra olhar conversa e NAO liga a chave
+AGORA += 3 * 3600;
 aluga(K1, 'kevin', AGORA + 120);
 const vAntes = versao();
 await F._desligaAppFechado(env);
-conta('o Kevin perdeu a marca de plantao', appOffDe(1, 'kevin').length === 0, appOffDe(1, 'kevin').join());
-conta('mas o numero dele CONTINUA desligado: ele tem que ligar', offDe(1, 'kevin').length === 2, offDe(1, 'kevin').join());
-conta('o Guilherme, ainda fechado, segue em plantao', appOffDe(1, 'gui').includes(k8(G1)));
-conta('gravou (a versao andou)', versao() > vAntes, vAntes + ' -> ' + versao());
-conta('com o Kevin fora do plantao, a madrugada cai nos numeros do Guilherme',
-  numerosDa(1, true).join() === [k8(G1), k8(G_AQ)].sort().join(), numerosDa(1, true).join());
-const v2 = versao();
+conta('abrir o app NAO apaga a marca do Kevin', appOffDe(1, 'kevin').length === 2, appOffDe(1, 'kevin').join());
+conta('e os numeros dele continuam desligados no interruptor', offDe(1, 'kevin').length === 2, offDe(1, 'kevin').join());
+conta('e a batida nao grava nada (nao fica rodando a toa)', versao() === vAntes, vAntes + ' -> ' + versao());
+conta('com ninguem ligado, o plantao segue com os numeros dele e os do Guilherme',
+  numerosDa(1, true).join() === [k8(K1), k8(K2), k8(G1), k8(G_AQ)].sort().join(), numerosDa(1, true).join());
+// ele fecha o app (o aluguel vence e passa a folga) e a madrugada segue
+AGORA += 600;
 await F._desligaAppFechado(env);
-conta('e a batida seguinte nao grava de novo (nao fica rodando a toa)', versao() === v2, v2 + ' -> ' + versao());
+conta('fechou de novo: a marca continua la pra madrugada', appOffDe(1, 'kevin').length === 2, appOffDe(1, 'kevin').join());
+// de manha ele abre e LIGA o K1: o mesmo par de chamadas das duas rotas do interruptor
+AGORA += 8 * 3600;
+aluga(K1, 'kevin', AGORA + 120);
+{
+  const d = estado();
+  for (const p of d.pressels.filter((x) => !x.afl)) { F._presselAplicaNum(p, 'kevin', k8(K1), true, false, [k8(K1), k8(K2)]); F._plantaoSaiDoDono(p, 'kevin'); }
+  sq.prepare('UPDATE dashboard_state SET data=? WHERE id=1').run(JSON.stringify(d));
+}
+conta('LIGAR um numero apaga TODA a marca do Kevin (a do K2, que ele nao ligou, tambem)',
+  appOffDe(1, 'kevin').length === 0 && appOffDe(12, 'kevin').length === 0, appOffDe(1, 'kevin').join() + ' / ' + appOffDe(12, 'kevin').join());
+conta('o K2 continua desligado: so volta se ele ligar', offDe(1, 'kevin').includes(k8(K2)) && offDe(12, 'kevin').includes(k8(K2)));
+conta('o Guilherme, que nao voltou, segue em plantao', appOffDe(1, 'gui').includes(k8(G1)), appOffDe(1, 'gui').join());
+conta('com o K1 ligado a roleta usa ele e nao consulta o plantao',
+  numerosDa(1, true).join() === k8(K1) && roleta(1, true).every((s) => !s.plantao), numerosDa(1, true).join());
+conta('a pressel do afiliado nao foi tocada', !(pressel(99).vendedores || []).some((v) => v.off || v.app_off));
 
 console.log('\n9. LEITURA DOS ALUGUEIS FALHANDO NAO ESVAZIA O PLANTAO');
 monta(OPERACAO());
@@ -334,6 +349,31 @@ const comCob = numerosDa(1, true);
 conta('o numero do cobrador NAO esta no plantao', !comCob.includes(k8(COB)), comCob.join());
 conta('e o plantao continua achando o numero do vendedor', comCob.includes(k8(G1)), comCob.join());
 conta('nem na primeira passada ele aparece', !numerosDa(1, false).includes(k8(COB)));
+
+console.log('\n12. A NOITE DE 09 PRA 10/11/2026, DO JEITO QUE ACONTECEU');
+// O Guilherme fecha o app as 18:35 com o G1 e o aquecimento ligados; o Kevin desliga os dele NA MAO
+// antes de sair (sem marca: decisao de gente). As 23h o Guilherme abre o app por 4 minutos e fecha.
+// As 07h10 o anuncio acorda e ninguem ligou nada ainda. Com a regra velha, o passo das 23h apagava a
+// marca dele e as 07h10 a pressel abria SEM NUMERO (463 visitas pagas ate 07h57).
+monta([
+  { at: 'kevin', ativo: true, off: { [k8(K1)]: true, [k8(K2)]: true } },
+  { at: 'gui', ativo: true, off: { [k8(G_RISCO)]: true } },
+]);
+AGORA = 1794260100;   // 09/11 18:35
+await F._desligaAppFechado(env);
+conta('18:35: o Guilherme fechou e os dois numeros dele viraram plantao',
+  appOffDe(1, 'gui').sort().join() === [k8(G1), k8(G_AQ)].sort().join(), appOffDe(1, 'gui').join());
+conta('o Kevin, que desligou na mao, nao tem plantao', appOffDe(1, 'kevin').length === 0, appOffDe(1, 'kevin').join());
+AGORA = 1794276000;   // 23:00, o Guilherme abre o app pra olhar conversa
+aluga(G1, 'gui', AGORA + 120);
+await F._desligaAppFechado(env);
+AGORA += 240 + 400;   // 23:04 fecha; o aluguel vence e passa a folga
+await F._desligaAppFechado(env);
+conta('23:04: abrir e fechar o app nao tirou o Guilherme do plantao', appOffDe(1, 'gui').length === 2, appOffDe(1, 'gui').join());
+AGORA = 1794305400;   // 10/11 07:10, o anuncio acorda
+const sete = roleta(1, true);
+conta('07:10, ninguem ligado: a pressel TEM numero', sete.length > 0 && sete.every((x) => x.plantao === true), JSON.stringify(numerosDa(1, true)));
+conta('e e o do Guilherme, nunca o que o Kevin desligou na mao', numerosDa(1, true).join() === [k8(G1), k8(G_AQ)].sort().join(), numerosDa(1, true).join());
 
 console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');
 if (falhas.length) { console.log('\nFALHOU:'); for (const f of falhas) console.log('  - ' + f); process.exit(1); }

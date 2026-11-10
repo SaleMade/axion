@@ -13860,8 +13860,8 @@ async function _botIaNumerosDe(env, st, atId, nome) {
       // O que importa primeiro: recebe lead agora ou nao, e por que. O interruptor de numero que nem esta
       // Em uso nao diz nada (a roleta nao entrega pra ele de jeito nenhum).
       // app_off = o cron desligou porque o SellWave Web fechou; o numero fica de PLANTAO (recebe de
-      // madrugada se ninguem estiver com o app aberto) e volta sozinho quando o dono abre o app.
-      partes.push(podeReceber ? 'RECEBENDO lead agora' : 'NÃO recebe lead agora (' + (!naRoleta ? 'não está Em uso' : (appOff && !lig ? 'o SellWave Web dele fechou; fica de plantão pra madrugada e religa quando ele abrir o app' : 'interruptor desligado')) + ')');
+      // madrugada se nenhum numero estiver ligado) ate o dono voltar e ligar um numero.
+      partes.push(podeReceber ? 'RECEBENDO lead agora' : 'NÃO recebe lead agora (' + (!naRoleta ? 'não está Em uso' : (appOff && !lig ? 'o SellWave Web dele fechou; fica de plantão (recebe quando nenhum número está ligado) até ele voltar e ligar' : 'interruptor desligado')) + ')');
       if (naRoleta) partes.push('interruptor: ' + (lig ? 'ligado em ' + lig + ' de ' + pDoChip.length + ' pressels' : 'desligado em todas as pressels') + (appOff ? ' (' + appOff + ' desligadas porque o SellWave Web fechou)' : '') + (desl ? ' (' + desl + ' desligadas)' : ''));
     }
     const mx = mudou[nk];
@@ -30507,6 +30507,8 @@ async function handlePresselMeus(req, env) {
 //                                 um plantao cego religaria o numero que o Bruno desligou de
 //                                 proposito. Numero parado por gente ate amanha (v.volta) NAO
 //                                 ganha a marca, mesmo quando o cron o desliga por app fechado.
+//                                 A marca sai quando o DONO LIGA um numero, nao quando ele abre
+//                                 o app (10/11/2026, ver _desligaAppFechado).
 // Qualquer clique de gente no interruptor apaga as tres: quem liga ou desliga na mao e quem decide.
 // O DIA SEGUINTE, no fuso de Brasilia. Quem decide a data e o SERVIDOR: a tela so pede "desliga ate
 // amanha" e o relogio do navegador dela nao entra na conta.
@@ -30689,6 +30691,7 @@ async function handlePresselMeuNumero(req, env) {
       } else off[nk] = true;
       if (Object.keys(off).length) v.off = off; else delete v.off;
       _limpaMarcasDesligado(v, nk);   // clique de gente: nada de religar sozinho depois
+      if (ligar) _plantaoSaiDoDono(p, meu);   // voltou: o plantao dele recomeca do que estiver ligado ao fechar
       if (!ligar && ateAmanha) v.volta = { ...((v.volta && typeof v.volta === 'object') ? v.volta : {}), [nk]: _amanhaBR() };
     }
     const newVer = (row.version || 0) + 1;
@@ -30861,14 +30864,14 @@ async function handlePresselNum(req, env) {
       // interruptor ligado o cron de app fechado desliga em 1 min, e enquanto ele estivesse ligado
       // a roleta nao usaria o plantao (so quando nao ha ninguem), entao o teto dele cheio deixaria a
       // pressel sem numero. Entao o numero fica DESLIGADO e ganha a mesma marca que o app fechado
-      // da (v.app_off): entra no plantao, na frente da fila e dentro da rampa, e quando o dono abrir
-      // o app a marca some e ele liga como os outros. Numero de producao continua recusado.
+      // da (v.app_off): entra no plantao, na frente da fila e dentro da rampa, e quando o dono ligar
+      // um numero a marca some (_plantaoSaiDoDono). Numero de producao continua recusado.
       if (nao && !_chipAquecendo(chip, _aquecIdsDe(data))) return err(nao, 409);
       if (nao) _plantaoAq = true;
     }
     const numsDoVend = dosVend.map((c) => String(c.num).replace(/\D/g, '').slice(-8));
     for (const p of alvos) {
-      if (!_plantaoAq) { _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend); continue; }
+      if (!_plantaoAq) { _presselAplicaNum(p, at, nk, ligar, ateAmanha, numsDoVend); if (ligar) _plantaoSaiDoDono(p, at); continue; }
       _presselAplicaNum(p, at, nk, false, false, numsDoVend);   // segue desligado e sem "ate amanha"
       const v = p.vendedores.find((x) => x && String(x.at) === at);
       if (v) { const m = (v.app_off && typeof v.app_off === 'object') ? v.app_off : {}; m[nk] = true; v.app_off = m; }
@@ -31222,67 +31225,43 @@ async function _swwebDesligaDonos(env, ats, o) {
   }
   return [];
 }
-// QUEM TEM MARCA DE PLANTAO no estado: Set de donos com algum v.app_off gravado.
-function _plantaoDonos(data) {
-  const out = new Set();
-  for (const p of (Array.isArray(data && data.pressels) ? data.pressels : [])) {
-    if (!p || String(p.afl || '')) continue;
-    for (const v of (Array.isArray(p.vendedores) ? p.vendedores : [])) {
-      if (!v || !v.at) continue;
-      if (v.app_off && typeof v.app_off === 'object' && Object.keys(v.app_off).length) out.add(String(v.at));
-    }
-  }
-  return out;
-}
-// APAGA A MARCA DE PLANTAO destes donos (nao mexe no interruptor: o numero segue desligado, so para
-// de valer como ultimo recurso da roleta). Usa a mesma trava de chaves do _swwebDesligaDonos.
-async function _plantaoLimpa(env, ats) {
-  const quer = new Set((ats || []).map((x) => String(x || '')).filter(Boolean));
-  if (!quer.size) return 0;
-  for (let tent = 0; tent < 4; tent++) {
-    const lido = await _estadoLe(env, ['pressels']);
-    if (!lido) return 0;
-    const pressels = Array.isArray(lido.data.pressels) ? lido.data.pressels : [];
-    let mexeu = 0;
-    for (const p of pressels) {
-      if (!p || String(p.afl || '')) continue;
-      for (const v of (Array.isArray(p.vendedores) ? p.vendedores : [])) {
-        if (!v || !v.at || !quer.has(String(v.at))) continue;
-        if (v.app_off && typeof v.app_off === 'object' && Object.keys(v.app_off).length) { delete v.app_off; mexeu++; }
-      }
-    }
-    if (!mexeu) return 0;
-    const ver = await _estadoGrava(env, lido, { pressels }, 'plantao-fim:' + [...quer].join(','));
-    if (ver) {
-      try { _dashCache = null; } catch (_) {}
-      console.log('ROLETA_PLANTAO_FIM ' + [...quer].join(' '));
-      return mexeu;
-    }
-    await new Promise((r) => setTimeout(r, 12 * (tent + 1)));
-  }
-  return 0;
+// O DONO VOLTOU: LIGOU UM NUMERO (10/11/2026). Apaga a marca de plantao DELE nesta pressel, de
+// todos os numeros e nao so do que ligou: dali em diante o plantao dele e o que estiver ligado quando
+// o app fechar de novo, entao numero que ele deixou desligado hoje nao volta pra madrugada por marca
+// velha. So mexe no objeto em memoria; quem chama grava. Chamado pelas duas rotas do interruptor.
+function _plantaoSaiDoDono(p, at) {
+  const v = (Array.isArray(p && p.vendedores) ? p.vendedores : []).find((x) => x && String(x.at) === String(at));
+  if (v && 'app_off' in v) delete v.app_off;
 }
 // A BATIDA DO CRON: quem tem numero da casa ligado e nao esta com o app aberto perde todos.
 // Sem ninguem ligado custa uma olhada no estado em cache; com, uma consulta numa tabela de poucas
 // linhas (um aluguel por numero aberto).
 //
-// E A VOLTA DO PLANTAO (31/10/2026): quem ABRIU o app perde a marca `app_off`. Sem isto, a roleta
-// seguiria mandando lead pro numero de gente acordada que ainda NAO ligou a chave - e a regra do
-// Bruno e que, ao voltar, ela tem que ligar. O plantao e so pra quando NAO HA ninguem aberto.
-// Os dois lados saem da MESMA consulta de alugueis, entao a batida nao ficou mais caro.
+// ABRIR O APP NAO TIRA MAIS DO PLANTAO (10/11/2026). Ate hoje esta batida apagava a marca `app_off`
+// de quem ABRIA o app, pra que o vendedor de volta tivesse que ligar a chave (regra de 31/10). So
+// que abrir nao e voltar: o Guilherme abre o app de noite pra olhar conversa, fecha minutos depois,
+// e a marca nao volta mais, porque a chave dele ja estava desligada quando ele fechou de novo.
+// MEDIDO nos backups do estado: em 07/11 (marcas das 19:27, sumidas antes das 22:22) e em 09/11
+// (marcas das 18:35, sumidas antes das 19:45; o 1194 de novo com o app aberto ate 23:04) os numeros
+// de producao dele sairam do plantao assim. O Kevin desliga os dele na mao antes de sair, e numero
+// desligado por gente nunca faz plantao. Sobrou so chip em aquecimento, que a rampa enche com 1 ou 2
+// visitas, e a pressel ficou SEM NUMERO da 01h as 07h57 de 10/11. O anuncio acorda as 07h10 com o
+// maior volume do dia: 463 visitas pagas cairam no botao morto (61% das visitas ate o meio-dia) e o
+// custo por lead do dia mais que dobrou.
+// Agora a marca so sai quando o dono LIGA um numero (_plantaoSaiDoDono): ai a primeira passada da
+// roleta ja tem gente e o plantao nem e consultado. Quem abre o app e nao liga continua desligado no
+// interruptor e so recebe pelo plantao, como ultimo recurso, quando NAO HA nenhum numero ligado na
+// casa - e com o app aberto pra responder. Guardado por teste-plantao-madrugada.mjs (secao 8).
 async function _desligaAppFechado(env) {
   let data = null;
   try { data = await _getDashData(env); } catch (_) { return; }
   await _cobIds(env);   // o _swwebLigadosPorDono pula chip de cobrador pela memoria
   const ligados = _swwebLigadosPorDono(data);
-  const marcados = _plantaoDonos(data);
-  const quem = [...new Set([...ligados.keys(), ...marcados])];
+  const quem = [...ligados.keys()];
   if (!quem.length) return;
   const abertos = await _swwebAppAbertos(env, quem);
   if (!abertos) return;
-  const voltou = [...marcados].filter((at) => abertos.has(at));
-  if (voltou.length) { try { await _plantaoLimpa(env, voltou); } catch (e) { console.error('[cron] plantaoLimpa falhou: ' + String((e && e.message) || e)); } }
-  const fechados = [...ligados.keys()].filter((at) => !abertos.has(at));
+  const fechados = quem.filter((at) => !abertos.has(at));
   if (!fechados.length) return;
   await _swwebDesligaDonos(env, fechados, { por_nome: 'Sistema (SellWave Web fechado)', marca: 'app-fechado:', rotulo: 'ROLETA_APP_FECHADO_OFF' });
 }
