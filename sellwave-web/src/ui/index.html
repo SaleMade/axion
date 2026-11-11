@@ -134,8 +134,11 @@
   .vend .risco { flex: 1; height: 1px; background: var(--linha); }
   /* A BARRA ENTRE UMA PESSOA E OUTRA (11/11/2026): de ponta a ponta da lista (o -8px come o respiro
      lateral da .lista), bem mais forte que o risco do cabecalho, pra o bloco de cada um ler sozinho. */
-  .divisor-vend { height: 2px; margin: 14px -8px 2px; border-radius: 2px; background: rgba(148, 163, 184, .22); }
-  .divisor-vend + .vend { padding-top: 10px; }
+  .divisor-vend { height: 2px; margin: 18px -8px; border-radius: 2px; background: rgba(148, 163, 184, .22); }
+  /* O BLOCO DE CADA PESSOA com um fundo bem fraco na cor dela (a da dash, --bc), entre uma barra e outra. */
+  .bloco-vend { margin: 0 -4px; padding: 0 4px 6px; border-radius: 12px;
+    background: color-mix(in srgb, var(--bc, #64748b) 6%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bc, #64748b) 10%, transparent); }
   /* A FOTO DE QUEM ATENDE (23/10/2026): redonda, do lado do nome. Sem foto, a sigla na cor da pessoa. */
   .av { font-style: normal; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
     background: color-mix(in srgb, var(--avc, #64748b) 22%, transparent); color: var(--avc, #64748b);

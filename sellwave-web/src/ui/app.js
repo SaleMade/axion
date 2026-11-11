@@ -189,10 +189,15 @@ function desenhaLista() {
   // tenho uma divisao entre cada um deles. Eu gostaria que tivesse ali uma barra horizontal"). O
   // risco fino do cabecalho e do tamanho do nome e sumia no meio das linhas; a barra vai de ponta a
   // ponta da lista e so aparece ENTRE blocos (nada antes do primeiro, nada depois do ultimo).
+  // E O FUNDO DE CADA BLOCO NA COR DA PESSOA (mesmo dia, rodada 2: "no fundo de cada um (...) uma
+  // corzinha ali, igual as cores que eles tem ali no Kanban (...) bem sutil"). E a cor que a dash da
+  // a cada um (a mesma da bolinha da foto); a Disponiveis fica no verde dela; sem cor, cinza.
   let primeiroBloco = true
   for (const [dono, itens] of grupos) {
     if (!primeiroBloco) html += '<div class="divisor-vend" aria-hidden="true"></div>'
     primeiroBloco = false
+    const corB = dono === DISPONIVEIS ? '#10b981' : String((itens[0] && itens[0].corDono) || '')
+    html += '<section class="bloco-vend" style="--bc:' + (/^#[0-9a-f]{3,8}$/i.test(corB) ? corB : '#64748b') + '">'
     // O AQUECIMENTO TEM AREA PROPRIA (16/10/2026). Antes o numero em aquecimento ficava solto no
     // fim da lista do vendedor, sem nada dizendo o que ele era - palavras do Bruno: "aquele numero
     // ali, ele so esta simplesmente jogado ali". Agora tem cabecalho proprio, na cor do aquecimento
@@ -231,6 +236,7 @@ function desenhaLista() {
         + leads + (leads === 1 ? ' lead' : ' leads') + '</span></div>'
       html += emAquec.map(linha).join('')
     }
+    html += '</section>'
   }
   lista.innerHTML = html
   ligaCliques()
