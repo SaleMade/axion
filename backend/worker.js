@@ -13523,7 +13523,7 @@ const BOT_IA_GRITO_RE = /(porra|bo{2,}r+a|isso a[ií]|segura o homi|tu [eé] fod
 // A mensagem pergunta ou comemora o NUMERO DO DIA (vendas, placar, meta, fila, quanto falta): so ai o placar (ou a mesa)
 // entra nos DADOS e o empurrao no fim faz sentido. 06/11 noite: numero solto ("22 na veia"), "convertido", "to vendo",
 // e piada com cliente ou pagamento ("pagou mas reclamou kkkk") nao sao; cliente e pedido vao pra busca do pedido.
-const BOT_IA_ASSUNTO_VENDA_RE = /(vend(?!o\b)|placar|\bmetas?\b|\bmarco|\bmesa\b|\bfila\b|\bbati\b|batemos|fechei|fechamos|cravei|festa|atrasad|prioridad|\bquant[oa]s?\b|\bfalt(a|am|ou)\b|ranking|\blider|ganhando|na frente|errad|\+\s*\d|\b\d{1,3}\s*(hj|hoje|pedidos?|vendas?|no dia|no m[eê]s|de volta|na fila)\b|\b(to|tô|tou|estou|fiz|com|mais|são|sao)\s+\d{1,3}\b|\bcomo (eu )?(to|tô|tou|estou)\b|\bcomo (t[aá]|est[aá]) (o |a |minha |meu )?(dia|placar|time|meta|mesa|fila|m[eê]s)\b)/i;
+const BOT_IA_ASSUNTO_VENDA_RE = /(vend(?!o\b)|placar|\bmetas?\b|\bmarco|\bmesa\b|\bfila\b|\bbati\b|batemos|fechei|fechamos|cravei|festa|atrasad|prioridad|\bquant[oa]s?\b|\bfalt(a|am|ou)\b|ranking|\blider|ganhando|na frente|errad|\+\s*\d{1,2}(?![\d\s]*\d{4})|\b\d{1,3}\s*(hj|hoje|pedidos?|vendas?|no dia|no m[eê]s|de volta|na fila)\b|\b(to|tô|tou|estou|fiz|com|mais|são|sao)\s+\d{1,3}\b|\bcomo (eu )?(to|tô|tou|estou)\b|\bcomo (t[aá]|est[aá]) (o |a |minha |meu )?(dia|placar|time|meta|mesa|fila|m[eê]s)\b)/i;
 // Com quem a festa e a zoeira sao LIMPAS (primeiro nome, sem acento): sem palavrao, sem duplo sentido, sem piada de sexo.
 // Esta no prompt tambem, mas o teste ao vivo de 06/11 mostrou o modelo mais simples ignorando: vai nos DADOS da mensagem.
 const BOT_IA_ZOEIRA_LIMPA = ['barbara'];
@@ -14335,7 +14335,7 @@ async function _botIaFazPendente(env, b, pend, conf, o, res) {
   await _botIaPendGrava(env, b.jid, b.de_jid, null);
   res.acao = 'respondeu'; res.responder = true; res.quem_id = String(pend.quem || '');
   if (conf === 'nao') { res.resposta = 'beleza, deixei como tá'; res.motivo = 'oferta recusada (' + pend.tipo + ')'; return res; }
-  if (o.grupoTeste) { res.resposta = '(grupo de teste: não mexi em nada) no grupo de verdade eu trocaria agora o telefone do pedido de ' + pend.nome + ' pro final ' + _botIaFim4(pend.para); res.motivo = 'oferta aceita no grupo de teste: nada gravado'; return res; }
+  if (o.grupoTeste) { res.resposta = '(grupo de teste: não mexi em nada) no grupo de verdade eu trocaria agora o telefone do pedido de ' + pend.nome + ' pro final ' + _botIaFim4(pend.para_txt); res.motivo = 'oferta aceita no grupo de teste: nada gravado'; return res; }
   if (pend.tipo === 'fone') {
     const r = await _botIaGravaPedido(env, pend.quem, pend.lead, { wa: pend.para_txt, comment_add: { tx: 'Barbadinho: telefone do pedido trocado de ' + pend.de_txt + ' pra ' + pend.para_txt + ', a pedido de ' + (pend.quem_nome || 'quem cobra') + ' no grupo.' } });
     res.resposta = r.ok

@@ -2350,7 +2350,7 @@ const OFERTA = 'o telefone do cadastro termina em 0837 e o que vc mandou em 8373
   const quemT = { id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador', chefe: false };
   await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco pagou?'), { grupoTeste: true, quem: quemT });
   const r = await m.api._botIaResponder(m.env, cfg, doBryan('sim', { menciona: false }), { grupoTeste: true, quem: quemT });
-  conf(/^\(grupo de teste: não mexi em nada\)/.test(r.resposta) && !m.gravacoes.length, 'grupo de teste: diz o que faria e nao grava');
+  conf(/^\(grupo de teste: não mexi em nada\) no grupo de verdade eu trocaria agora o telefone do pedido de Francisco Valdimir Pereira Sousa pro final 8373$/.test(r.resposta) && !m.gravacoes.length, 'grupo de teste: diz o que faria (com o final do telefone novo) e nao grava');
   const t = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco pagou?'), { teste: true, quem: quemT });
   conf(t.resposta.indexOf('responde *sim*') < 0, 'no Pergunte ao bot a troca nem e oferecida');
 }
