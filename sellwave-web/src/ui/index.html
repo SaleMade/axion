@@ -132,6 +132,10 @@
     border-radius: 9999px; border: 1px dashed var(--linha); color: rgba(148, 163, 184, .45);
     font-size: 11px; line-height: 1; cursor: default; }
   .vend .risco { flex: 1; height: 1px; background: var(--linha); }
+  /* A BARRA ENTRE UMA PESSOA E OUTRA (11/11/2026): de ponta a ponta da lista (o -8px come o respiro
+     lateral da .lista), bem mais forte que o risco do cabecalho, pra o bloco de cada um ler sozinho. */
+  .divisor-vend { height: 2px; margin: 14px -8px 2px; border-radius: 2px; background: rgba(148, 163, 184, .22); }
+  .divisor-vend + .vend { padding-top: 10px; }
   /* A FOTO DE QUEM ATENDE (23/10/2026): redonda, do lado do nome. Sem foto, a sigla na cor da pessoa. */
   .av { font-style: normal; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
     background: color-mix(in srgb, var(--avc, #64748b) 22%, transparent); color: var(--avc, #64748b);

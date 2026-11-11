@@ -185,7 +185,14 @@ function desenhaLista() {
   // Vem pronto do servidor (`equipe`): a mesma conta do placar da roleta. Sem filtro de busca: e o
   // retrato do time, nao parte da lista.
   let html = filtro ? '' : placarEquipe()
+  // UMA BARRA ENTRE UMA PESSOA E OUTRA (11/11/2026, pedido do Bruno: "esta tudo misturado, eu nao
+  // tenho uma divisao entre cada um deles. Eu gostaria que tivesse ali uma barra horizontal"). O
+  // risco fino do cabecalho e do tamanho do nome e sumia no meio das linhas; a barra vai de ponta a
+  // ponta da lista e so aparece ENTRE blocos (nada antes do primeiro, nada depois do ultimo).
+  let primeiroBloco = true
   for (const [dono, itens] of grupos) {
+    if (!primeiroBloco) html += '<div class="divisor-vend" aria-hidden="true"></div>'
+    primeiroBloco = false
     // O AQUECIMENTO TEM AREA PROPRIA (16/10/2026). Antes o numero em aquecimento ficava solto no
     // fim da lista do vendedor, sem nada dizendo o que ele era - palavras do Bruno: "aquele numero
     // ali, ele so esta simplesmente jogado ali". Agora tem cabecalho proprio, na cor do aquecimento
