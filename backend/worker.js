@@ -3230,6 +3230,13 @@ function _destinoDoReparo(l) {
 // pula a linha. Saindo da coluna, desmarca. Frustrado/devolvido NAO entram de proposito: e perda
 // depois do despacho, nao cancelamento da venda - se o Bruno quiser, e acrescentar aqui.
 const _COLS_VENDA_CANCELADA = ['Cancelado', 'Cancelado sem Custo'];
+// REENVIO NAO TEM VENDEDOR E NAO E VENDA NOVA (11/11/2026, pedido do Bruno). E o pedido refeito
+// porque o primeiro voltou (o cliente pediu pra cancelar, a PayLog devolveu, e ele resolveu ficar
+// com o produto). A venda continua no pedido de origem, com o vendedor dele; o reenvio fica
+// sem dono de proposito. A marca e a etiqueta 'reenvio' do pedido. Sem esta trava, o primeiro
+// evento da PayLog ou da Payt achava o vendedor pela conversa do cliente (wa_lead) e devolvia o
+// pedido pra ele, e a Chegada de leads e o pixel contavam uma venda que nao existiu.
+const _ehReenvio = (l) => Array.isArray(l && l.tags) && l.tags.some((t) => String(t) === 'reenvio');
 let _waSalesCancOk = false;
 const _quandoDoLead = (l) => { const idn = Number(l && l.id) || 0; const t = Number(l && l.ts) || 0; return t > 1e12 ? Math.floor(t / 1000) : (t > 0 ? t : (idn > 1e12 ? Math.floor(idn / 1000) : idn)); };
 async function _waSalesMarcaCancelada(env, lead, leads) {
@@ -3578,7 +3585,7 @@ async function _fiveUpsertLead(env, p, ctx) {
       if (Array.isArray(lead.hist)) lead.hist.push({ from: lead.col || '—', to: lead.col || '—', who: 'five', time: nowISO, note: 'aceito automaticamente: o pedido voltou da plataforma (' + String(oid) + ')' });
     }
     // Se ainda não tem dono e a Five/ponte sabe quem atendeu, credita agora (não sobrescreve dono manual).
-    if (!lead.at && attribAt) lead.at = attribAt;
+    if (!lead.at && attribAt && !_ehReenvio(lead)) lead.at = attribAt;   // reenvio fica sem vendedor
     // DE QUAL AFILIADO E ESTE PEDIDO (23/08/2026). O Kanban dos Afiliados e a versao de dash do
     // afiliado filtram por este campo; sem ele o pedido de afiliado ficaria indistinguivel do nosso
     // e o afiliado veria pedido que nao e dele. Sempre atualiza (nao e setIf): quem manda e a Five,
@@ -21180,7 +21187,7 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
     let _colMantida = false;   // ver a regra "quem paga manda no pagamento" logo abaixo
     // Backfill do atendente: se o lead ainda não tem dono e a ponte CPF conhece quem
     // atendeu, atribui agora (não sobrescreve atribuição manual já existente).
-    if (!lead.at && attribAt) lead.at = attribAt;
+    if (!lead.at && attribAt && !_ehReenvio(lead)) lead.at = attribAt;   // reenvio fica sem vendedor
     // A COMISSAO DA PLATAFORMA SO VIRA TAXA DO PEDIDO NO MUNDO DO AFILIADO (29/09/2026).
     //
     // `_paytPct` e a comissao que a Payt informou dividida pelo valor. Isso e a taxa do AFILIADO
@@ -28021,6 +28028,7 @@ async function _ttVarrerVendasSemEvento(env) {
       // PEDIDO CANCELADO NAO ENSINA O PIXEL (21/09/2026). Cancelado dentro dos 3 dias e antes da
       // varredura passar, nao vira CompletePayment: nao existe como desfazer um evento enviado.
       if (_COLS_VENDA_CANCELADA.includes(String((l && l.col) || ''))) continue;
+      if (_ehReenvio(l)) continue;   // reenvio nao e compra nova: o pixel ja aprendeu com o pedido de origem
       // SO VENDA PAGA VIRA CompletePayment. Antes bastava o lead ter valor: uma VENDA FUTURA de
       // R$ 497, nao paga e nem despachada, ensinou o TikTok que houve compra hoje. Numa operacao COD
       // isso e a distorcao mais cara que existe - o cliente so paga na entrega, dias depois, e nao ha
@@ -32911,6 +32919,7 @@ async function _presselDayMetrics(env, day){
         const quando = ts > 0 ? ts : Math.floor((Number(l && l.id) || 0) / 1000);
         if (!(quando >= start && quando < end)) continue;
         if (_COLS_VENDA_CANCELADA.includes(String((l && l.col) || ''))) continue;   // cancelou: nao e venda (21/09/2026)
+        if (_ehReenvio(l)) continue;   // reenvio nao e venda nova (11/11/2026)
         const tel = String((l && l.wa) || '').replace(/\D/g, '').slice(-8);
         if (!tel || jaTem.has(tel)) continue;
         const v = porTel[tel];

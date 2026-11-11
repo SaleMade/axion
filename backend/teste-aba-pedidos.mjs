@@ -26,6 +26,9 @@ if (fim < 0) { console.error('NAO ACHEI o fim de _presselDayMetrics'); process.e
 const fonte = src.slice(ini, fim + 3);
 
 const COLS_CANC = ['Cancelado', 'Cancelado sem Custo'];
+const _iRe = src.indexOf('const _ehReenvio = ');
+if (_iRe < 0) { console.error('NAO ACHEI _ehReenvio no worker.js'); process.exit(1); }
+const EH_REENVIO = src.slice(_iRe, src.indexOf('\n', _iRe) + 1);
 const atFromInst = (inst) => String(inst || '').replace(/^ax_/, '').replace(/_b$/, '').replace(/_\d{8}$/, '').replace(/_+$/, '');
 
 // banco de mentira: responde por pedaco do SQL
@@ -54,6 +57,7 @@ const fazEnv = (cfg) => ({
 
 const roda = async (cfg, day) => {
   const mod = 'const _COLS_VENDA_CANCELADA = ' + JSON.stringify(COLS_CANC) + ';\n'
+    + EH_REENVIO
     + 'const _atFromInst = ' + atFromInst.toString() + ';\n'
     + 'const _getDashData = async () => globalThis.__ESTADO;\n'
     + fonte + '\nexport default _presselDayMetrics;\n';
@@ -84,6 +88,9 @@ const cfg = {
       { id: 6, ts: T(19, 0), nome: 'Cliente Casa de novo', wa: '(11) 99932-8706', at: 'atendente_g', col: 'Enviado', vl: 497 },
       // 7) fora do dia
       { id: 7, ts: T(10, 0) - 86400, nome: 'De ontem', wa: '(85) 91111-2222', at: 'atendente_g', col: 'Enviado', vl: 497 },
+      // 8) REENVIO (11/11/2026): pedido refeito porque o primeiro voltou. Sem vendedor e com lead de
+      //    pressel do Guilherme: sem a trava ele cairia no dono do numero e contaria venda.
+      { id: 8, ts: T(20, 0), nome: 'Reenvio', wa: '(67) 93333-4444', at: '', tags: ['reenvio'], col: 'A Enviar', vl: 397 },
     ],
   },
   waLead: [
@@ -91,6 +98,7 @@ const cfg = {
     { phone: '559185273451', pid: '7', inst: 'ax_atendente_t_91639685', num: '71991639685', src: 'code' },
     { phone: '5521999068678', pid: '12', inst: 'ax_atendente_k_97405847', num: '11974058471', src: 'fifo' },
     { phone: '5585911112222', pid: '12', inst: 'ax_atendente_g_66632248', num: '11666322481', src: 'code' },
+    { phone: '5567933334444', pid: '12', inst: 'ax_atendente_g_66632248', num: '11666322481', src: 'code' },
   ],
 };
 
@@ -109,6 +117,7 @@ ok(porNome['Fechou na Ligacao'] && porNome['Fechou na Ligacao'].pid === '', 'ped
 ok(!porNome['Cancelou'], 'pedido em coluna cancelada entrou na lista');
 ok(!porNome['Cliente Casa de novo'], 'o mesmo telefone virou duas linhas (dedup quebrou)');
 ok(!porNome['De ontem'], 'pedido de outro dia entrou na lista');
+ok(!porNome['Reenvio'], 'o REENVIO entrou na lista de pedidos como venda nova (e caiu no dono do numero)');
 ok(porNome['Sem At'] && porNome['Sem At'].src === 'fifo', 'o src do lead nao chegou na linha (e o rotulo "aprox")');
 ok(porNome['Cliente Casa'] && porNome['Cliente Casa'].val === 497, 'o valor do pedido nao chegou na linha');
 
@@ -167,6 +176,20 @@ if (iFn > 0) {
   ok(/affiliat\|afiliad/.test(fn), 'a _aflComissaoReal nao reconhece mais a linha por TIPO (exigir affiliateId zera tudo)')
 }
 
-const TOTAL = 31;
+// ── 5. o reenvio nao ganha vendedor sozinho nem ensina o pixel (11/11/2026) ───────────────────
+ok((src.match(/if \(!lead\.at && attribAt && !_ehReenvio\(lead\)\) lead\.at = attribAt;/g) || []).length === 2,
+  'o carimbo automatico de vendedor (Five/PayLog e Payt) voltou a dar dono pro REENVIO');
+ok(!/if \(!lead\.at && attribAt\) lead\.at = attribAt;/.test(src), 'sobrou carimbo de vendedor sem a trava do reenvio');
+{
+  const iPx = src.indexOf('async function _ttVarrerVendasSemEvento(env) {');
+  const px = src.slice(iPx, src.indexOf('\nasync function ', iPx + 10));
+  ok(iPx > 0 && /if \(_ehReenvio\(l\)\) continue;/.test(px), 'o REENVIO voltou a disparar CompletePayment no pixel');
+}
+{
+  const re = new Function('l', 'return (' + EH_REENVIO.replace(/^const _ehReenvio = /, '').replace(/;\s*$/, '') + ')(l)');
+  ok(re({ tags: ['reenvio'] }) && !re({ tags: ['urgente'] }) && !re({}) && !re(null), 'a marca do reenvio nao le a etiqueta direito');
+}
+
+const TOTAL = 36;
 if (falhas.length) { console.error('FALHOU (' + falhas.length + '/' + TOTAL + '):\n- ' + falhas.join('\n- ')); process.exit(1); }
 console.log('teste-aba-pedidos: ' + TOTAL + '/' + TOTAL + ' ok');
