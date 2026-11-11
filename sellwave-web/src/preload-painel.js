@@ -65,6 +65,10 @@ contextBridge.exposeInMainWorld('swp', {
   cobPedido: (phone) => ipcRenderer.invoke('swp:cob-pedido', { phone }),
   cobSalva: (id, patch) => ipcRenderer.invoke('swp:cob-salva', { id, patch }),
   cobCurto: (url, id) => ipcRenderer.invoke('swp:cob-curto', { url, id }),
+  // A ABA AUTOMACOES do cobrador (11/11/2026): a lista com o que esta ligado e o que saiu hoje, e o
+  // interruptor de cada uma (so a dele).
+  autoConfig: () => ipcRenderer.invoke('swp:auto-config'),
+  autoLiga: (id, ligado) => ipcRenderer.invoke('swp:auto-liga', { id, ligado: !!ligado }),
   abrirLink: (url) => ipcRenderer.invoke('swp:abrir-link', { url }),
   copiar: (texto) => ipcRenderer.invoke('swp:copiar', { texto }),
   // Mudou o modo (entrou o cobrador, ou a direcao entrou no preview dele): o painel rele o roteiro.

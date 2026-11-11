@@ -35,6 +35,9 @@ const C = window.SWCob
 try { if (C) C.poeEstilo() } catch (_) { /* sem o estilo a ficha so sai sem cor */ }
 let cobModo = false
 let cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: [], em: 0 }
+// A ABA AUTOMACOES (11/11/2026, so na versao de cobrador; ver "automacoes" la embaixo). Aqui em cima
+// pelo mesmo motivo: o desenha() le.
+let auto = { em: 0, carregando: false, erro: '', tipos: [], ultimos: [], numeros: 0, salvando: '', aberto: '' }
 let soFavs = false        // o mesmo filtro do inbox: estrela ao lado dos chips
 let filtro = ''
 let tipoFiltro = ''          // '' = todos
@@ -230,15 +233,15 @@ function desenhaChips() {
   // cabeca inteira, porque buscar ali nao faria nada.
   const nv = $('novo'), og = $('organizar')
   if (nv && og) {
-    nv.hidden = !podeOrganizar || aba === 'pedidos'
-    og.hidden = !podeOrganizar || aba === 'pedidos'
+    nv.hidden = !podeOrganizar || aba === 'pedidos' || aba === 'auto'
+    og.hidden = !podeOrganizar || aba === 'pedidos' || aba === 'auto'
     og.classList.toggle('on', organiza)
     nv.title = aba === 'funis' ? 'Criar funil' : 'Criar item'
   }
   const bz = $('busca')
   if (bz) bz.placeholder = aba === 'funis' ? 'Buscar funil...' : 'Buscar item...'
   if (editor) { $('cabeca').style.display = 'none'; return }
-  if (aba === 'funis' || aba === 'pedidos') { linha.style.display = 'none'; $('cabeca').style.display = aba === 'pedidos' ? 'none' : ''; return }
+  if (aba === 'funis' || aba === 'pedidos' || aba === 'auto') { linha.style.display = 'none'; $('cabeca').style.display = aba === 'funis' ? '' : 'none'; return }
   $('cabeca').style.display = ''
   linha.style.display = ''
   $('fav-filtro').classList.toggle('on', soFavs)
@@ -319,6 +322,7 @@ function desenha() {
     voltaFoco(_foco)
     return
   }
+  if (aba === 'auto') { const rolo = corpo.scrollTop; corpo.innerHTML = desenhaAuto(); ligaAuto(corpo); corpo.scrollTop = rolo; return }
   if (aba === 'pedidos' && cobModo) { corpo.innerHTML = desenhaCob(); ligaCob(corpo); return }
   if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); voltaFoco(_foco); return }
 
@@ -2378,6 +2382,7 @@ function vaiPara(nome) {
   for (const o of document.querySelectorAll('.aba')) o.classList.toggle('on', o.dataset.aba === nome)
   aberto = ''
   desenha()
+  if (nome === 'auto') puxaAuto()
 }
 
 async function atualizaLead() {
@@ -2453,6 +2458,10 @@ function aplicaModo(v) {
   if (rot) rot.textContent = cobModo ? 'Cobrança' : 'Pedidos'
   const selo = $('selo-pedidos')
   if (selo && cobModo) selo.hidden = true
+  // A ABA AUTOMACOES so existe na versao de cobrador; saindo do modo com ela aberta, volta pros itens.
+  const abaAuto = $('aba-auto')
+  if (abaAuto) abaAuto.hidden = !cobModo
+  const saiuDaAuto = !cobModo && aba === 'auto'
   cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: cob.prontos || [], em: 0 }
   // O ROTEIRO E OUTRO (de venda pra cobranca, ou de volta): rele na hora em vez de esperar o vazio.
   roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
@@ -2461,6 +2470,7 @@ function aplicaModo(v) {
   pegaRoteiro()
   // Entrando no modo, a ficha e o que ele mais usa durante a conversa: abre nela, venha de que aba vier.
   if (cobModo) vaiPara('pedidos')
+  else if (saiuDaAuto) vaiPara('itens')
   else desenha()
 }
 try { if (window.swp.aoMudarModo) window.swp.aoMudarModo((v) => { if (v !== cobModo) aplicaModo(v); else pegaRoteiro() }) } catch (_) { /* painel velho sem o evento: o pulso pega */ }
@@ -2487,6 +2497,93 @@ async function puxaCob(fone, forca, semGuarda) {
   }
   if (aba === 'pedidos' && (semGuarda || !digitandoNaFicha())) desenha()
 }
+// ───────────────────────────────────────────────────────────── automacoes
+//
+// A ABA AUTOMACOES DO COBRADOR (11/11/2026). Pedido do Bruno: "uma aba de automacoes dentro do
+// SellWave Web (...) eles vao poder ligar e desligar". As mensagens automaticas da cobranca (boas-
+// vindas, codigo de rastreio, saiu pra entrega, entregue, retirada, nao pagou...) sao decididas pelo
+// servidor e mandadas por este app; aqui o cobrador ve o que cada uma faz, o texto que vai, quantas
+// sairam hoje pelos numeros dele, e liga ou desliga AS DELE. O que a direcao desligou na dash aparece
+// como "Desligada pela direção" (o interruptor dele continua valendo pra quando ela religar).
+const AUTO_EX = { saudacao: 'Bom dia', nome: 'Maria da Silva', primeiro: 'Maria', valor: '497,00', codigo: 'AP123456789BR', link: 'link do rastreio', link_pag: 'link de pagamento', endereco: 'endereço do pedido', quando: 'hoje' }
+const autoExemplo = (t) => String(t || '').replace(/\{([a-z_]+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(AUTO_EX, k) ? AUTO_EX[k] : m))
+const AUTO_ST = { enviado: ['Enviada', 'ok'], pulado: ['Não precisou', ''], falhou: ['Não saiu', 'ruim'], parcial: ['Saiu em parte', 'ruim'], pego: ['Enviando', ''] }
+const autoHora = (s) => {
+  if (!s) return ''
+  const d = new Date(Number(s) * 1000), p = (n) => String(n).padStart(2, '0')
+  const hoje = new Date()
+  const mesmoDia = d.getDate() === hoje.getDate() && d.getMonth() === hoje.getMonth() && d.getFullYear() === hoje.getFullYear()
+  return (mesmoDia ? '' : p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ') + p(d.getHours()) + ':' + p(d.getMinutes())
+}
+function recebeAuto(r) {
+  auto.tipos = Array.isArray(r.tipos) ? r.tipos : []
+  auto.ultimos = Array.isArray(r.ultimos) ? r.ultimos : []
+  auto.numeros = Number(r.numeros) || 0
+  auto.erro = ''
+}
+async function puxaAuto(calado) {
+  if (!window.swp.autoConfig || auto.carregando) return
+  auto.carregando = true
+  if (!calado && aba === 'auto') desenha()
+  let r = null
+  try { r = await window.swp.autoConfig() } catch (_) { r = null }
+  auto.carregando = false
+  auto.em = Date.now()
+  if (r && r.ok) recebeAuto(r)
+  else auto.erro = humano((r && (r.erro || r.error)) || 'não deu pra falar com a dash')
+  if (aba === 'auto') desenha()
+}
+async function trocaAuto(id) {
+  const t = auto.tipos.find((x) => x.id === id)
+  if (!t || auto.salvando) return
+  const novo = !t.meu
+  t.meu = novo               // muda na hora; volta se a dash recusar
+  auto.salvando = id
+  desenha()
+  let r = null
+  try { r = await window.swp.autoLiga(id, novo) } catch (_) { r = null }
+  auto.salvando = ''
+  auto.em = Date.now()
+  if (r && r.ok) { recebeAuto(r); rodape(t.nome + (novo ? ': ligada' : ': desligada')) }
+  else { t.meu = !novo; rodape(humano((r && (r.erro || r.error)) || 'não deu pra salvar')) }
+  if (aba === 'auto') desenha()
+}
+function desenhaAuto() {
+  const vazio = (x) => '<div class="vazio">' + esc(x) + '</div>'
+  if (!window.swp.autoConfig) return vazio('Atualize o app pra ver as automações.')
+  if (!auto.tipos.length) return vazio(auto.carregando || !auto.em ? 'Carregando' : (auto.erro || 'Nenhuma automação por aqui.'))
+  let h = '<div class="au">'
+  if (!auto.numeros) h += '<div class="au-aviso">Nenhum número de cobrança no seu nome. As mensagens saem pelo número do cobrador aberto neste computador.</div>'
+  for (const t of auto.tipos) {
+    const txs = Array.isArray(t.textos) ? t.textos : []
+    h += '<div class="au-it' + (t.direcao && t.meu ? '' : ' off') + '">'
+      + '<div class="au-topo"><button class="au-sw' + (t.meu ? ' on' : '') + '" role="switch" aria-checked="' + (t.meu ? 'true' : 'false') + '" aria-label="' + esc(t.nome) + '" data-au="' + esc(t.id) + '" title="' + (t.meu ? 'Desligar' : 'Ligar') + '"' + (auto.salvando ? ' disabled' : '') + '></button>'
+      + '<span class="au-nome">' + esc(t.nome) + '</span>'
+      + (t.hoje ? '<span class="au-hoje">' + Number(t.hoje) + ' hoje</span>' : '') + '</div>'
+      + '<div class="au-dica">' + esc(t.dica) + '</div>'
+      + (t.direcao ? '' : '<div class="au-dir">Desligada pela direção</div>')
+      + (txs.length ? '<button class="au-ver' + (auto.aberto === t.id ? ' on' : '') + '" data-ver="' + esc(t.id) + '">Ver mensagem' + IC_SETA + '</button>' : '')
+    if (auto.aberto === t.id && txs.length) {
+      h += '<div class="au-txt">' + txs.map((x) => (txs.length > 1 ? '<span class="au-rot">' + esc(x.rot) + '</span>' : '') + '<div class="au-bolha">' + esc(autoExemplo(x.texto)) + '</div>').join('') + '</div>'
+    }
+    h += '</div>'
+  }
+  if (auto.ultimos.length) {
+    h += '<div class="au-sec">Últimos envios</div>'
+    for (const u of auto.ultimos) {
+      const t = auto.tipos.find((x) => x.id === u.id)
+      const st = AUTO_ST[u.status] || ['', '']
+      h += '<div class="au-ult" title="' + esc(u.motivo || '') + '"><span class="q"><b>' + esc(u.nome || 'Cliente') + '</b> · ' + esc(t ? t.nome : 'Mensagem') + '</span>'
+        + (st[0] ? '<span class="s ' + st[1] + '">' + st[0] + '</span>' : '') + '<span class="t">' + autoHora(u.ts) + '</span></div>'
+    }
+  }
+  return h + '</div>'
+}
+function ligaAuto(corpo) {
+  for (const b of corpo.querySelectorAll('[data-au]')) b.onclick = () => trocaAuto(b.dataset.au)
+  for (const b of corpo.querySelectorAll('[data-ver]')) b.onclick = () => { auto.aberto = auto.aberto === b.dataset.ver ? '' : b.dataset.ver; desenha() }
+}
+
 function desenhaCob() {
   const vazio = (t) => '<div class="vazio">' + esc(t) + '</div>'
   if (!C) return vazio('Atualize o app pra ver a ficha de cobrança.')
@@ -3273,6 +3370,8 @@ async function pulso() {
     const f = String(estadoWa.phone || '').replace(/\D/g, '')
     if (f !== cob.fone) puxaCob(f, false)
     else if (f && aba === 'pedidos' && Date.now() - cob.em > 30000 && !digitandoNaFicha()) puxaCob(f, true)
+    // a aba Automacoes aberta se atualiza de 30 em 30 s (o "hoje" e os ultimos envios andam sozinhos)
+    if (aba === 'auto' && Date.now() - auto.em > 30000 && !auto.carregando && !auto.salvando) puxaAuto(true)
   }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }

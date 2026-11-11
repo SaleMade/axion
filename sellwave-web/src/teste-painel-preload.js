@@ -7,6 +7,16 @@ const chamadas = []
 const P7001 = { valor: 397, saldo: 397, pago: false, spg: 'Pendente', agend: '', comentarios: [], pagamentos: [] }
 let rascSeq = 0
 const reg = (nome, valor) => (...args) => { chamadas.push({ nome, args }); return Promise.resolve(valor) }
+// AS AUTOMACOES do painel do cobrador (11/11/2026): o que ESTA pessoa ligou, com estado.
+const AUTO_MEU = { rec: true, ret: true, pag: true }
+const autoResposta = () => ({ ok: true, numeros: 1,
+  tipos: [
+    { id: 'rec', nome: 'Boas-vindas', dica: 'O cliente chamou e ninguém respondeu em 1 minuto.', direcao: true, meu: AUTO_MEU.rec, hoje: 2, textos: [{ rot: 'Saudação', texto: '{saudacao} {nome}' }, { rot: 'Apresentação', texto: 'Aqui quem fala é o Elias.' }] },
+    { id: 'ret', nome: 'Retirar nos Correios', dica: 'Um lembrete por dia, por até 5 dias.', direcao: true, meu: AUTO_MEU.ret, hoje: 0, textos: [{ rot: 'Retirada: chegou na agência', texto: 'Oi {primeiro}, código {codigo}' }] },
+    { id: 'pag', nome: 'Pagou', dica: 'O pagamento caiu: agradece.', direcao: false, meu: AUTO_MEU.pag, hoje: 0, textos: [{ rot: 'Pagou', texto: 'Recebi, {primeiro}!' }] },
+  ],
+  ultimos: [{ id: 'rec', nome: 'Maria das Dores', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 120 }],
+})
 
 const ESTADO = {
   motor: true, autenticado: true, envia: true,
@@ -143,6 +153,15 @@ contextBridge.exposeInMainWorld('swp', {
     return Promise.resolve({ ok: true, negados: [], ...(p.pagamento_add ? { parcelas: e.pagamentos.length } : {}) })
   },
   cobCurto: reg('cobCurto', { ok: true, url: 'https://sw.li/abc' }),
+  // A ABA AUTOMACOES (11/11/2026): tres de exemplo, com estado (o que ele desliga volta desligado) e
+  // uma recusa pra provar que o interruptor volta sozinho.
+  autoConfig: () => { chamadas.push({ nome: 'autoConfig', args: [] }); return Promise.resolve(autoResposta()) },
+  autoLiga: (id, ligado) => {
+    chamadas.push({ nome: 'autoLiga', args: [id, ligado] })
+    if (id === 'pag') return Promise.resolve({ ok: false, erro: 'A dash respondeu 500.' })
+    AUTO_MEU[id] = !!ligado
+    return Promise.resolve(autoResposta())
+  },
   abrirLink: reg('abrirLink', { ok: true }),
   copiar: reg('copiar', { ok: true }),
   aoMudarModo: () => {},

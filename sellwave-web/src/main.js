@@ -3072,6 +3072,28 @@ ipcMain.handle('swp:cob-pedido', (_e, { phone }) => {
 })
 ipcMain.handle('swp:cob-salva', (_e, { id, patch }) => salvaCob(id, patch))
 ipcMain.handle('swp:cob-curto', (_e, { url, id }) => curtoCob(url, id))
+// A ABA AUTOMACOES do painel do cobrador (11/11/2026): o que cada mensagem automatica faz, se esta
+// ligada pra ESTA pessoa e o que saiu hoje. Ligar e desligar grava so a dela (a direcao, no "ver
+// como", grava a do cobrador que esta vendo: `de`). Quem decide o que sai continua sendo o servidor.
+ipcMain.handle('swp:auto-config', () => lerCob('/api/swweb/auto/config?v=1' + comoE()))
+ipcMain.handle('swp:auto-liga', async (_e, { id, ligado }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const aid = String(id || '')
+  if (!/^[a-z]{2,6}$/.test(aid)) return { ok: false, erro: 'Automação inválida.' }
+  try {
+    const r = await fetch(baseCob() + '/api/swweb/auto/config', {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
+      body: JSON.stringify({ id: aid, ligado: !!ligado, ...(comoId ? { de: comoId } : {}) }), signal: AbortSignal.timeout(25000),
+    })
+    let d = {}
+    try { d = await r.json() } catch (_) { d = {} }
+    if (!r.ok || !d.ok) return { ok: false, erro: (d && d.error) || respostaRuim(r) }
+    anota('[auto] ' + aid + ' ' + (ligado ? 'ligada' : 'desligada') + ' pelo painel')
+    // a proxima pergunta ao servidor nao espera o minuto: o que foi desligado para de vir ja
+    autoProximaEm = 0
+    return d
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+})
 ipcMain.handle('swp:abrir-link', (_e, { url }) => abreLinkCob(url))
 ipcMain.handle('swp:copiar', (_e, { texto }) => {
   const t = String(texto || '')
@@ -4277,8 +4299,14 @@ function confereAuto(it, c, agoraS) {
     if (c.ultOut && c.ultOut >= (Number(it.desde) || 0) - 5) return { pula: 'já respondido na conversa' }
     return null
   }
-  if (c.temCodigo) return { pula: 'o código já está na conversa' }
+  if (it.tipo === 'postado' && c.temCodigo) return { pula: 'o código já está na conversa' }
   if (c.ultOut && agoraS - c.ultOut < 120) return { depois: 'o cobrador está falando com ele agora' }
+  // AS AUTOMACOES NOVAS (11/11/2026: saiu, entregue, retirada, nao pagou...) trazem `falouDesde`: se o
+  // cobrador escreveu pro cliente depois disso (o pedido chegou e ele ja perguntou; ja cobrou hoje),
+  // a mensagem automatica seria repetir o que ele acabou de dizer. O servidor ja soma a ultima
+  // automatica nessa conta, entao a nossa propria mensagem nao passa por "o cobrador falou".
+  const fd = Number(it.falouDesde) || 0
+  if (fd && c.ultOut && c.ultOut >= fd) return { pula: 'o cobrador já falou com ele' }
   return null
 }
 async function postaAuto(rota, corpo) {
@@ -4293,7 +4321,18 @@ async function rodaAuto(it) {
   const s = abertos.get(it.nk)
   const wc = s && s.view && !s.view.webContents.isDestroyed() ? s.view.webContents : null
   if (!wc || !prontoCob(it.nk)) return 'fechado'
-  const textos = (Array.isArray(it.textos) ? it.textos : []).map((t) => String(t || '').trim()).filter(Boolean).slice(0, 6)
+  // `partes` (11/11/2026): texto e MIDIA (a foto da entrega), na ordem. Servidor antigo so manda `textos`.
+  const partes = (Array.isArray(it.partes) && it.partes.length ? it.partes : (Array.isArray(it.textos) ? it.textos : []).map((t) => ({ tipo: 'texto', texto: t })))
+    .map((p) => {
+      if (p && p.tipo === 'midia') {
+        const url = String(p.url || '')
+        const kind = p.kind === 'video' ? 'video' : 'image'
+        return /^https:\/\//i.test(url) ? { tipo: 'midia', kind, url } : null
+      }
+      const texto = String((p && p.texto) || '').trim()
+      return texto ? { tipo: 'texto', texto } : null
+    }).filter(Boolean).slice(0, 8)
+  const textos = partes.filter((p) => p.tipo === 'texto').map((p) => p.texto)
   if (!textos.length) return 'vazio'
   // 1) o painel disparando um funil neste numero: espera ele acabar
   for (let i = 0; i < 36 && disparos.has(it.nk); i++) await espera(5000)
@@ -4329,21 +4368,29 @@ async function rodaAuto(it) {
   autoNoAr.add(it.nk)
   let n = 0, erro = ''
   try {
-    for (let i = 0; i < textos.length; i++) {
-      const seg = esperaDoTexto(textos[i], i)
-      const r = await mandaItem(it.nk, c.chatId, { tipo: 'texto', texto: textos[i], auto: true, espera: seg, pausa: seg })
+    for (let i = 0; i < partes.length; i++) {
+      const p = partes[i]
+      // a foto entra 3 s depois do texto, sem "digitando" (o mesmo silencio da imagem do funil)
+      const seg = p.tipo === 'midia' ? 3 : esperaDoTexto(p.texto, i)
+      const item = p.tipo === 'midia'
+        ? { tipo: 'midia', kind: p.kind, url: p.url, caption: '', label: '', auto: true, espera: seg, pausa: seg }
+        : { tipo: 'texto', texto: p.texto, auto: true, espera: seg, pausa: seg }
+      const r = await mandaItem(it.nk, c.chatId, item)
       if (!r || !r.ok) { erro = (r && r.erro) || 'sem resposta'; break }
       n++
     }
   } finally { autoNoAr.delete(it.nk) }
-  const tudo = n === textos.length
+  const tudo = n === partes.length
   await postaAuto('/api/swweb/auto/feito', { k: it.k, chaves: it.chaves, nk: it.nk, ok: tudo, n, motivo: erro })
-  anota('[auto] ' + it.k + ' ' + (tudo ? 'enviado (' + n + ')' : 'parou em ' + n + '/' + textos.length + ': ' + erro))
+  anota('[auto] ' + it.k + ' ' + (tudo ? 'enviado (' + n + ')' : 'parou em ' + n + '/' + partes.length + ': ' + erro))
   if (tudo) {
-    avisaCasca('sw:aviso', {
-      nk: it.nk,
-      texto: (it.tipo === 'postado' ? 'Código de rastreio enviado automaticamente para ' : 'Recepção automática enviada para ') + (it.nome || 'o cliente') + '.',
-    })
+    const oQue = {
+      postado: 'Código de rastreio enviado automaticamente para ', saiu: 'Aviso de saída para entrega enviado para ',
+      entregue: 'Mensagem de pedido entregue enviada para ', retirada: 'Lembrete de retirada enviado para ',
+      naoachou: 'Aviso de entrega não concluída enviado para ', naopagou: 'Lembrete de pagamento enviado para ',
+      atrasou: 'Aviso de atraso enviado para ', pagou: 'Agradecimento do pagamento enviado para ',
+    }[it.tipo] || 'Recepção automática enviada para '
+    avisaCasca('sw:aviso', { nk: it.nk, texto: oQue + (it.nome || 'o cliente') + '.' })
   }
   return tudo ? 'enviado' : 'falhou'
 }

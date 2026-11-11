@@ -544,6 +544,42 @@
   .cob-outros button { font: inherit; font-size: 11px; color: var(--apagado); padding: 3px 8px; border-radius: 99px; border: 1px solid var(--borda); background: none; cursor: pointer; }
   .cob-outros button.on { color: var(--texto); border-color: var(--verde); background: rgba(0, 168, 132, .15); }
 
+  /* ═══════════════ A ABA AUTOMACOES (11/11/2026, so na versao de cobrador) ═══════════════
+     Pedido do Bruno: "uma aba de automacoes dentro do SellWave Web (...) eles vao poder ligar e
+     desligar". Cada mensagem automatica e um cartao: interruptor, o que ela faz, quantas sairam hoje
+     e o texto que vai (em balao, como na conversa). */
+  .aba[hidden] { display: none; }
+  .au { display: grid; gap: 8px; padding: 10px 8px 14px; }
+  .au-it { padding: 10px; border: 1px solid var(--borda); border-radius: 10px; background: var(--fraco); }
+  .au-it.off { opacity: .72; }
+  .au-topo { display: flex; align-items: center; gap: 9px; }
+  .au-nome { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; line-height: 16px; }
+  .au-hoje { flex-shrink: 0; padding: 1px 7px; border-radius: 9999px; background: rgba(0, 168, 132, .14); color: var(--verde);
+    font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .au-sw { position: relative; flex-shrink: 0; width: 34px; height: 20px; border-radius: 9999px; background: rgba(134, 150, 160, .35); transition: background-color .15s; }
+  .au-sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .au-sw.on { background: var(--verde); }
+  .au-sw.on::after { transform: translateX(14px); }
+  .au-sw:disabled { opacity: .45; cursor: not-allowed; }
+  .au-sw:focus-visible { outline: 2px solid var(--azul); outline-offset: 2px; }
+  .au-dica { margin-top: 6px; font-size: 11px; line-height: 15px; color: var(--apagado); }
+  .au-dir { margin-top: 6px; font-size: 10.5px; font-weight: 600; color: var(--ambar); }
+  .au-ver { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; font-size: 11px; font-weight: 600; color: var(--azul); }
+  .au-ver svg { width: 12px; height: 12px; transition: transform .15s; }
+  .au-ver.on svg { transform: rotate(180deg); }
+  .au-txt { display: grid; gap: 6px; margin-top: 8px; padding: 8px; border-radius: 8px; background: var(--conversa); }
+  .au-rot { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--apagado); }
+  .au-bolha { justify-self: end; max-width: 96%; padding: 6px 8px; border-radius: 8px 2px 8px 8px; background: var(--balao);
+    font-size: 11.5px; line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .au-sec { padding: 8px 2px 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--apagado); }
+  .au-ult { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; background: var(--fraco); font-size: 11px; line-height: 15px; }
+  .au-ult .q { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .au-ult .t { flex-shrink: 0; color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .au-ult .s { flex-shrink: 0; padding: 1px 6px; border-radius: 9999px; font-size: 9.5px; font-weight: 700; background: rgba(134, 150, 160, .18); color: var(--apagado); }
+  .au-ult .s.ok { background: rgba(0, 168, 132, .14); color: var(--verde); }
+  .au-ult .s.ruim { background: rgba(255, 185, 0, .14); color: var(--ambar); }
+  .au-aviso { padding: 8px 10px; border-radius: 8px; background: rgba(255, 185, 0, .1); color: var(--ambar); font-size: 11px; line-height: 15px; }
+
   /* ═══════════════ CRIAR E ORGANIZAR (05/11/2026) ═══════════════
      Pedido do Bruno: o vendedor cria mensagem, audio, video e foto, monta funil com o tempo de cada
      passo e esconde o que nao usa, "tudo de maneira facil, nada cheio de texto, com varios icones".
@@ -731,6 +767,10 @@
     <button class="aba" data-aba="pedidos">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h6"/><path d="M9 14h6"/><path d="M9 18h4"/></svg><span class="aba-rot">Pedidos</span>
       <span class="selo" id="selo-pedidos" hidden></span>
+    </button>
+    <!-- AUTOMACOES (11/11/2026): so aparece na versao de cobrador (aplicaModo). -->
+    <button class="aba" data-aba="auto" id="aba-auto" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>Automações
     </button>
   </div>
 

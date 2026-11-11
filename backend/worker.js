@@ -16973,7 +16973,110 @@ const COB_AUTO_TXT = {
     + '📦 Código de rastreio: {codigo}\n🔗 Acompanhar entrega: {link}\n\n'
     + 'Vou continuar acompanhando o envio por aqui e, quando tiver uma atualização importante, te aviso.\n\n'
     + 'Qualquer dúvida sobre a entrega, pode falar comigo neste número. 👍',
+  // ── RODADA 2 (11/11/2026, ver AS AUTOMACOES NOVAS abaixo). Linha com variavel vazia sai inteira
+  // (ex.: o valor em pedido ja pago, o link de pagamento em kit sem link).
+  saiu: 'Boa notícia, {primeiro}! Seu pedido do Glico Six saiu para entrega hoje. 🚚\n\n'
+    + 'Se puder, deixa alguém em casa pra receber.\n'
+    + '💰 Valor a pagar depois de receber: R$ {valor}\n\n'
+    + 'Qualquer coisa, me chama aqui. 👍',
+  entregue: 'Oi {primeiro}, acabei de ver que seu pedido chegou na sua casa {quando}. Recebeu ele tudo certinho?',
+  ret1: 'Oi {primeiro}, tenho uma novidade do seu Glico Six. 📦\n\n'
+    + 'Seu pedido chegou na agência dos Correios e já está esperando você retirar.\n\n'
+    + '📦 Código de rastreio: {codigo}\n🔗 Acompanhar: {link}\n\n'
+    + 'É só levar um documento com foto e o código acima.\n'
+    + '💰 O valor de R$ {valor} você paga depois de retirar.\n\n'
+    + 'Consegue ir buscar hoje?',
+  ret2: '{saudacao}, {primeiro}! Passando pra lembrar que o seu Glico Six continua na agência dos Correios esperando você. 📦\n\n'
+    + 'Código pra retirada: {codigo}\n\n'
+    + 'Consegue passar lá hoje?',
+  ret3: '{saudacao}, {primeiro}! Seu pedido ainda está na agência dos Correios. 📦\n\n'
+    + 'A agência só guarda o pacote por alguns dias, então o ideal é retirar o quanto antes.\n\n'
+    + 'Código: {codigo}\n🔗 {link}\n\n'
+    + 'Se tiver alguma dificuldade pra ir, me fala aqui.',
+  ret4: '{saudacao}, {primeiro}. Seu Glico Six continua te esperando na agência dos Correios. 📦\n\n'
+    + 'Código: {codigo}\n\n'
+    + 'Aconteceu alguma coisa? Me conta que a gente resolve junto.',
+  ret5: '{saudacao}, {primeiro}. Este é o último aviso: seu pedido está na agência dos Correios e, se não for retirado, ele volta pra gente. ⚠️\n\n'
+    + 'Código: {codigo}\n🔗 {link}\n\n'
+    + 'Consegue retirar hoje? Me responde aqui, por favor.',
+  naoachou: '{saudacao}, {primeiro}! Seu pedido do Glico Six saiu para entrega, mas ainda não aparece como entregue. 📦\n\n'
+    + 'Às vezes o entregador passa e não encontra ninguém. Confere pra mim se o endereço está certinho:\n'
+    + '📍 {endereco}\n\n'
+    + 'Tem alguém pra receber aí? Se precisar corrigir alguma coisa, me fala aqui.',
+  naopagou: '{saudacao}, {primeiro}! Deu tudo certo com o seu Glico Six? 😊\n\n'
+    + 'Passando pra lembrar do pagamento do seu pedido:\n'
+    + '💰 Valor: R$ {valor}\n'
+    + '🔗 Pagar agora: {link_pag}\n\n'
+    + 'Pix e boleto são à vista, e no cartão de crédito dá pra parcelar.\n\n'
+    + 'Assim que pagar, me manda o comprovante por aqui. 👍',
+  atrasou: '{saudacao}, {primeiro}! Passando pra te dar uma satisfação sobre o seu Glico Six. 📦\n\n'
+    + 'A transportadora está demorando um pouco mais que o normal com o seu pedido, mas ele continua a caminho e eu estou acompanhando de perto.\n\n'
+    + '🔗 Acompanhar entrega: {link}\n\n'
+    + 'Assim que tiver novidade, te aviso por aqui. 👍',
+  pagou: 'Recebi a confirmação do seu pagamento, {primeiro}! ✅\n\n'
+    + 'Muito obrigado pela confiança. Qualquer dúvida sobre o tratamento, é só me chamar aqui. 👍',
 };
+// ══ AS AUTOMACOES NOVAS (11/11/2026) ═════════════════════════════════════════════════════════════
+// Pedido do Bruno com o print do Heynan cobrando as retiradas ("nossa taxa de frustrado em retirada ta
+// absurdo"): uma aba Automacoes no SellWave Web do cobrador, cada um liga e desliga as dele, e mais
+// momentos alem da recepcao e do codigo: saiu pra entrega, entregue (com a foto da entrega), retirada
+// nos Correios (1 por dia, ate 5 dias), entregador nao achou ninguem, entregue e nao pagou, atrasou
+// na transportadora e pagou.
+//
+// O CATALOGO E UM SO: a dash (Cobranca > Cobradores) e o app desenham a partir dele. `db` = o `tipo`
+// gravado em swweb_auto (e o que o app chama de tipo); `pre` = o comeco da chave.
+//
+// QUEM LIGA: a direcao liga cada uma pra operacao (cob_auto, na dash); o cobrador desliga as DELE no
+// app (cob_auto_pessoa, so guarda o que ele desligou). Sai = as duas ligadas.
+//
+// TODAS AS NOVAS SO VAO PRA QUEM JA ESCREVEU NUM NUMERO DE COBRADOR (60 dias), pelo numero em que ele
+// falou por ultimo: a mesma regra do Postado. Mensagem pra quem nunca falou com aquele numero e o
+// que mais pesa em bloqueio e denuncia; esse cliente continua na lista do cobrador pra ligar.
+// Das 8h as 20h, uma por cliente a cada 3 h (o agradecimento do pagamento nao espera), e nada sai se
+// o cobrador falou com o cliente depois do fato (a pagina confere: `falouDesde`).
+//
+// OS DOIS QUE NAO TEM SINAL DA TRANSPORTADORA (medido em 11/11 nos pedidos da casa): a PayLog v2 nao
+// manda "tentativa de entrega" nem "atrasado", e o Requer Atencao que aparece as 8h volta sozinho em
+// minutos. Entao a regra e o RELOGIO, com os numeros da propria casa:
+//   NAO ACHOU = saiu pra entrega ha mais de 24 h sem entregar (9 em 10 entregam em ate 25 h), ou
+//               esta em Requer Atencao ha mais de 1 h. O texto diz so o que se sabe ("ainda nao
+//               aparece como entregue").
+//   ATRASOU   = 7 dias com a transportadora sem sair pra entrega (mediana 4 dias; 9 em 10 em ate 8).
+const COB_AUTO_TIPOS = [
+  { id: 'rec', db: 'recepcao', nome: 'Boas-vindas', dica: 'O cliente chamou e ninguém respondeu em 1 minuto. Pedido que ainda não saiu.', campos: ['saudacao', 'apresenta', 'localizei'] },
+  { id: 'recr', db: 'recepcao_r', nome: 'Boas-vindas com rastreio', dica: 'O mesmo, com o pedido já despachado: vai junto o código e o link do rastreio.', campos: ['postado'] },
+  { id: 'pos', db: 'postado', nome: 'Pedido despachado', dica: 'O pedido saiu: manda o código e o link do rastreio.', campos: ['postado'] },
+  { id: 'sai', db: 'saiu', nome: 'Saiu para entrega', dica: 'O pedido está com o entregador: avisa pra ter alguém em casa.', campos: ['saiu'] },
+  { id: 'ent', db: 'entregue', nome: 'Pedido entregue', dica: 'Chegou na casa do cliente: pergunta se recebeu e manda a foto da entrega.', campos: ['entregue'] },
+  { id: 'ret', db: 'retirada', nome: 'Retirar nos Correios', dica: 'Pedido na agência: um lembrete por dia, por até 5 dias, até ele retirar.', campos: ['ret1', 'ret2', 'ret3', 'ret4', 'ret5'] },
+  { id: 'nach', db: 'naoachou', nome: 'Entregador não achou ninguém', dica: 'Saiu pra entrega há mais de 1 dia e não foi entregue: pede pra conferir o endereço.', campos: ['naoachou'] },
+  { id: 'npg', db: 'naopagou', nome: 'Entregue e não pagou', dica: 'No dia seguinte à entrega, sem pagamento: lembrete com o link de pagamento.', campos: ['naopagou'] },
+  { id: 'atr', db: 'atrasou', nome: 'Atrasou na transportadora', dica: 'Mais de 7 dias com a transportadora: avisa que está acompanhando.', campos: ['atrasou'] },
+  { id: 'pag', db: 'pagou', nome: 'Pagou', dica: 'O pagamento caiu: agradece.', campos: ['pagou'] },
+];
+const COB_AUTO_CAMPOS = {
+  saudacao: { rot: 'Saudação', vars: '{saudacao} {nome}', linhas: 1 },
+  apresenta: { rot: 'Apresentação', vars: '{nome}', linhas: 2 },
+  localizei: { rot: 'Pedido localizado', vars: '{valor} {nome}', linhas: 7 },
+  postado: { rot: 'Código de rastreio', vars: '{codigo} {link} {nome}', linhas: 7 },
+  saiu: { rot: 'Saiu para entrega', vars: '{primeiro} {valor}', linhas: 5 },
+  entregue: { rot: 'Pedido entregue', vars: '{primeiro} {quando}', linhas: 2 },
+  ret1: { rot: 'Retirada: chegou na agência', vars: '{primeiro} {codigo} {link} {valor}', linhas: 8 },
+  ret2: { rot: 'Retirada: 2º lembrete', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 4 },
+  ret3: { rot: 'Retirada: 3º lembrete', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 5 },
+  ret4: { rot: 'Retirada: 4º lembrete', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 4 },
+  ret5: { rot: 'Retirada: último aviso', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 4 },
+  naoachou: { rot: 'Entregador não achou ninguém', vars: '{saudacao} {primeiro} {endereco}', linhas: 5 },
+  naopagou: { rot: 'Entregue e não pagou', vars: '{saudacao} {primeiro} {valor} {link_pag}', linhas: 7 },
+  atrasou: { rot: 'Atrasou na transportadora', vars: '{saudacao} {primeiro} {link}', linhas: 6 },
+  pagou: { rot: 'Pagou', vars: '{primeiro}', linhas: 3 },
+};
+const COB_AUTO_IDS = COB_AUTO_TIPOS.map((t) => t.id);
+const COB_AUTO_DBS = new Set(COB_AUTO_TIPOS.map((t) => t.db));
+const COB_AUTO_PESSOA_KEY = 'cob_auto_pessoa';
+const COB_AUTO_APP_NOVO = [1, 26, 17];          // o primeiro app que conhece `partes`, `falouDesde` e os tipos novos
+const COB_AUTO_GAP_S = 3 * 3600;
+const COB_AUTO_PRIO = { pagou: 1, entregue: 2, naoachou: 3, saiu: 4, retirada: 5, naopagou: 6, atrasou: 7 };
 const COB_AUTO_JANELA_S = 72 * 3600;
 const COB_AUTO_ESPERA_S = 60;
 const COB_AUTO_ANDOU_MS = 10 * 86400000;
@@ -16982,7 +17085,7 @@ const COB_AUTO_POR_VEZ = 10;
 const _COB_AUTO_A_CAMINHO = new Set(['Enviados', 'Saiu para Entrega']);
 const _COB_AUTO_ANTES = new Set(['A Enviar', 'Preparando', 'Enviados', 'Saiu para Entrega']);
 // Texto com variavel que nao foi preenchida nunca sai ("Codigo de rastreio: {codigo}" pro cliente).
-const _COB_AUTO_SOBROU = /\{(saudacao|nome|valor|codigo|link)\}/;
+const _COB_AUTO_SOBROU = /\{(saudacao|nome|primeiro|valor|codigo|link|link_pag|endereco|quando)\}/;
 const _COB_AUTO_PART = new Set(['da', 'das', 'de', 'do', 'dos', 'e', 'di', 'du', 'del']);
 
 let _cobAutoTabOk = false;
@@ -17005,7 +17108,64 @@ async function _cobAutoCfg(env) {
     const v = String(t[k] == null ? '' : t[k]).replace(/\r\n/g, '\n').trim();
     txt[k] = v ? v.slice(0, 2000) : COB_AUTO_TXT[k];
   }
-  return { rec: c.rec === true, pos: c.pos === true, txt, por: String(c.por || ''), em: Number(c.em) || 0 };
+  const out = { txt, por: String(c.por || ''), em: Number(c.em) || 0 };
+  for (const id of COB_AUTO_IDS) out[id] = c[id] === true;
+  // "COM RASTREIO" NASCEU DENTRO DA RECEPCAO (09/11): enquanto ninguem mexer nela, segue a recepcao.
+  if (c.recr == null) out.recr = out.rec;
+  return out;
+}
+const _cobAutoAlgum = (cfg) => !!cfg && COB_AUTO_IDS.some((id) => cfg[id]);
+// O QUE CADA COBRADOR DESLIGOU PRA ELE: { <id do usuario>: { <id da automacao>: false } }.
+async function _cobAutoPessoas(env) {
+  try { const v = await _readConfig(env, COB_AUTO_PESSOA_KEY); const o = v ? JSON.parse(v) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch (_) { return {}; }
+}
+const _cobAutoVale = (cfg, pess, id, at) => !!(cfg && cfg[id]) && !(pess && pess[String(at)] && pess[String(at)][id] === false);
+const _cobAutoAppNovo = (req) => {
+  let v = '';
+  try { v = String(req.headers.get('x-sw-versao') || ''); } catch (_) { v = ''; }
+  const p = v.split('.').map((x) => parseInt(x, 10));
+  if (p.length < 3 || p.some((x) => !isFinite(x))) return false;
+  for (let i = 0; i < 3; i++) { if (p[i] !== COB_AUTO_APP_NOVO[i]) return p[i] > COB_AUTO_APP_NOVO[i]; }
+  return true;
+};
+const _cobAutoDiaBr = (ms) => Math.floor((ms - _COB_BRT) / 86400000);
+const _cobAutoPrimeiro = (nome) => String(nome || '').split(' ')[0] || '';
+// O TEXTO PRONTO. Sem nome, "Oi {primeiro}, tudo bem?" vira "Oi, tudo bem?"; LINHA com variavel
+// vazia sai inteira; sobrou variavel sem valor, devolve '' e a mensagem nao sai.
+function _cobAutoMonta(tpl, vars, ms) {
+  let s = String(tpl || '').replace(/\r\n/g, '\n').split('{saudacao}').join(_cobAutoSaud(ms));
+  const v = vars || {};
+  for (const k of ['nome', 'primeiro']) { if (!String(v[k] || '').trim()) s = s.replace(new RegExp('[ \\t]*,?[ \\t]*\\{' + k + '\\}', 'g'), ''); }
+  s = s.split('\n').filter((ln) => !(ln.match(/\{([a-z_]+)\}/g) || []).some((m) => { const k = m.slice(1, -1); return (k in v) && !String(v[k] == null ? '' : v[k]).trim(); })).join('\n');
+  for (const [k, x] of Object.entries(v)) s = s.split('{' + k + '}').join(String(x == null ? '' : x));
+  s = s.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return _COB_AUTO_SOBROU.test(s) ? '' : s;
+}
+// QUANDO O PEDIDO ENTROU NA ETAPA, so pelo historico (o _cobEntrouNaCol cai na data do pedido, e aqui
+// isso viraria "saiu pra entrega ha 9 dias"). `ignora` = de onde a volta nao conta como entrada nova
+// (o Requer Atencao das 8h, que volta sozinho). Sem historico, vale a hora do ultimo evento da
+// transportadora quando ele e exatamente o dessa etapa.
+const _COB_AUTO_SHIP = { 'Entregues': 'DELIVERED', 'Retirar nos Correios': 'READY_FOR_PICKUP', 'Saiu para Entrega': 'IN_TRANSIT_TO_DELIVERY' };
+function _cobAutoEntrou(l, colId, ignora) {
+  let t0 = 0;
+  for (const h of (Array.isArray(l && l.hist) ? l.hist : [])) {
+    const para = _cobColId(h && h.to), de = _cobColId(h && h.from);
+    if (para !== colId || de === colId || (ignora && de === ignora)) continue;
+    const t = _cobTs(h && h.time);
+    if (t) t0 = t;
+  }
+  if (t0) return t0;
+  const sh = _COB_AUTO_SHIP[colId];
+  if (sh && String((l && l.ship) || '').toUpperCase() === sh) { const s = Number(l.ship_ts) || 0; return s > 1e12 ? s : s * 1000; }
+  return 0;
+}
+function _cobAutoEndereco(l) {
+  const t = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  const rua = [t(l && l.end), t(l && l.num)].filter(Boolean).join(', ');
+  if (!rua) return '';
+  const cid = [t(l.cidade), t(l.uf).toUpperCase()].filter(Boolean).join('/');
+  return [rua, t(l.comp), t(l.bairro), cid, t(l.cep) ? 'CEP ' + t(l.cep) : ''].filter(Boolean).join(' - ');
 }
 // Bom dia / Boa tarde / Boa noite pela hora de Brasilia de QUANDO sai (o app pede na hora de mandar).
 const _cobAutoSaud = (ms) => { const h = new Date(ms - _COB_BRT).getUTCHours(); return (h >= 5 && h < 12) ? 'Bom dia' : (h >= 12 && h < 18) ? 'Boa tarde' : 'Boa noite'; };
@@ -17125,7 +17285,10 @@ async function _cobAutoNumeros(env, data) {
 async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
   opts = opts || {};
   const out = [];
-  if (!cfg || (!cfg.rec && !cfg.pos)) return out;
+  if (!_cobAutoAlgum(cfg)) return out;
+  const pess = opts.pess || {};
+  // APP ANTIGO (ate 1.26.16) so conhece recepcao e codigo, so texto: os tipos novos nao vao pra ele.
+  const novo = !!(opts.novo || opts.previa);
   const agoraS = Math.floor(agoraMs / 1000);
   const nums = await _cobAutoNumeros(env, data);
   const alvo = new Set((n8sAlvo || []).map(String).filter((x) => nums.has(x)));
@@ -17139,7 +17302,7 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
 
   // ── RECEPCAO ──
   const recKeys = new Set();
-  if (cfg.rec) {
+  if (cfg.rec || cfg.recr) {
     const instsAlvo = await _instsDosNumeros(env, data, [...alvo]);
     let rows = [];
     try {
@@ -17197,7 +17360,13 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
       // O CODIGO QUE JA ESTA COM ALGUEM (o Postado pegou ou mandou) nao vai de novo na recepcao.
       const tr = l ? String(l.track || '').trim() : '';
       const rowPos = tr ? ja.get('pos:' + String(l.id) + ':' + tr) : null;
-      const b = _cobAutoRecepcao(cfg, l, o.nomeWa, agoraMs, !!(rowPos && !_cobAutoDeNovo(rowPos, agoraS)));
+      // COM OU SEM RASTREIO (11/11/2026): pedido ja despachado e a "Boas-vindas com rastreio" de quem
+      // e dono do numero; com ela desligada vai a comum, sem o codigo; com as duas desligadas, nada.
+      const at = nums.get(o.n8).at;
+      const jaSaiu = !!(l && !String(l.afl || '') && _COB_AUTO_A_CAMINHO.has(_cobColId(l.col)) && tr.length >= 6);
+      const comR = jaSaiu && _cobAutoVale(cfg, pess, 'recr', at);
+      if (!comR && !_cobAutoVale(cfg, pess, 'rec', at)) continue;
+      const b = _cobAutoRecepcao(cfg, l, o.nomeWa, agoraMs, (jaSaiu && !comR) || !!(rowPos && !_cobAutoDeNovo(rowPos, agoraS)));
       if (b.textos.length < 2) continue;
       const chaves = ['rec:' + k];
       if (b.codigo) chaves.push('pos:' + String(l.id) + ':' + b.codigo);
@@ -17208,6 +17377,47 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
       });
     }
   }
+
+  // EM QUAL NUMERO DE COBRANCA O CLIENTE FALOU POR ULTIMO (60 dias): waNumKey -> { ts, n8, fone }.
+  // Lido uma vez so, e so se alguma mensagem pra "quem ja chamou" tiver candidato.
+  let _ult = null;
+  const pegaUlt = async () => {
+    if (_ult) return _ult;
+    let rows = [];
+    try {
+      const r = await env.DB.prepare(
+        "SELECT phone, instance, MAX(ts) ts FROM wa_messages WHERE instance IN (SELECT value FROM json_each(?)) AND direction='in' AND ts > ? GROUP BY phone, instance"
+      ).bind(JSON.stringify(instsCob), agoraS - 60 * 86400).all();
+      rows = (r && r.results) || [];
+    } catch (_) { rows = []; }
+    _ult = new Map();
+    for (const x of rows) {
+      const k = _waNumKey(x.phone);
+      if (!k || k.length !== 10) continue;
+      const ts = Number(x.ts) || 0;
+      const a = _ult.get(k);
+      if (!a || ts > a.ts) _ult.set(k, { ts, n8: _instNum8(x.instance), fone: String(x.phone || '') });
+    }
+    return _ult;
+  };
+  // A ULTIMA AUTOMATICA QUE SAIU PRA CADA CLIENTE (7 dias): waNumKey -> segundos. null = nao deu pra
+  // ler, e ai as novas nao saem (sem saber o intervalo, nao manda).
+  let _auto;
+  const pegaAuto = async () => {
+    if (_auto !== undefined) return _auto;
+    try {
+      const r = await env.DB.prepare(
+        "SELECT fone, MAX(COALESCE(feito_ts, pego_ts)) t FROM swweb_auto WHERE COALESCE(feito_ts, pego_ts) > ? AND status IN ('pego','enviado','parcial') GROUP BY fone"
+      ).bind(agoraS - 7 * 86400).all();
+      _auto = new Map();
+      for (const x of ((r && r.results) || [])) {
+        const k = _waNumKey(x.fone);
+        const t = Number(x.t) || 0;
+        if (k && k.length === 10 && t > (_auto.get(k) || 0)) _auto.set(k, t);
+      }
+    } catch (_) { _auto = null; }
+    return _auto;
+  };
 
   // ── POSTADO ── (das 8h as 21h de Brasilia: codigo de rastreio nao e assunto pra meia-noite)
   const hora = new Date(agoraMs - _COB_BRT).getUTCHours();
@@ -17225,23 +17435,14 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
       lista.push({ l, k, tr, andou });
     }
     if (lista.length) {
-      let rows = [];
-      try {
-        const r = await env.DB.prepare(
-          "SELECT phone, instance, MAX(ts) ts FROM wa_messages WHERE instance IN (SELECT value FROM json_each(?)) AND direction='in' AND ts > ? GROUP BY phone, instance"
-        ).bind(JSON.stringify(instsCob), agoraS - 60 * 86400).all();
-        rows = (r && r.results) || [];
-      } catch (_) { rows = []; }
-      // em qual numero de cobranca o cliente falou por ULTIMO
-      const ult = new Map();
-      for (const x of rows) {
-        const k = _waNumKey(x.phone);
-        if (!k || k.length !== 10) continue;
-        const ts = Number(x.ts) || 0;
-        const a = ult.get(k);
-        if (!a || ts > a.ts) ult.set(k, { ts, n8: _instNum8(x.instance), fone: String(x.phone || '') });
-      }
-      const cands = lista.filter((c) => { const u = ult.get(c.k); return u && alvo.has(u.n8); });
+      const ult = await pegaUlt();
+      const auto = await pegaAuto();
+      const cands = lista.filter((c) => {
+        const u = ult.get(c.k);
+        if (!u || !alvo.has(u.n8) || !_cobAutoVale(cfg, pess, 'pos', nums.get(u.n8).at)) return false;
+        // uma automatica por cliente a cada 3 h (11/11/2026)
+        return !(auto && (auto.get(c.k) || 0) > agoraS - COB_AUTO_GAP_S);
+      });
       if (cands.length) {
         // ESSE CODIGO JA FOI PRA ELE por algum numero nosso (cobrador colou, vendedor mandou)?
         const pares = [], vistos = new Set();
@@ -17282,6 +17483,133 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
     }
   }
 
+  // ── AS NOVAS (11/11/2026): pagou, entregue, nao achou, saiu, retirada, nao pagou, atrasou ──
+  // Das 8h as 20h. Um candidato por pedido e por regra; depois, UM por cliente (a de maior
+  // prioridade), so pra quem ja escreveu num numero de cobrador, pelo numero da ultima conversa.
+  const idsNovos = ['sai', 'ent', 'ret', 'nach', 'npg', 'atr', 'pag'].filter((id) => cfg[id]);
+  if (novo && idsNovos.length && (opts.previa || (hora >= 8 && hora < 20))) {
+    const liga = new Set(idsNovos);
+    const H = 3600000;
+    const hojeBr = _cobAutoDiaBr(agoraMs);
+    const iniDiaMs = hojeBr * 86400000 + _COB_BRT;
+    const cands = [];
+    for (const l of (Array.isArray(data && data.leads) ? data.leads : [])) {
+      if (!l || l.id == null || String(l.afl || '')) continue;
+      const k = _waNumKey(l.wa);
+      if (!k || k.length !== 10 || nossos.has(k) || recKeys.has(k)) continue;
+      const id = String(l.id), col = _cobColId(l.col), pago = _cobPago(l);
+      const poe = (aid, db, key, base, extra) => cands.push({ l, k, aid, db, key, base, ...(extra || {}) });
+      if (pago) {
+        const pt = _cobPagoTs(l);
+        if (liga.has('pag') && pt && agoraMs >= pt && agoraMs - pt <= 24 * H) poe('pag', 'pagou', 'pag:' + id, pt);
+        continue;
+      }
+      if (_COB_TERMINAIS.has(col)) continue;
+      if (col === 'Saiu para Entrega') {
+        const e = _cobAutoEntrou(l, col, 'Requer Atenção');
+        if (e && agoraMs >= e) {
+          if (liga.has('sai') && agoraMs - e <= 10 * H) poe('sai', 'saiu', 'sai:' + id, e);
+          if (liga.has('nach') && agoraMs - e >= 24 * H && agoraMs - e <= 72 * H) poe('nach', 'naoachou', 'nach:' + id, e);
+        }
+      } else if (col === 'Requer Atenção') {
+        const e = _cobAutoEntrou(l, col);
+        if (e && liga.has('nach') && agoraMs - e >= H && agoraMs - e <= 72 * H) poe('nach', 'naoachou', 'nach:' + id, e);
+      } else if (col === 'Entregues') {
+        const e = _cobAutoEntrou(l, col);
+        if (e && agoraMs >= e) {
+          const dias = hojeBr - _cobAutoDiaBr(e);
+          // a foto chega num evento separado, depois do "entregue": espera ate 2 h por ela
+          if (liga.has('ent') && dias <= 1 && agoraMs - e <= 30 * H && (String(l.entrega_url || '') || agoraMs - e >= 2 * H)) {
+            poe('ent', 'entregue', 'ent:' + id, e, { quando: dias === 0 ? 'hoje' : 'ontem' });
+          }
+          const ag = _botIaAgendMs(l);
+          if (liga.has('npg') && dias >= 1 && agoraMs - e <= 72 * H && String(l.mod || '').toLowerCase() !== 'antecipado' && _cobSaldo(l) > 0 && !(ag > agoraMs)) {
+            poe('npg', 'naopagou', 'npg:' + id, e);
+          }
+        }
+      } else if (col === 'Retirar nos Correios') {
+        const e = _cobAutoEntrou(l, col);
+        const dia = (e && agoraMs >= e) ? hojeBr - _cobAutoDiaBr(e) + 1 : 0;
+        if (liga.has('ret') && dia >= 1 && dia <= 5 && String(l.track || '').trim().length >= 6) poe('ret', 'retirada', 'ret:' + id + ':' + dia, iniDiaMs, { dia });
+      } else if (col === 'Enviados') {
+        const e = _cobAutoEntrou(l, col, 'Requer Atenção');
+        if (e && liga.has('atr') && agoraMs - e >= 7 * 86400000 && agoraMs - e <= 20 * 86400000) poe('atr', 'atrasou', 'atr:' + id, agoraMs - 48 * H);
+      }
+    }
+    if (cands.length) {
+      const ult = await pegaUlt();
+      const auto = await pegaAuto();
+      // as 5 chaves da retirada de cada pedido entram pra contar quantos lembretes ja foram
+      const ks = new Set();
+      for (const c of cands) { ks.add(c.key); if (c.aid === 'ret') for (let d = 1; d <= 5; d++) ks.add('ret:' + String(c.l.id) + ':' + d); }
+      const ja = auto ? await _cobAutoJa(env, [...ks]) : null;
+      if (ja) {
+        const porCli = new Map();
+        for (const c of cands) {
+          const u = ult.get(c.k);
+          if (!u || !alvo.has(u.n8) || !_cobAutoVale(cfg, pess, c.aid, nums.get(u.n8).at)) continue;
+          const row = ja.get(c.key);
+          if (row && !_cobAutoDeNovo(row, agoraS)) continue;
+          const ultAuto = auto.get(c.k) || 0;
+          if (c.aid !== 'pag' && ultAuto > agoraS - COB_AUTO_GAP_S) continue;
+          const a = porCli.get(c.k);
+          if (!a || COB_AUTO_PRIO[c.db] < COB_AUTO_PRIO[a.db]) porCli.set(c.k, { ...c, u, ultAuto });
+        }
+        for (const c of porCli.values()) {
+          const l = c.l, id = String(l.id);
+          const nome = _cobAutoNome(l.nome);
+          const tr = String(l.track || '').trim();
+          const saldo = (String(l.mod || '').toLowerCase() !== 'antecipado' && !_cobPago(l)) ? _cobSaldo(l) : 0;
+          const vars = { nome, primeiro: _cobAutoPrimeiro(nome), valor: saldo > 0 ? _cobAutoBRL(saldo) : '', codigo: tr, link: tr ? _cobRastreio(l) : '' };
+          let campo = c.db;
+          if (c.aid === 'ret') {
+            let foram = 0;
+            for (let d = 1; d <= 5; d++) { const r0 = ja.get('ret:' + id + ':' + d); if (r0 && (r0.status === 'enviado' || r0.status === 'parcial')) foram++; }
+            campo = c.dia >= 5 ? 'ret5' : 'ret' + Math.min(4, foram + 1);
+          }
+          if (c.aid === 'ent') vars.quando = c.quando;
+          if (c.aid === 'nach') { vars.endereco = _cobAutoEndereco(l); if (!vars.endereco) continue; }
+          if (c.aid === 'npg') {
+            if (!vars.valor) continue;
+            // o MESMO link curto do bot e do botao de copiar da dash (o comprido leva CPF e endereco)
+            const ck = _cobCheckout(l, data);
+            vars.link_pag = !ck ? '' : opts.previa ? 'sellwave.com.br/checkout/(link do pedido)' : await _botIaLinkCurto(env, ck, id, 'auto');
+          }
+          const t = _cobAutoMonta(cfg.txt[campo], vars, agoraMs);
+          if (!t) continue;
+          const partes = [{ tipo: 'texto', texto: t }];
+          if (c.aid === 'ent' && String(l.entrega_url || '')) {
+            let url = String(l.entrega_url);
+            try { url = JSON.parse(await _arqAssinaJson(env, JSON.stringify(url))); } catch (_) { /* vai o link como esta */ }
+            const video = /^video\//i.test(String(l.entrega_mime || '')) || /\.mp4(\?|$)/i.test(url);
+            partes.push({ tipo: 'midia', kind: video ? 'video' : 'image', url });
+          }
+          out.push({
+            k: c.key, tipo: c.db, nk: nums.get(c.u.n8).nk, fone: c.u.fone, nome, pedido: id, codigo: '', desde: 0,
+            textos: [t], partes, falouDesde: Math.max(Math.floor(c.base / 1000), c.ultAuto ? c.ultAuto + 60 : 0), chaves: [c.key],
+            ord: 1e12 + COB_AUTO_PRIO[c.db] * 1e10 + Math.floor(c.base / 1000),
+          });
+        }
+      }
+    }
+  }
+
+  // UMA POR CLIENTE POR VEZ (fora a recepcao, que e resposta): cliente com dois pedidos, ou com codigo
+  // novo e entrega no mesmo dia, recebe a de maior prioridade agora e a outra depois do intervalo.
+  {
+    const melhor = new Map();
+    for (const x of out) {
+      if (x.tipo === 'recepcao') continue;
+      const k = _waNumKey(x.fone);
+      const a = melhor.get(k);
+      if (!a || x.ord < a.ord) melhor.set(k, x);
+    }
+    for (let i = out.length - 1; i >= 0; i--) {
+      const x = out[i];
+      if (x.tipo !== 'recepcao' && melhor.get(_waNumKey(x.fone)) !== x) out.splice(i, 1);
+    }
+  }
+
   // ── TETO por numero em 24 h ──
   let lista = out;
   if (lista.length && !opts.previa) {
@@ -17316,27 +17644,35 @@ async function handleCobAuto(req, env) {
       // so grava o que difere do padrao: o padrao melhorado chega sozinho em quem nao mexeu
       if (v && v !== COB_AUTO_TXT[k]) txt[k] = v;
     }
-    const cfg = {
-      rec: (b && b.rec != null) ? !!b.rec : atual.rec,
-      pos: (b && b.pos != null) ? !!b.pos : atual.pos,
-      txt, por: String(u.name || u.id), em: Date.now(),
-    };
+    const cfg = { txt, por: String(u.name || u.id), em: Date.now() };
+    for (const id of COB_AUTO_IDS) cfg[id] = (b && b[id] != null) ? !!b[id] : atual[id];
+    // "com rastreio" so vira escolha propria quando alguem mexe NELA; ate la segue a recepcao
+    if (!(b && b.recr != null)) {
+      let cru = null;
+      try { const v = await _readConfig(env, COB_AUTO_KEY); cru = v ? JSON.parse(v) : null; } catch (_) { cru = null; }
+      if (!cru || cru.recr == null) delete cfg.recr;
+    }
     await _writeConfig(env, COB_AUTO_KEY, JSON.stringify(cfg));
-    return json({ ok: true, cfg: await _cobAutoCfg(env), padrao: COB_AUTO_TXT });
+    return json({ ok: true, cfg: await _cobAutoCfg(env), padrao: COB_AUTO_TXT, tipos: COB_AUTO_TIPOS, campos: COB_AUTO_CAMPOS });
   }
   const cfg = await _cobAutoCfg(env);
   await _cobAutoTabela(env);
   const agoraMs = Date.now();
   const d0 = new Date(agoraMs - _COB_BRT);
   const iniDiaS = Math.floor((Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate()) + _COB_BRT) / 1000);
-  const hoje = { recepcao: 0, postado: 0, pulado: 0, falhou: 0 };
+  // `porTipo` = enviadas hoje por automacao (id do catalogo); recepcao/postado ficam pra tela antiga.
+  const hoje = { recepcao: 0, postado: 0, pulado: 0, falhou: 0, porTipo: {} };
   let ultimos = [];
   try {
     const r = await env.DB.prepare('SELECT tipo, status, COUNT(*) n FROM swweb_auto WHERE COALESCE(feito_ts, pego_ts) >= ? GROUP BY tipo, status').bind(iniDiaS).all();
     for (const x of ((r && r.results) || [])) {
       const n = Number(x.n) || 0;
-      if (x.status === 'enviado') hoje[x.tipo === 'postado' ? 'postado' : 'recepcao'] += n;
-      else if (x.status === 'pulado') hoje.pulado += n;
+      if (x.status === 'enviado') {
+        const t = COB_AUTO_TIPOS.find((c) => c.db === x.tipo);
+        if (t) hoje.porTipo[t.id] = (hoje.porTipo[t.id] || 0) + n;
+        if (x.tipo === 'postado') hoje.postado += n;
+        else if (x.tipo === 'recepcao' || x.tipo === 'recepcao_r') hoje.recepcao += n;
+      } else if (x.status === 'pulado') hoje.pulado += n;
       else if (x.status === 'falhou' || x.status === 'parcial') hoje.falhou += n;
     }
     const r2 = await env.DB.prepare('SELECT k, tipo, nk, nome, status, n, motivo, COALESCE(feito_ts, pego_ts) ts FROM swweb_auto ORDER BY COALESCE(feito_ts, pego_ts) DESC LIMIT 20').all();
@@ -17349,13 +17685,22 @@ async function handleCobAuto(req, env) {
     const data = await _getDashData(env);
     const nums = await _cobAutoNumeros(env, data);
     const nomes = await _cobNomes(env);
-    const itens = await _cobAutoItens(env, data, { ...cfg, rec: true, pos: true }, [...nums.keys()], agoraMs, { previa: true });
-    fila = itens.slice(0, 60).map((x) => {
+    const tudo = { ...cfg };
+    for (const id of COB_AUTO_IDS) tudo[id] = true;
+    const itens = await _cobAutoItens(env, data, tudo, [...nums.keys()], agoraMs, { previa: true });
+    fila = itens.slice(0, 120).map((x) => {
       const dono = [...nums.values()].find((v) => v.nk === x.nk);
-      return { tipo: x.tipo, nome: x.nome, nk: x.nk, cobrador: dono ? (nomes[dono.at] || '') : '', codigo: x.codigo || '', textos: x.textos };
+      return { tipo: x.tipo, nome: x.nome, nk: x.nk, cobrador: dono ? (nomes[dono.at] || '') : '', codigo: x.codigo || '', textos: x.textos, foto: (x.partes || []).some((p) => p.tipo === 'midia') };
     });
   } catch (e) { console.log('COB_AUTO_PREVIA_ERRO ' + String((e && e.message) || e).slice(0, 160)); }
-  return json({ ok: true, cfg, padrao: COB_AUTO_TXT, hoje, ultimos, fila });
+  // QUEM DESLIGOU O QUE no app (so nome e as desligadas), pra direcao saber por que nao saiu.
+  let pessoas = [];
+  try {
+    const pess = await _cobAutoPessoas(env);
+    const nomes = await _cobNomes(env);
+    pessoas = Object.keys(pess).map((uid) => ({ nome: nomes[uid] || '', off: COB_AUTO_IDS.filter((id) => pess[uid] && pess[uid][id] === false) })).filter((p) => p.nome && p.off.length);
+  } catch (_) { pessoas = []; }
+  return json({ ok: true, cfg, padrao: COB_AUTO_TXT, tipos: COB_AUTO_TIPOS, campos: COB_AUTO_CAMPOS, hoje, ultimos, fila, pessoas });
 }
 
 // ── O QUE O VENDEDOR CRIA NO PAINEL DO SELLWAVE WEB (05/11/2026, pedido do Bruno) ────────────────
@@ -18198,14 +18543,68 @@ async function handleSwWeb(req, env, path) {
   // `proxima` = em quantos segundos perguntar de novo (desligado: 5 min).
   if (req.method === 'GET' && path === '/api/swweb/auto') {
     const cfg = await _cobAutoCfg(env);
-    if (!cfg.rec && !cfg.pos) return json({ ok: true, itens: [], proxima: 300 });
+    if (!_cobAutoAlgum(cfg)) return json({ ok: true, itens: [], proxima: 300 });
     const meus = await _cobAutoMeus(String(new URL(req.url).searchParams.get('nks') || '').split(','));
     if (!meus.length) return json({ ok: true, itens: [], proxima: 120 });
     const data = await _getDashData(env);
     let itens = [];
-    try { itens = await _cobAutoItens(env, data, cfg, meus.map((nk) => nk.slice(-8)), Date.now(), {}); }
+    try { itens = await _cobAutoItens(env, data, cfg, meus.map((nk) => nk.slice(-8)), Date.now(), { pess: await _cobAutoPessoas(env), novo: _cobAutoAppNovo(req) }); }
     catch (e) { console.log('COB_AUTO_ERRO ' + String((e && e.message) || e).slice(0, 160)); itens = []; }
     return json({ ok: true, itens, proxima: 60 });
+  }
+  // GET /api/swweb/auto/config — A ABA AUTOMACOES do painel do cobrador (11/11/2026): cada automacao
+  // com o que a direcao ligou, o que ESTA pessoa ligou, quantas sairam hoje pelos numeros dela e os
+  // textos; mais os ultimos envios dela. Com ?como= a direcao ve a do cobrador (so leitura no GET).
+  // POST {id, ligado, de?} — o cobrador liga ou desliga a DELE. A direcao pode mandar `de` (o
+  // cobrador que ela esta vendo no "ver como"); mais ninguem mexe na de outra pessoa.
+  if (path === '/api/swweb/auto/config' && (req.method === 'GET' || req.method === 'POST')) {
+    if (mundo || !(isDirector(u) || _ehCobrador(u))) return err('Só o cobrador da casa tem automações', 403);
+    const pess = await _cobAutoPessoas(env);
+    let uid = String(u.id);
+    if (req.method === 'POST') {
+      let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+      const id = String((b && b.id) || '');
+      if (!COB_AUTO_IDS.includes(id)) return err('Automação desconhecida', 400);
+      const de = String((b && b.de) || '');
+      if (de && de !== uid) {
+        if (!isDirector(u)) return err('Cada um mexe só nas suas', 403);
+        if (!(await _cobradoresDaCasa(env)).some((c) => String(c.id) === de)) return err('Cobrador não encontrado', 404);
+        uid = de;
+      }
+      const meu = { ...((pess[uid] && typeof pess[uid] === 'object') ? pess[uid] : {}) };
+      if (b && b.ligado) delete meu[id]; else meu[id] = false;
+      if (Object.keys(meu).length) pess[uid] = meu; else delete pess[uid];
+      await _writeConfig(env, COB_AUTO_PESSOA_KEY, JSON.stringify(pess));
+      console.log('COB_AUTO_PESSOA uid=' + uid + ' ' + id + '=' + (b && b.ligado ? 'on' : 'off') + ' por=' + String(u.id));
+    }
+    const cfg = await _cobAutoCfg(env);
+    const data = await _getDashData(env);
+    const meusNks = (Array.isArray(data && data.chips) ? data.chips : []).filter((c) => c && c.num && !String(c.afl || '') && String(c.at || '') === uid)
+      .map((c) => _waNumKey(c.num)).filter((k) => k && k.length === 10);
+    await _cobAutoTabela(env);
+    const d0 = new Date(Date.now() - _COB_BRT);
+    const iniDiaS = Math.floor((Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate()) + _COB_BRT) / 1000);
+    const porDb = {};
+    let ultimos = [];
+    if (meusNks.length) {
+      try {
+        const r = await env.DB.prepare("SELECT tipo, COUNT(*) n FROM swweb_auto WHERE status = 'enviado' AND COALESCE(feito_ts, pego_ts) >= ? AND nk IN (SELECT value FROM json_each(?)) GROUP BY tipo")
+          .bind(iniDiaS, JSON.stringify(meusNks)).all();
+        for (const x of ((r && r.results) || [])) porDb[String(x.tipo)] = Number(x.n) || 0;
+        const r2 = await env.DB.prepare('SELECT tipo, nome, status, motivo, COALESCE(feito_ts, pego_ts) ts FROM swweb_auto WHERE nk IN (SELECT value FROM json_each(?)) ORDER BY COALESCE(feito_ts, pego_ts) DESC LIMIT 15')
+          .bind(JSON.stringify(meusNks)).all();
+        ultimos = ((r2 && r2.results) || []).map((x) => {
+          const t = COB_AUTO_TIPOS.find((c) => c.db === x.tipo);
+          return { id: t ? t.id : '', nome: String(x.nome || ''), status: String(x.status || ''), motivo: String(x.motivo || ''), ts: Number(x.ts) || 0 };
+        });
+      } catch (_) { /* sem historico a aba mostra so os interruptores */ }
+    }
+    const meu = (pess[uid] && typeof pess[uid] === 'object') ? pess[uid] : {};
+    const tipos = COB_AUTO_TIPOS.map((t) => ({
+      id: t.id, nome: t.nome, dica: t.dica, direcao: !!cfg[t.id], meu: meu[t.id] !== false, hoje: porDb[t.db] || 0,
+      textos: t.campos.map((c) => ({ rot: (COB_AUTO_CAMPOS[c] || {}).rot || c, texto: cfg.txt[c] || '' })),
+    }));
+    return json({ ok: true, tipos, ultimos, numeros: meusNks.length });
   }
   // POST /api/swweb/auto/pega {k, chaves, nk, tipo, fone, pedido, nome} — A TRAVA: so um app manda
   // cada mensagem, uma vez. A chave nasce 'pego'; so volta a ser oferecida se o app contar que FALHOU
@@ -18213,7 +18612,7 @@ async function handleSwWeb(req, env, path) {
   // POST /api/swweb/auto/feito {k, chaves, ok, pulado, n, motivo} — como foi.
   if (req.method === 'POST' && (path === '/api/swweb/auto/pega' || path === '/api/swweb/auto/feito')) {
     let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
-    const chaveOk = (x) => /^(rec|pos):[0-9A-Za-z:._-]{6,160}$/.test(String(x || ''));
+    const chaveOk = (x) => /^(rec|pos|sai|ent|ret|nach|npg|atr|pag):[0-9A-Za-z:._-]{3,160}$/.test(String(x || ''));
     const k = String((b && b.k) || '');
     if (!chaveOk(k)) return err('Chave inválida', 400);
     const extras = (Array.isArray(b && b.chaves) ? b.chaves : []).map(String).filter((x) => x !== k && chaveOk(x)).slice(0, 3);
@@ -18224,7 +18623,10 @@ async function handleSwWeb(req, env, path) {
     const agoraS = Math.floor(Date.now() / 1000);
     const por = String(u.id);
     if (path === '/api/swweb/auto/pega') {
-      const tipo = String((b && b.tipo) || '') === 'postado' ? 'postado' : 'recepcao';
+      // O TIPO VEM DO CATALOGO; recepcao que leva o codigo junto (chave extra `pos:`) e a "com rastreio".
+      let tipo = String((b && b.tipo) || '');
+      if (!COB_AUTO_DBS.has(tipo)) tipo = 'recepcao';
+      if (tipo === 'recepcao' && extras.some((x) => x.startsWith('pos:'))) tipo = 'recepcao_r';
       const fone = String((b && b.fone) || '').replace(/\D/g, '').slice(0, 15);
       const pedido = String((b && b.pedido) || '').slice(0, 40);
       const nome = String((b && b.nome) || '').slice(0, 80);

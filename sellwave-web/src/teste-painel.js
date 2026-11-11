@@ -85,7 +85,8 @@ app.whenReady().then(async () => {
 
   // ── a aba ──────────────────────────────────────────────────────────────────────────────────
   const abas = await js('[...document.querySelectorAll(".aba")].map(b => b.dataset.aba).join(",")')
-  conta('as tres abas existem', abas === 'itens,funis,pedidos', abas)
+  conta('as tres abas existem', abas === 'itens,funis,pedidos,auto', abas)
+  conta('a aba Automacoes fica escondida fora da versao de cobrador', await js('document.getElementById("aba-auto").hidden === true && getComputedStyle(document.getElementById("aba-auto")).display === "none"'))
 
   // ══ A PREVIA MOSTRA A MIDIA, NAO O ROTULO DELA ════════════════════════════════════════════
   //
@@ -1175,8 +1176,41 @@ app.whenReady().then(async () => {
   const pcQ = await js('(() => { const u = (window.__ver()).filter(c => c.nome === "cobSalva").pop(); return { nova: !document.querySelector("#corpo .fx").__marca, patch: u && u.args[1], pago: !!document.querySelector("#corpo .fx-pago"), txt: (document.querySelector("#corpo [data-sec=pagamento]") || {}).textContent.replace(/\\u00a0/g, " ") } })()')
   conta('painel: confirmado, fecha com parcela do resto + valor_neg no total (100 + 350 = 450) e a ficha redesenha como paga',
     pcQ.nova && pcQ.patch && pcQ.patch.pagamento_add && pcQ.patch.pagamento_add.valor === 350 && pcQ.patch.spg === 'Pago' && pcQ.patch.valor_neg === 450 && pcQ.patch.col === 'Pagos' && pcQ.patch.antes.spg === 'Parcial' && pcQ.pago && /Recebido R\$ 450,00/.test(pcQ.txt) && !/data-acao=pago/.test(''), JSON.stringify(pcQ))
+  // ══ A ABA AUTOMACOES (11/11/2026) ══ so na versao de cobrador: lista, interruptor, texto e envios
+  ponto = 'automacoes painel'
+  const au0 = await js('({ visivel: !document.getElementById("aba-auto").hidden && getComputedStyle(document.getElementById("aba-auto")).display !== "none", rot: document.getElementById("aba-auto").textContent.trim() })')
+  conta('automacoes: no modo cobranca a aba aparece, com o nome', au0.visivel && au0.rot === 'Automações', JSON.stringify(au0))
+  await clica('#aba-auto')
+  await espera(400)
+  const au1 = await js('(() => ({ aba: document.querySelector(".aba.on").dataset.aba, cabeca: getComputedStyle(document.getElementById("cabeca")).display,'
+    + ' itens: [...document.querySelectorAll("#corpo .au-it")].map(e => e.querySelector(".au-nome").textContent + ":" + e.querySelector(".au-sw").getAttribute("aria-checked") + ":" + (e.classList.contains("off") ? "off" : "on")),'
+    + ' hoje: [...document.querySelectorAll("#corpo .au-hoje")].map(e => e.textContent), dir: [...document.querySelectorAll("#corpo .au-dir")].map(e => e.textContent),'
+    + ' ult: [...document.querySelectorAll("#corpo .au-ult")].map(e => e.textContent), pediu: (window.__ver()).filter(c => c.nome === "autoConfig").length }))()')
+  conta('automacoes: abre a aba, sem a busca dos itens, e pede a lista', au1.aba === 'auto' && au1.cabeca === 'none' && au1.pediu >= 1, JSON.stringify(au1))
+  conta('automacoes: um cartao por automacao, com o interruptor de cada uma', au1.itens.join('|') === 'Boas-vindas:true:on|Retirar nos Correios:true:on|Pagou:true:off', au1.itens.join('|'))
+  conta('automacoes: mostra o que saiu hoje e o que a direcao desligou', au1.hoje.join('|') === '2 hoje' && au1.dir.join('|') === 'Desligada pela direção', JSON.stringify([au1.hoje, au1.dir]))
+  conta('automacoes: lista os ultimos envios com o cliente, a automacao e a situacao', au1.ult.length === 1 && /Maria das Dores · Boas-vindas/.test(au1.ult[0]) && /Enviada/.test(au1.ult[0]), JSON.stringify(au1.ult))
+  await clica('#corpo [data-ver=ret]')
+  await espera(150)
+  const au2 = await js('[...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent)')
+  conta('automacoes: "Ver mensagem" abre o texto em balao, com exemplo no lugar da variavel', au2.length === 1 && au2[0] === 'Oi Maria, código AP123456789BR', JSON.stringify(au2))
+  await clica('#corpo [data-au=ret]')
+  await espera(400)
+  const au3 = await js('(() => ({ sw: document.querySelector("#corpo [data-au=ret]").getAttribute("aria-checked"), off: document.querySelector("#corpo [data-au=ret]").closest(".au-it").classList.contains("off"),'
+    + ' chamou: (window.__ver()).filter(c => c.nome === "autoLiga").map(c => c.args.join(":")), rod: document.getElementById("rod").textContent, aberto: document.querySelectorAll("#corpo .au-bolha").length }))()')
+  conta('automacoes: desligar grava so a dele e o cartao fica desligado', au3.sw === 'false' && au3.off && au3.chamou.join('|') === 'ret:false', JSON.stringify(au3))
+  conta('automacoes: o rodape confirma e a mensagem aberta continua aberta', /Retirar nos Correios: desligada/.test(au3.rod) && au3.aberto === 1, JSON.stringify(au3))
+  await clica('#corpo [data-au=ret]')
+  await espera(400)
+  conta('automacoes: ligar de novo volta ao verde', await js('document.querySelector("#corpo [data-au=ret]").getAttribute("aria-checked") === "true" && (window.__ver()).filter(c => c.nome === "autoLiga").pop().args.join(":") === "ret:true"'))
+  await clica('#corpo [data-au=pag]')
+  await espera(400)
+  const au4 = await js('({ sw: document.querySelector("#corpo [data-au=pag]").getAttribute("aria-checked"), rod: document.getElementById("rod").textContent })')
+  conta('automacoes: a dash recusou, o interruptor volta e o rodape diz por que', au4.sw === 'true' && /500/.test(au4.rod), JSON.stringify(au4))
   await js('window.__poeCobranca(false)')
   await espera(1900)
+  const au5 = await js('({ escondida: document.getElementById("aba-auto").hidden, aba: document.querySelector(".aba.on").dataset.aba, cartoes: document.querySelectorAll("#corpo .au-it").length })')
+  conta('automacoes: saindo do modo cobranca a aba some e o painel volta pros itens', au5.escondida && au5.aba === 'itens' && au5.cartoes === 0, JSON.stringify(au5))
   const pc4 = await js('(document.querySelector(".aba[data-aba=pedidos] .aba-rot") || {}).textContent')
   conta('fora do modo cobranca a aba volta a ser Pedidos', pc4 === 'Pedidos', pc4)
   await js('(() => { const b = document.querySelector(".aba[data-aba=itens]"); if (b) b.click() })()')

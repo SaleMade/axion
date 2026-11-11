@@ -254,6 +254,79 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
   const r = await F.rodaAuto(REC)
   vale('painel disparando funil no numero: espera ele acabar antes de conferir e mandar', r === 'enviado' && log.esperas.slice(0, 3).every((ms) => ms === 5000) && log.js.length === 1, log.esperas.join(','))
 }
+// ── AS AUTOMACOES NOVAS (11/11/2026): tipos novos, `falouDesde`, a foto da entrega e os avisos
+{
+  const ret = { tipo: 'retirada', falouDesde: 1500 }
+  vale('tipo novo: o cobrador falou DEPOIS do fato (falouDesde) -> pula', (confereAuto(ret, { ok: true, achou: true, n: 5, ultIn: 10, ultOut: 1600 }, 5000) || {}).pula === 'o cobrador já falou com ele')
+  vale('tipo novo: a ultima fala dele e de ANTES do fato -> manda', confereAuto(ret, { ok: true, achou: true, n: 5, ultIn: 10, ultOut: 1400 }, 5000) === null)
+  vale('tipo novo: codigo ja na conversa NAO segura (o lembrete da retirada repete o codigo de proposito)', confereAuto(ret, { ok: true, achou: true, n: 5, ultIn: 10, ultOut: 1400, temCodigo: true }, 5000) === null)
+  vale('tipo novo: cobrador falando agora -> depois', (confereAuto(ret, { ok: true, achou: true, n: 5, ultIn: 10, ultOut: 4950 }, 5000) || {}).depois)
+  vale('o codigo de rastreio continua pulando quando ja esta na conversa', (confereAuto({ tipo: 'postado' }, { ok: true, achou: true, n: 5, ultIn: 10, ultOut: 20, temCodigo: true }, 5000) || {}).pula)
+}
+{
+  const ENT = { k: 'ent:77', tipo: 'entregue', nk: '1127335679', fone: '5531999990077', nome: 'Maria', pedido: '77', codigo: '', falouDesde: 900,
+    textos: ['Oi Maria, acabei de ver que seu pedido chegou na sua casa hoje. Recebeu ele tudo certinho?'],
+    partes: [{ tipo: 'texto', texto: 'Oi Maria, acabei de ver que seu pedido chegou na sua casa hoje. Recebeu ele tudo certinho?' }, { tipo: 'midia', kind: 'image', url: 'https://axion-api.axion-dash.workers.dev/api/arquivo/comprovante%2F77%2Fentrega.jpg?exp=1&sig=ab' }],
+    chaves: ['ent:77'] }
+  let a = montaRoda({ chatDe: { ok: true, achou: true, chatId: 'm@c.us', ultIn: 100, ultOut: 200, n: 4 } })
+  let r = await a.F.rodaAuto(ENT)
+  const m = a.log.mandou
+  vale('entregue: manda o texto e DEPOIS a foto, na conversa achada', r === 'enviado' && m.length === 2 && m[0].item.tipo === 'texto' && m[1].item.tipo === 'midia' && m[1].item.kind === 'image' && m[1].item.url === ENT.partes[1].url, r + ' ' + m.length)
+  vale('a foto vai como automatica, 3 s depois, sem legenda', m[1] && m[1].item.auto === true && m[1].item.espera === 3 && m[1].item.caption === '', JSON.stringify(m[1] && m[1].item))
+  vale('conta as duas partes como enviadas e pega com o tipo novo', a.log.posts[0].corpo.tipo === 'entregue' && a.log.posts[1].corpo.ok === true && a.log.posts[1].corpo.n === 2, JSON.stringify(a.log.posts[1].corpo))
+  vale('a conferencia da conversa nao passa codigo nenhum (nao e o Postado)', /__swChatDe\("5531999990077",""\)/.test(a.log.js[0] || ''), a.log.js[0])
+  vale('a barra avisa com a frase do tipo', a.log.avisos.length === 1 && /Mensagem de pedido entregue enviada para Maria\./.test(a.log.avisos[0].texto), JSON.stringify(a.log.avisos))
+  a = montaRoda({ chatDe: { ok: true, achou: true, chatId: 'm@c.us', ultIn: 100, ultOut: 200, n: 4 }, falhaNo: 2 })
+  r = await a.F.rodaAuto(ENT)
+  vale('a foto falhou depois do texto: conta 1 de 2 (parcial no servidor, nunca repete o texto)', r === 'falhou' && a.log.posts[1].corpo.ok === false && a.log.posts[1].corpo.n === 1, JSON.stringify(a.log.posts[1].corpo))
+  a = montaRoda({ chatDe: { ok: true, achou: true, chatId: 'm@c.us', ultIn: 100, ultOut: 950, n: 4 } })
+  r = await a.F.rodaAuto(ENT)
+  vale('o cobrador ja perguntou depois da entrega: pulado, nada sai', r === 'pulado' && a.log.mandou.length === 0 && /já falou/.test(a.log.posts[1].corpo.motivo), JSON.stringify(a.log.posts.map((p) => p.corpo.motivo || '')))
+  a = montaRoda({ chatDe: { ok: true, achou: true, chatId: 'm@c.us', ultIn: 100, ultOut: 200, n: 4 } })
+  r = await a.F.rodaAuto({ ...ENT, partes: [ENT.partes[0], { tipo: 'midia', kind: 'image', url: 'file:///c:/x.jpg' }] })
+  vale('endereco de midia que nao e https e descartado (vai so o texto)', r === 'enviado' && a.log.mandou.length === 1, r + ' ' + a.log.mandou.length)
+  const AVISOS = { saiu: /saída para entrega/, retirada: /Lembrete de retirada/, naoachou: /entrega não concluída/, naopagou: /Lembrete de pagamento/, atrasou: /Aviso de atraso/, pagou: /Agradecimento do pagamento/ }
+  let certos = 0
+  for (const [tipo, re] of Object.entries(AVISOS)) {
+    a = montaRoda({ chatDe: { ok: true, achou: true, chatId: 'm@c.us', ultIn: 100, ultOut: 200, n: 4 } })
+    await a.F.rodaAuto({ k: tipo + ':1', tipo, nk: '1127335679', fone: '5531999990077', nome: 'Maria', textos: ['oi'], chaves: [tipo + ':1'] })
+    if (re.test((a.log.avisos[0] || {}).texto || '')) certos++
+  }
+  vale('cada tipo novo tem a propria frase na barra', certos === 6, String(certos))
+}
+{
+  const PR = leia('preload-painel.js'), PU = leia('ui/painel-ui.js'), PH = leia('ui/painel.html')
+  vale('a ponte do painel tem a lista e o interruptor das automacoes', /autoConfig: \(\) => ipcRenderer\.invoke\('swp:auto-config'\)/.test(PR) && /autoLiga: \(id, ligado\) => ipcRenderer\.invoke\('swp:auto-liga', \{ id, ligado: !!ligado \}\)/.test(PR))
+  vale('o main le e grava pela rota das automacoes (com o "ver como")', /ipcMain\.handle\('swp:auto-config', \(\) => lerCob\('\/api\/swweb\/auto\/config\?v=1' \+ comoE\(\)\)\)/.test(MN) && /ipcMain\.handle\('swp:auto-liga'/.test(MN) && /\.\.\.\(comoId \? \{ de: comoId \} : \{\}\)/.test(MN))
+  vale('a aba Automacoes nasce escondida e so aparece na versao de cobrador', /data-aba="auto" id="aba-auto" hidden/.test(PH) && /abaAuto\.hidden = !cobModo/.test(PU) && /\.aba\[hidden\] \{ display: none; \}/.test(PH))
+}
+// ── a aba Automacoes desenhada de verdade (o codigo do painel, com um documento de mentira)
+{
+  const PU = leia('ui/painel-ui.js')
+  const pedacos = ['const AUTO_EX = ', 'const autoExemplo = ', 'const AUTO_ST = '].map((ini) => linhaQueComeca(PU, ini))
+  const F = new Function('auto', 'esc', 'IC_SETA', 'window', [
+    ...pedacos, recorta(PU, 'const autoHora = (s) =>') + '', recorta(PU, 'function desenhaAuto()'), 'return { desenhaAuto, autoExemplo }',
+  ].join('\n'))
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  const auto = { em: 1, carregando: false, erro: '', salvando: '', aberto: 'ret', numeros: 1, ultimos: [{ id: 'sai', nome: 'Maria <b>', status: 'enviado', ts: 1794315600 }],
+    tipos: [
+      { id: 'rec', nome: 'Boas-vindas', dica: 'd1', direcao: true, meu: true, hoje: 3, textos: [{ rot: 'Saudação', texto: '{saudacao} {nome}' }] },
+      { id: 'ret', nome: 'Retirar nos Correios', dica: 'd2', direcao: true, meu: false, hoje: 0, textos: [{ rot: 'Dia 1', texto: 'Oi {primeiro}, código {codigo}' }, { rot: 'Dia 2', texto: 'R$ {valor} {novidade}' }] },
+      { id: 'pag', nome: 'Pagou', dica: 'd3', direcao: false, meu: true, hoje: 0, textos: [] },
+    ] }
+  const { desenhaAuto, autoExemplo } = F(auto, esc, '<svg></svg>', { swp: { autoConfig: () => {} } })
+  const h = desenhaAuto()
+  vale('desenha um cartao por automacao, com o interruptor no estado de cada uma', (h.match(/class="au-it/g) || []).length === 3 && /class="au-sw on" role="switch" aria-checked="true"[^>]*data-au="rec"/.test(h) && /class="au-sw" role="switch" aria-checked="false"[^>]*data-au="ret"/.test(h), '')
+  vale('mostra quantas sairam hoje so quando saiu alguma', /<span class="au-hoje">3 hoje<\/span>/.test(h) && (h.match(/au-hoje/g) || []).length === 1, '')
+  vale('o que a direcao desligou aparece como "Desligada pela direção"', (h.match(/Desligada pela direção/g) || []).length === 1, '')
+  vale('a mensagem aberta mostra os textos em balao, com exemplo no lugar da variavel', /Oi Maria, código AP123456789BR/.test(h) && /R\$ 497,00 \{novidade\}/.test(h) && !/\{primeiro\}/.test(h), '')
+  vale('variavel desconhecida fica como esta (nao inventa)', autoExemplo('{x} {link_pag}') === '{x} link de pagamento', autoExemplo('{x} {link_pag}'))
+  vale('os ultimos envios mostram cliente, automacao e situacao, com o nome escapado', /Maria &lt;b&gt;<\/b> · Mensagem|Maria &lt;b&gt;/.test(h) && /class="s ok">Enviada/.test(h), '')
+  const semApp = F(auto, esc, '', { swp: {} }).desenhaAuto()
+  vale('app sem a ponte nova pede pra atualizar em vez de quebrar', /Atualize o app/.test(semApp), semApp)
+  const vazio = F({ ...auto, tipos: [], em: 0 }, esc, '', { swp: { autoConfig: () => {} } }).desenhaAuto()
+  vale('antes de a lista chegar mostra "Carregando"', /Carregando/.test(vazio), vazio)
+}
 // ── o laco
 function montaLaco(op) {
   const log = { fetch: [], rodou: [], esperas: [] }
