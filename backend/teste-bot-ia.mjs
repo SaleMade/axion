@@ -103,7 +103,11 @@ function monta(mundo) {
   const cfgdb = { ...(mundo.config || {}) };
   if (mundo.cfg && !cfgdb.bot_wa) cfgdb.bot_wa = JSON.stringify(mundo.cfg);
   const users = (mundo.users || USERS).filter((u) => !u.archived && !u.afiliado_id);
-  const estado = { leads: mundo.leads || [], chips: mundo.chips || [], pressels: mundo.pressels || [], wa_statuses: mundo.wa_statuses || [], tags: [] };
+  const estado = { leads: mundo.leads || [], chips: mundo.chips || [], pressels: mundo.pressels || [], wa_statuses: mundo.wa_statuses || [], tags: mundo.tags || [], ...(mundo.estadoExtra || {}) };
+  // O que o bot gravou no pedido pelo handleUpdateLead (10/11/2026) e os links curtos que ele fez.
+  const gravacoes = [];
+  const curtos = [];
+  const authPorReq = new WeakMap();
   const chat = (mundo.chat || []).map((x, i) => ({ id: i + 1, chamadas: 0, alerta: 0, resp_status: '', resp_msg_id: '', ...x }));
   let seq = chat.length;
   const quem = (mundo.quem || []).slice();   // bot_quem
@@ -123,6 +127,12 @@ function monta(mundo) {
   function roda(sql, a) {
     const vazio = { results: [], meta: { changes: 0 } };
     const um = { results: [], meta: { changes: 1 } };
+    // 10/11/2026: a oferta do "sim" vale so a primeira mensagem da pessoa depois dela; o link curto do pedido; o usuario
+    // de quem pediu a acao (pro handleUpdateLead).
+    if (/FROM bot_chat WHERE jid=\? AND de_jid=\? AND ts>\? AND msg_id<>\?/.test(sql)) return { results: [{ n: chat.filter((x) => x.jid === a[0] && x.de_jid === a[1] && Number(x.ts) > Number(a[2]) && x.msg_id !== a[3]).length }], meta: {} };
+    if (/SELECT code FROM short_links WHERE lead_id = \? AND url = \?/.test(sql)) { const x = curtos.find((c) => c.lead_id === String(a[0]) && c.url === String(a[1])); return { results: x ? [{ code: x.code }] : [], meta: {} }; }
+    if (/INSERT INTO short_links/.test(sql)) { curtos.push({ code: a[0], url: a[1], created_at: a[2], lead_id: a[3], created_by: a[4] }); return um; }
+    if (/SELECT id, login, name, abbr, role/.test(sql)) { const u = USERS.find((x) => x.id === String(a[0])); return { results: u ? [{ id: u.id, login: u.id, name: u.name, role: u.role, afiliado_id: u.afiliado_id || null }] : [], meta: {} }; }
     // app_config
     if (/INSERT INTO app_config/.test(sql) && /DO NOTHING/.test(sql)) {
       const k = String(a[0]);
@@ -288,10 +298,34 @@ function monta(mundo) {
     isAfiliado: () => false,
     json: (o, s) => ({ _json: o, _status: s || 200 }),
     err: (m, s) => ({ _json: { error: m }, _status: s || 400 }),
+    // 10/11/2026: o que o bot da cobranca usa de fora do modulo. A gravacao no pedido e a rota da dash de verdade em
+    // producao; aqui ela registra o patch, confere quem pediu e aplica o que a dash deixaria (cobrador nao troca `cob`).
+    _cobConversas: async () => (mundo.conversas instanceof Map ? mundo.conversas : new Map(Object.entries(mundo.conversas || {}))),
+    _n8sDoDono: () => [],
+    _shortEnsure: async () => {},
+    _shortCode: () => 'cod' + (curtos.length + 1),
+    _authPorReq: authPorReq,
+    Request,
+    _cobAceitos: async () => USERS.filter((u) => !u.afiliado_id && ['cobrador', 'diretor', 'socio'].includes(u.role)).map((u) => ({ id: u.id, com_pct: u.role === 'cobrador' ? 3 : 0, direcao: u.role !== 'cobrador' })),
+    handleUpdateLead: async (req, _env, id) => {
+      const u = authPorReq.get(req);
+      const body = JSON.parse(await req.text());
+      const patch = body.patch || {};
+      gravacoes.push({ id: String(id), patch, quem: u ? u.id : '' });
+      if (mundo.gravaFalha) return { _json: { ok: false, error: mundo.gravaFalha }, _status: 409 };
+      const lead = estado.leads.find((l) => String(l.id) === String(id));
+      if (!lead) return { _json: { error: 'Lead não encontrado' }, _status: 404 };
+      const dir = u && ['diretor', 'socio'].includes(u.role);
+      const negados = ('cob' in patch && !dir) ? ['cob'] : [];
+      if ('wa' in patch) lead.wa = patch.wa;
+      if ('cob' in patch && dir) lead.cob = patch.cob;
+      if (patch.comment_add) (lead.comments = lead.comments || []).unshift({ who: u.id, tx: patch.comment_add.tx, time: '05/11 11:00' });
+      return { _json: { ok: true, version: 2, ...(negados.length ? { negados } : {}) }, _status: 200 };
+    },
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade, _botIaSemVocativo, BOT_IA_ASSUNTO_VENDA_RE, BOT_IA_GRITO_RE, _botIaTextoProblema, _botIaFichaCurta, _botIaChamouOutroPeloNome, BOT_IA_MARCA_OUTRO_RE, _botIaLinhaDoTempo, _botIaSoRiso, _botIaEscolheForma, _botIaTempero, _botIaRepete, _botIaFormaDe, _botIaMarcoAgora, BOT_IA_QUEM_MANDA_RE, _botIaVersaoOk, _botIaComMidia, _botIaCitouResposta, _botIaReacaoOk, BOT_IA_TOM_VEND, BOT_IA_TOM_COB, BOT_IA_CAIU, BOT_IA_CAIU_SEM_AVISO, BOT_IA_FESTA_REACOES, _botIaNumeroCaiu };');
-  return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo };
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade, _botIaSemVocativo, BOT_IA_ASSUNTO_VENDA_RE, BOT_IA_GRITO_RE, _botIaTextoProblema, _botIaFichaCurta, _botIaChamouOutroPeloNome, BOT_IA_MARCA_OUTRO_RE, _botIaLinhaDoTempo, _botIaSoRiso, _botIaEscolheForma, _botIaTempero, _botIaRepete, _botIaFormaDe, _botIaMarcoAgora, BOT_IA_QUEM_MANDA_RE, _botIaVersaoOk, _botIaComMidia, _botIaCitouResposta, _botIaReacaoOk, BOT_IA_TOM_VEND, BOT_IA_TOM_COB, BOT_IA_CAIU, BOT_IA_CAIU_SEM_AVISO, BOT_IA_FESTA_REACOES, _botIaNumeroCaiu, _botIaFoneParecido, _botIaFoneFora, _botIaListaTipo, _botIaConfirma, _botIaFilaDe, _botIaListaTexto, _botIaOndeAparece, _botCobSituacao, _botDadosCob, _botTextoCobranca, _botIaMascaraNum, _botIaPendChave };');
+  return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo, gravacoes, curtos };
 }
 
 let ok = 0;
@@ -546,7 +580,7 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   const { api, env, chamadas } = monta({ ...MUNDO, pressels, numlog });
   await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   const user = chamadas[0].user;
-  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; fica de plantão pra madrugada e religa quando ele abrir o app\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, o motivo e o app (de plantao), nao queda');
+  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; fica de plantão \(recebe quando nenhum número está ligado\) até ele voltar e ligar\) · interruptor: desligado em todas as pressels \(1 desligadas porque o SellWave Web fechou\)/.test(user), 'app fechado: nao recebe, o motivo e o app (de plantao), nao queda');
   conf(/\.\.\.-0001: [^\n]*última mudança no interruptor: desligado por Sistema \(SellWave Web fechado\) em 05\/11 10:00/.test(user), 'quem mexeu no interruptor por ultimo, e quando (o registro mais novo do numero)');
   conf(!/Kevin Marques em/.test(user), 'o registro de outro vendedor nao entra');
   conf(/0 recebendo lead agora/.test(user), 'e o cabecalho conta zero recebendo');
@@ -562,14 +596,15 @@ titulo('7. O contexto que vai pra IA (so o que a pessoa pode ver, com prova)');
   const { api, env, chamadas } = monta({ ...MUNDO, pressels });
   await api._botIaResponder(env, cfgDe(api), pacote({ texto: '@Barbadinho meu numero caiu?', menciona: true, marcado: true }));
   const user = chamadas[0].user;
-  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; [^)]*\) · interruptor: desligado em todas as pressels/.test(user), 'pressel de afiliado nao liga o numero da casa');
+  conf(/\.\.\.-0001: em uso · NÃO recebe lead agora \(o SellWave Web dele fechou; fica de plantão \([^)]*\) até ele voltar e ligar\) · interruptor: desligado em todas as pressels/.test(user), 'pressel de afiliado nao liga o numero da casa');
 }
 {
   const { api, env, chamadas } = monta(MUNDO);
   const cfg = cfgDe(api);
   await api._botIaResponder(env, cfg, { ...pacote({ texto: 'como ta minha mesa hoje?', menciona: true, jid: GC, de_jid: '111222333444@lid', de_fone: '', de_nome: 'Bryan' }), grupo: 'cob' });
   const user = chamadas[0].user, system = chamadas[0].system;
-  conf(/Mesa de Bryan Amorim agora: convertidos hoje 0, faltam cobrar 1, atrasados 0, a receber 1 pedido\./.test(user), 'grupo dos cobradores: a mesa de quem perguntou, em PEDIDOS');
+  conf(/Mesa de Bryan Amorim agora: convertidos hoje 0, faltam cobrar 1 \(desses, 1 em cobrança, com combinado andando: [^)]*\), atrasados 0 \(retorno vencido num dia anterior, sem combinado\), a receber 1 pedido\./.test(user), 'grupo dos cobradores: a mesa de quem perguntou, em PEDIDOS (o combinado separado do atrasado, 10/11)');
+  conf(/Agenda de Bryan agora: 1 pedido na fila de cobrança, 0 com retorno vencido, 0 com retorno pra hoje, 0 sem retorno marcado/.test(user), 'e a agenda dele (retorno vencido, hoje, sem retorno, a caminho) pra pergunta de numero');
   conf(!/R\$/.test(user), 'e nenhum R$ (o valor total nao vai pros cobradores)');
   conf(/Jeito de falar neste grupo: Tom da cobranca X/.test(system), 'o system leva o tom DO GRUPO');
   conf(/Instruções da direção[^\n]*\nNunca prometa prazo de entrega\./.test(system), 'e as instrucoes da direcao');
@@ -668,20 +703,20 @@ titulo('9. O bloco do pedido (nasce de _cobDetalhe, sem CPF, endereco nem coment
   const nomes = await api._cobNomes(env);
   const bloco = (id, completo) => api._botIaPedidoTexto(LEADS.find((l) => l.id === id), estado, nomes, {}, completo !== false);
   const t1 = bloco(1793903844876);
-  conf(/^#1793903844876 Joselina Da Silva \(Sorocaba\/SP\) · GlicoSix 3 un · R\$ 297,00 · cadastrado em 01\/11 por Guilherme · cobrador: Bryan Amorim/.test(t1), 'cabecalho: id, nome, cidade, produto, valor, quando, vendedor e cobrador');
+  conf(/^#1793903844876 Joselina Da Silva \(Sorocaba\/SP\) · GlicoSix 3 un · R\$ 297,00 · cadastrado em 01\/11\nVendedor \(quem vendeu e cadastrou\): Guilherme\. Cobrador \(dono da cobrança\): Bryan Amorim\./.test(t1), 'cabecalho: id, nome, cidade, produto, valor e quando; vendedor e cobrador numa linha propria, cada um com o seu papel (10/11)');
   conf(/Situação: pago em 04\/11 \(Pix\)\./.test(t1), 'pago: "pago em DD/MM" com a forma');
   conf(/Pagamento: quitado\./.test(t1), 'pagamento quitado');
   conf(/Último movimento: Entregues -> Pagos em 04\/11 15:20 \(Bryan Amorim\)\./.test(t1), 'so o ULTIMO movimento do historico, com quem fez');
-  conf(/Comentários no pedido: 1, o último em 04\/11 15:21 \(o conteúdo fica na dash\)\./.test(t1), 'comentarios: so a contagem e a data');
+  conf(/Anotações no pedido: 1, a última em 04\/11 15:21 \(o texto não vem pra você\)\./.test(t1), 'comentarios: so a contagem e a data');
   conf(!/99999-0000/.test(t1) && !/cliente pagou/.test(t1), 'o TEXTO do comentario nunca vai (tem telefone dentro dele)');
   conf(!/12345678901/.test(t1) && !/123\.456/.test(t1) && !/Rua das Flores/.test(t1) && !/18000/.test(t1), 'nem CPF, nem endereco, nem CEP');
   conf(!/https?:/.test(t1) && !/fivedelivery/.test(t1), 'nem link');
   const t2 = bloco(2);
-  conf(/Situação: entregue, em cobrança · transportadora diz: Entregue \(03\/11\)\./.test(t2), 'Entregues nao pago: a coluna em palavras e o selo da transportadora com a data');
+  conf(/Situação: entregue, em cobrança · recebeu em 03\/11 \(há 1 dia\) · transportadora diz: Entregue \(03\/11\)\./.test(t2), 'Entregues nao pago: a coluna em palavras, ha quanto tempo o cliente recebeu e o selo da transportadora com a data');
   conf(/Pagamento: não pago, falta R\$ 197,00\./.test(t2) && /Retorno marcado: 07\/11 09:00\./.test(t2), 'falta pagar e o retorno marcado (agend) em DD/MM HH:MM');
   conf(/Rastreio: sem código ainda\./.test(t2), 'sem rastreio');
   const t3 = bloco(3);
-  conf(/falta R\$ 147,00 \(já entrou R\$ 50,00 em 1 parcela\)\./.test(t3) && /cobrador: sem dono ainda/.test(t3), 'pagamento parcial: "ja entrou" e o saldo; sem cobrador = "sem dono ainda"');
+  conf(/falta R\$ 147,00 \(já entrou R\$ 50,00 em 1 parcela\)\./.test(t3) && /Cobrador \(dono da cobrança\): sem cobrador ainda\./.test(t3), 'pagamento parcial: "ja entrou" e o saldo; sem cobrador = "sem cobrador ainda"');
   conf(/Retorno marcado: nenhum\./.test(t3), 'sem retorno marcado');
   conf(/Situação: aguardando aprovação da direção\./.test(bloco(6)), 'manual nao aceito: aguardando aprovacao');
   conf(/Aprovação da direção: ainda NÃO aprovado/.test(bloco(6)) && !/Aprovação da direção/.test(bloco(2)), 'pedido manual diz se a direcao ja aprovou; pedido da plataforma nao tem a linha');
@@ -702,7 +737,9 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   conf(r.acao === 'respondeu' && r.resposta === 'Pagou sim, dia 04/11 no Pix.' && r.chamadas === 1 && r.modelo === 'gemini-3.5-flash', 'JSON normal: respondeu, 1 chamada, primeiro modelo da cascata');
   conf(chamadas[0].body.generationConfig.responseMimeType === 'application/json' && chamadas[0].body.generationConfig.thinkingConfig.thinkingBudget === 0, 'pede JSON e sem pensamento (senao o 2.5 gasta o teto pensando)');
   ({ r } = await pergunta({ ia: [{ json: { responder: false, texto: '' } }] }));
-  conf(r.acao === 'respondeu' && /^tô aqui!/.test(r.resposta) && /saiu a resposta padrão/.test(r.motivo), 'MARCADO e a IA calou (responder:false): sai a resposta padrao do grupo, nunca silencio');
+  conf(r.acao === 'respondeu' && /^Joselina Da Silva \(Sorocaba\/SP\): pago em 04\/11 \(Pix\)\. cobrador Bryan, vendedor Guilherme\./.test(r.resposta) && /resposta pronta do pedido/.test(r.motivo), 'MARCADO, a IA calou e tem pedido na mao: sai a resposta pronta do pedido (10/11), nunca silencio');
+  ({ r } = await pergunta({ ia: [{ json: { responder: false, texto: '' } }] }, '@Barbadinho como vc ta hoje?'));
+  conf(r.acao === 'respondeu' && /^tô aqui!/.test(r.resposta) && /saiu a resposta padrão/.test(r.motivo), 'MARCADO e a IA calou sem pedido nenhum: sai a resposta padrao do grupo, nunca silencio');
   {
     const m = monta({ ...MUNDO, chat: [{ ts: agoraS() - 60, dia: DIA, grupo: 'vend', jid: GV, msg_id: 'cvz', de_jid: '5515999990001@s.whatsapp.net', de_nome: 'Guilherme', quem_id: GUI, texto: '@Barbadinho fala', acao: 'respondeu', resposta: 'fala!', motivo: 'leu: oi', chamadas: 1 }], ia: [{ json: { responder: false, texto: '' } }] });
     const r2 = await m.api._botIaResponder(m.env, cfgDe(m.api), pacote({ texto: 'e o meu app, ta travando de novo', menciona: false }));
@@ -711,11 +748,15 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
     conf(/Quando te MARCAM \(@Barbadinho\), responda sempre/.test(m.chamadas[0].system) && /no condicional/.test(m.chamadas[0].system) && /Prometer mudar seu jeito/.test(m.chamadas[0].system), 'as regras: marcado responde sempre; provavel no condicional; nao promete mudar o jeito');
   }
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Liga pra ela no 15 99999 0000.' } }] }));
-  conf(r.acao === 'calado' && /dado pessoal \(telefone\)/.test(r.motivo) && r.resposta === '', 'telefone na saida: calado (a resposta e publica)');
-  ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Manda por wa.me/5515999990000' } }] }));
+  conf(r.acao === 'respondeu' && !/99999/.test(r.resposta) && /^Joselina Da Silva/.test(r.resposta) && /escreveu dado pessoal \(telefone\); saiu a resposta pronta/.test(r.motivo), 'telefone na saida: a frase da IA NUNCA sai; com o pedido na mao sai a resposta pronta dele (10/11)');
+  ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Liga pra ela no 15 99999 0000.' } }] }, '@Barbadinho me ajuda aqui'));
+  conf(r.acao === 'calado' && /dado pessoal \(telefone\)/.test(r.motivo) && r.resposta === '', 'telefone na saida, sem pedido na mao: calado (a resposta e publica)');
+  ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Manda por wa.me/5515999990000' } }] }, '@Barbadinho me ajuda aqui'));
   conf(r.acao === 'calado' && /\(link\)/.test(r.motivo), 'link wa.me na saida: calado');
-  ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'CPF 123.456.789-01 confere' } }] }));
+  ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'CPF 123.456.789-01 confere' } }] }, '@Barbadinho me ajuda aqui'));
   conf(r.acao === 'calado' && /\(cpf\)/.test(r.motivo), 'CPF na saida: calado');
+  ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'CPF 123.456.789-01 confere' } }] }));
+  conf(r.acao === 'respondeu' && !/123\.456/.test(r.resposta) && /^Joselina/.test(r.resposta), 'CPF na saida com pedido na mao: o CPF nunca sai, sai a resposta pronta');
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'O pedido #1793903844876 da Joselina está pago.' } }] }));
   conf(r.acao === 'respondeu' && /#1793903844876/.test(r.resposta), 'o id do pedido que veio nos dados passa');
   {
@@ -724,7 +765,7 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
     const x = await pergunta({ leads, ia: [{ json: { responder: true, texto: 'Pago. Rastreio J&T 888031023495895.' } }] });
     conf(x.r.acao === 'respondeu' && /888031023495895/.test(x.r.resposta), 'o codigo de rastreio do pedido encontrado passa pela mascara');
     const y = await pergunta({ leads, ia: [{ json: { responder: true, texto: 'Rastreio 999999999999999.' } }] });
-    conf(y.r.acao === 'calado' && /telefone/.test(y.r.motivo), 'um numero longo que nao veio nos dados continua barrado');
+    conf(!/999999999999999/.test(y.r.resposta) && /dado pessoal \(telefone\)/.test(y.r.motivo), 'um numero longo que nao veio nos dados continua barrado (sai a resposta pronta do pedido no lugar)');
   }
   ({ r } = await pergunta({ ia: [{ json: { responder: true, texto: 'Pagou **sim** \u2014 relaxa' } }] }));
   conf(r.resposta === 'Pagou *sim*, relaxa', '**negrito** vira *negrito* e travessao vira virgula');
@@ -759,7 +800,9 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   const dois = await pergunta({ ia: [{ status: 429 }, { status: 429 }, JSON_OK] });
   conf(dois.r.acao === 'respondeu' && dois.chamadas.length === 3, '429 nos dois primeiros: o terceiro modelo responde (3 tentativas por mensagem)');
   const tres = await pergunta({ ia: [{ status: 429 }] });
-  conf(tres.r.acao === 'respondeu' && tres.chamadas.length === 3 && /cota da IA esgotada/.test(tres.r.motivo) && /manda de novo/.test(tres.r.resposta), '429 nos tres modelos: marcado recebe a resposta reserva (nunca vacuo)');
+  conf(tres.r.acao === 'respondeu' && tres.chamadas.length === 3 && /cota da IA esgotada/.test(tres.r.motivo) && /^Joselina Da Silva/.test(tres.r.resposta) && /resposta pronta do pedido/.test(tres.r.motivo), '429 nos tres modelos com o pedido na mao: sai a resposta pronta dele (10/11)');
+  const tresSem = await pergunta({ ia: [{ status: 429 }] }, '@Barbadinho bom dia');
+  conf(tresSem.r.acao === 'respondeu' && /manda de novo/.test(tresSem.r.resposta) && /saiu a resposta reserva/.test(tresSem.r.motivo), '429 nos tres modelos sem pedido: marcado recebe a resposta reserva (nunca vacuo)');
   conf(Number(tres.cfgdb.bot_ia_quota_ate) === agoraS() + 3600, 'e a pausa de 1 h fica gravada em bot_ia_quota_ate');
   const max = await pergunta({ ia: [{ finish: 'MAX_TOKENS', json: { responder: true, texto: 'cortado' } }, JSON_OK] });
   conf(max.r.acao === 'respondeu' && max.chamadas.length === 2 && max.r.modelo === 'gemini-2.5-flash', 'finishReason MAX_TOKENS: passa pro proximo modelo');
@@ -767,7 +810,7 @@ const pergunta = (mundoIa, texto) => { const m = monta({ ...MUNDO, ...mundoIa })
   const vazio = await pergunta({ ia: [{ texto: '' }, JSON_OK] });
   conf(vazio.r.acao === 'respondeu' && vazio.chamadas.length === 2, 'texto vazio: passa pro proximo');
   const proibido = await pergunta({ ia: [{ status: 403 }, JSON_OK] });
-  conf(proibido.r.acao === 'respondeu' && proibido.chamadas.length === 1 && /403/.test(proibido.r.motivo) && /manda de novo/.test(proibido.r.resposta) && !proibido.cfgdb.bot_ia_quota_ate, '403: para na hora (a chave e que esta errada), sem pausa de cota; o marcado recebe a resposta reserva');
+  conf(proibido.r.acao === 'respondeu' && proibido.chamadas.length === 1 && /403/.test(proibido.r.motivo) && /^Joselina Da Silva/.test(proibido.r.resposta) && !proibido.cfgdb.bot_ia_quota_ate, '403: para na hora (a chave e que esta errada), sem pausa de cota; com pedido na mao sai a resposta pronta');
   const fora = await pergunta({ ia: [{ status: 503 }, JSON_OK] });
   conf(fora.r.acao === 'respondeu' && fora.chamadas.length === 2, '503: passa pro proximo');
 }
@@ -2198,6 +2241,202 @@ titulo('15. As funcoes de texto');
   conf(l.texto === 'Olá *João*, tudo bem?\nSegue.' && l.barrou === '', '_botIaLimpa: tira a cerca, ** vira *, travessao vira virgula, espaco antes da quebra some');
   conf(api._botIaLimpa('Pedido 1793903844876 pago', ['1793903844876']).barrou === '' && api._botIaLimpa('Pedido 1793903844876 pago', []).barrou === 'telefone', 'sequencia longa de digitos so passa se for id que veio nos dados');
   conf(api._botIaLimpa('veja em sellwave.com.br', []).barrou === 'link' && api._botIaLimpa('(15) ...-0001 caiu', []).barrou === '', 'dominio e link; o "(DD) ...-NNNN" dos numeros passa');
+}
+
+// ══ 43. O BARBADINHO DA COBRANCA (10/11/2026) ══════════════════════════════════════════
+// Pedido do Bruno olhando o grupo dos cobradores: "preciso que o Barbadinho consiga ajudar mais os cobradores (...)
+// puxar algum lead e dar alguns detalhes um pouco melhor". Os casos sao os de verdade do grupo de 06 a 10/11: o
+// Francisco com o telefone digitado errado, o paraguaio, o Daniel esperando aprovacao, a lista de prioridade, o
+// checkout que nao abria.
+titulo('43. A cobranca: telefone parecido, onde o pedido aparece, a lista, o link e as acoes');
+const hb = (d, hm) => ms('2026-11-' + d + 'T' + hm + ':00-03:00');
+const COB_TAGS = [{ id: 'tg_parc', name: 'Pagamento Parcial' }, { id: 'tg_dev', name: 'Devolução' }, { id: 'tg_ctt', name: 'Em Contato' }];
+const COB_LEADS = [
+  { id: 9001, nome: 'Francisco Valdimir Pereira Sousa', wa: '(11) 99521-0837', cpf: '37758853072', cidade: 'São Paulo', uf: 'SP', col: 'Cobrança', at: KEVIN, cob: BRYAN, vl: 497, agend: '2026-11-06T09:00', ship: 'DELIVERED', ship_ts: hb('04', '10:00'), track: '888031031052563', link: 'https://checkout.payt.com.br/f227862e', fonte: 'paylog', five_id: 'PL-ORDEF8VYS', ts: hb('01', '10:00'), comments: [{ who: BRYAN, tx: 'Chamei o lead, aguardando resposta. tel 11 98888-7777', time: '04/11 20:55' }] },
+  { id: 9002, nome: 'Francisco Martins dos Santos Junior', wa: '(93) 98402-0826', cidade: 'Santarém', uf: 'PA', col: 'Entregues', at: GUI, cob: BRYAN, vl: 297, ship_ts: hb('03', '10:00'), ts: hb('01', '09:00') },
+  { id: 9003, nome: 'Francisco Duarte de Souza', wa: '(11) 97595-0459', cidade: 'São Paulo', uf: 'SP', col: 'Pagos', spg: 'Pago', at: KEVIN, cob: BRYAN, vl: 497, pago_ts: hb('05', '10:00'), ts: hb('01', '08:00') },
+  { id: 9004, nome: 'Braulio Valensuela', wa: '(59) 95973-3638', cidade: 'Bela Vista', uf: 'MS', col: 'Entregues', at: GUI, cob: BRYAN, vl: 497, ts: hb('01', '07:00') },
+  { id: 9005, nome: 'Daniel De Souza Firme', wa: '(31) 97131-4360', cidade: 'Belo Horizonte', uf: 'MG', col: 'A Enviar', orig: 'Manual', at: GUI, cob: BRYAN, vl: 497, agend: '2026-11-20T12:00', ts: hb('04', '15:00') },
+  { id: 9006, nome: 'Raimundo Nascimento', wa: '(91) 98111-0001', cidade: 'Belém', uf: 'PA', col: 'Retirada', at: GUI, cob: BRYAN, vl: 497, agend: '2026-11-03T09:00', hist: [{ from: 'Enviado', to: 'Retirar nos Correios', time: '01/11 10:00', who: 'five' }], ts: hb('01', '06:00') },
+  { id: 9007, nome: 'Lazaro Andrade', wa: '(62) 98111-0002', cidade: 'Goiânia', uf: 'GO', col: 'Entregues', at: KEVIN, cob: BRYAN, vl: 497, agend: '2026-11-04T10:00', ts: hb('01', '05:00') },
+  { id: 9008, nome: 'Marco Antonio Pereira', wa: '(27) 98111-0003', cidade: 'Vitória', uf: 'ES', col: 'Entregues', at: KEVIN, cob: BRYAN, vl: 497, agend: '2026-11-02T08:00', tags: ['tg_parc'], ts: hb('01', '04:00') },
+  { id: 9009, nome: 'Manoel Bezerra Da Silva', wa: '(85) 98111-0004', cidade: 'Fortaleza', uf: 'CE', col: 'Entregues', at: GUI, cob: BRYAN, vl: 497, agend: '2026-11-05T14:00', ts: hb('01', '03:00') },
+  { id: 9010, nome: 'Tereza Barbosa Inácio', wa: '(81) 98111-0005', cidade: 'Recife', uf: 'PE', col: 'Entregues', at: GUI, cob: BRYAN, vl: 497, ship_ts: hb('02', '10:00'), ts: hb('01', '02:00') },
+  { id: 9011, nome: 'Lenice de Souza Soares', wa: '(71) 98111-0006', cidade: 'Salvador', uf: 'BA', col: 'Entregues', at: GUI, cob: BRYAN, vl: 197, ship_ts: hb('03', '10:00'), ts: hb('01', '01:00') },
+  { id: 9012, nome: 'Joaquim Pereira de Souza', wa: '(15) 99111-2222', cidade: 'Sorocaba', uf: 'SP', col: 'Entregues', at: GUI, cob: BRYAN, vl: 497, agend: '2026-11-07T09:00', ts: hb('01', '00:00') },
+  { id: 9013, nome: 'Maria Daura Souza', wa: '(48) 98111-0007', cidade: 'Florianópolis', uf: 'SC', col: 'Saiu para Entrega', at: GUI, cob: BRYAN, vl: 497, agend: '2026-11-03T12:00', hist: [{ from: 'Enviado', to: 'Saiu para Entrega', time: '05/11 08:00', who: 'five' }], ts: hb('01', '00:30') },
+  { id: 9014, nome: 'Carlos Pereira Lima', wa: '(11) 98111-0008', cidade: 'Campinas', uf: 'SP', col: 'Entregues', at: GUI, cob: HAYNAN, vl: 297, agend: '2026-11-04T09:00', ts: hb('01', '00:40') },
+];
+// O cliente da 9012 escreveu hoje 10:30 num numero do Bryan e ninguem respondeu (o `contato` do quadro do app).
+const COB_CONV = { '91112222': { in: Math.floor(hb('05', '10:30') / 1000), out: Math.floor(hb('04', '18:00') / 1000), n8: '99990002' } };
+// Uma copia nova por cenario: a gravacao de mentira mexe no pedido (o telefone trocado, a anotacao)
+const cobMundo = () => ({ ...MUNDO, leads: JSON.parse(JSON.stringify(COB_LEADS)), tags: COB_TAGS, conversas: COB_CONV });
+const doBryan = (texto, extra) => ({ ...pacote({ jid: GC, de_jid: '111222333444@lid', de_fone: '5515999990002', de_nome: 'Bryan', texto, menciona: true, ...(extra || {}) }), grupo: 'cob' });
+const doBruno = (texto, extra) => ({ ...pacote({ jid: GC, de_jid: '5515999990009@s.whatsapp.net', de_fone: '5515999990009', de_nome: 'Bruno', texto, menciona: true, ...(extra || {}) }), grupo: 'cob' });
+const OFERTA = 'o telefone do cadastro termina em 0837 e o que vc mandou em 8373. quer que eu troque o do pedido pelo que vc mandou? responde *sim*';
+{
+  const { api } = monta({});
+  conf(api._botIaFoneParecido('+55 11 95210-8373', '(11) 99521-0837') && !api._botIaFoneParecido('(11) 95210-8373', '(21) 91234-5678') && !api._botIaFoneParecido('(11) 95210-8373', '11 5210-8373') && !api._botIaFoneParecido('19600-000', '(19) 96000-0000'), 'telefone parecido: o do Francisco (um 9 a mais e o 3 do fim perdido) e; numero qualquer, o mesmo numero sem o nono digito e CEP nao');
+  conf(api._botIaFoneFora('(59) 95973-3638') && api._botIaFoneFora('+595 973 363 838') && !api._botIaFoneFora('(11) 95210-8373') && !api._botIaFoneFora('+55 82 9399-5560'), 'numero de fora do Brasil: DDD que nao existe ou codigo de pais que nao e 55');
+  const tipo = (t) => api._botIaListaTipo(api._botIaNorm(t));
+  conf(tipo('barbadinho, você consegue me auxiliar em qual lead devo dar prioridade máxima?') === 'prioridade' && tipo('consegue me enviar em uma lista com nomes em qual devo dar prioridade?') === 'prioridade', 'pedido de lista do Bryan em 06/11: prioridade');
+  conf(tipo('quantos clientes tenho que cobrar hoje?') === '' && tipo('de quem é o lead Daniel?') === '' && tipo('quem é o cara do momento?') === '' && tipo('quais os nomes dos cobradores?') === '', 'pergunta de numero, de dono, o cara do momento e os nomes do time nao sao lista');
+  conf(tipo('qual a ordem que eu cobro hoje?') === 'prioridade' && tipo('manda a lista') === 'prioridade', '"qual a ordem que eu cobro" e "manda a lista": a fila inteira');
+  conf(tipo('retornos de hoje') === 'hoje' && tipo('os atrasados') === 'atrasados' && tipo('quem me escreveu') === 'contato' && tipo('quais estão sem retorno') === 'sem_retorno', 'o que o "e mais" ensina a pedir funciona sozinho');
+  conf(tipo('quantos sao os atrasados?') === '' && tipo('o lead ficou sem retorno, o que eu faço?') === '', '"quantos" e numero (a IA responde) e "lead sem retorno" e o cliente que sumiu, nao a lista');
+  {
+    const f = { fila: 6, contato: [], hoje: [], proximos: [], semRetorno: [], chegando: [], pagosHoje: [], pagosOntem: [], aprovacao: 0,
+      atrasados: [1, 2, 3, 4, 5, 6].map((n) => ({ l: { nome: 'Cliente ' + n, col: 'Entregues', cidade: 'Itu', uf: 'SP' }, t: ms('2026-11-0' + n + 'T09:00:00-03:00') - 10 * 86400000 })) };
+    const t = api._botIaListaTexto(f, 'prioridade', { nome: 'Bryan Amorim' }, true, RELOGIO.agora);
+    conf(/\ne mais 2: me pede "os atrasados" que eu mando todos\n/.test(t), 'na lista inteira, o "e mais" diz como pedir o grupo todo');
+    conf(!/me pede/.test(api._botIaListaTexto(f, 'atrasados', { nome: 'Bryan Amorim' }, true, RELOGIO.agora)), 'na lista de um grupo so, nao');
+  }
+  conf(tipo('quais estão pra retirar na agência?') === 'retirada' && tipo('me manda os atrasados') === 'atrasados' && tipo('quem pagou hoje?') === 'pagos' && tipo('quais retornos de hoje?') === 'hoje' && tipo('quem me escreveu e eu nao respondi?') === 'contato' && tipo('quais estao sem retorno?') === 'sem_retorno', 'os tipos: retirada, atrasados, pagos, hoje, quem escreveu e sem retorno');
+  const c = api._botIaConfirma;
+  conf(c('sim') === 'sim' && c('Sim, pode') === 'sim' && c('pode sim barbadinho') === 'sim' && c('ok') === 'sim' && c('isso ai') === 'sim', 'sim, pode, ok, isso ai: confirmam');
+  conf(c('não') === 'nao' && c('deixa quieto') === 'nao' && c('nao precisa') === 'nao', 'nao, deixa quieto, nao precisa: recusam');
+  conf(c('pode deixar') === '' && c('sim, mas amanha eu vejo isso') === '' && c('simbora galera') === '', '"pode deixar", frase comprida e outra palavra: nem sim nem nao');
+  conf(api._botIaMascaraNum('cliente pagou 2x de 250, tel 11 98888-7777, cpf 053.334.448-46, dia 10/11/2026') === 'cliente pagou 2x de 250, tel final 7777, cpf final 4846, dia 10/11/2026', 'a anotacao que vai pro grupo: telefone e CPF so pelo final, data e valor ficam');
+}
+{
+  // O FRANCISCO DO BRYAN (10/11): WhatsApp 11 95210-8373, cadastro (11) 99521-0837. Antes: os 4 Franciscos da fila.
+  const m = monta({ ...cobMundo(), ia: [{ json: { leitura: 'quer o pedido na dash dele', responder: true, texto: 'C1 já é da sua fila, em cobrança desde 04/11' } }] });
+  const cfg = cfgDe(m.api);
+  const r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco joga ele na minha dash por favor'));
+  const u = m.chamadas[0].user;
+  conf(/Pedido encontrado:\n#9001 C\d+ \(São Paulo\/SP\)/.test(u) && !/#9002|#9003/.test(u), 'telefone digitado errado no cadastro: acha o pedido certo (telefone parecido + nome), sem os outros Franciscos');
+  conf(/Telefone: o do cadastro é DIFERENTE do da mensagem \(no cadastro termina em 0837, na mensagem em 8373\)/.test(u), 'a IA sabe que o telefone do cadastro esta diferente (so pelos finais)');
+  conf(/Vendedor \(quem vendeu e cadastrou\): Kevin Marques\. Cobrador \(dono da cobrança\): Bryan Amorim\./.test(u), 'vendedor e cobrador em linhas de papel separado');
+  conf(/Na dash de Bryan: está na fila de cobrança dele \(Faltam cobrar e Agenda\)/.test(u), 'onde aparece: na fila de cobranca dele');
+  conf(/Ele pediu pra jogar esse pedido pra dash dele: o pedido JÁ É da fila dele/.test(u), '"joga na minha dash" de pedido que ja e dele: a IA sabe que ja e');
+  conf(/Link de pagamento: tem \(se pedirem, o sistema manda/.test(u) && /Anotações no pedido: 1/.test(u) && !/Chamei o lead/.test(u), 'a IA sabe que tem link e anotacao, sem ver o texto da anotacao');
+  conf(!/99521|95210|37758853072|98888|payt/.test(u), 'nenhum telefone inteiro, CPF ou link vai pra IA');
+  conf(r.acao === 'respondeu' && /^Francisco Valdimir Pereira Sousa já é da sua fila/.test(r.resposta), 'a resposta da IA sai com o nome do cliente de volta');
+  conf(r.resposta.indexOf('_última anotação (Bryan, 04/11 20:55): Chamei o lead, aguardando resposta. tel final 7777_') > 0, 'embaixo, a ultima anotacao do pedido (telefone so pelo final)');
+  conf(r.resposta.indexOf(OFERTA) > 0, 'e a oferta de trocar o telefone do cadastro');
+  const chave = m.api._botIaPendChave(GC, '111222333444@lid');
+  const pend = JSON.parse(m.cfgdb[chave] || 'null');
+  conf(!!pend && pend.tipo === 'fone' && pend.lead === '9001' && pend.para_txt === '(11) 95210-8373' && pend.de_txt === '(11) 99521-0837' && pend.quem === BRYAN, 'a oferta fica guardada esperando o sim');
+  const r2 = await m.api._botIaResponder(m.env, cfg, doBryan('sim', { menciona: false }));
+  conf(r2.acao === 'respondeu' && /^pronto, troquei: o pedido de Francisco Valdimir Pereira Sousa agora tá com o telefone final 8373/.test(r2.resposta), '"sim" solto (sem marcar): troca e confirma');
+  const g = m.gravacoes[0] || { patch: {} };
+  conf(m.gravacoes.length === 1 && g.id === '9001' && g.quem === BRYAN && g.patch.wa === '(11) 95210-8373' && /trocado de \(11\) 99521-0837 pra \(11\) 95210-8373, a pedido de Bryan no grupo/.test((g.patch.comment_add || {}).tx || ''), 'a gravacao vai pela rota da dash como o Bryan, com uma anotacao do que mudou');
+  conf(!m.cfgdb[chave], 'e a oferta morre: uma resposta so');
+  const r3 = await m.api._botIaResponder(m.env, cfg, doBryan('sim', { menciona: false }));
+  conf(r3.acao === 'visto' && m.gravacoes.length === 1 && m.chamadas.length === 1, 'outro "sim" depois: nada, e o sim nunca gasta IA');
+}
+{
+  // O "sim" que vem depois de a pessoa falar de outra coisa nao vale; citando a oferta vale.
+  const m = monta({ ...cobMundo(), ia: [{ json: { responder: true, texto: 'C1 tá na sua fila' } }] });
+  const cfg = cfgDe(m.api);
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco pagou?'));
+  m.chat.push({ id: 900, ts: agoraS() + 5, dia: DIA, grupo: 'cob', jid: GC, msg_id: 'outra', de_jid: '111222333444@lid', de_nome: 'Bryan', texto: 'heynan tu ta on?', acao: 'visto' });
+  const r = await m.api._botIaResponder(m.env, cfg, doBryan('sim', { menciona: false }));
+  conf(r.acao === 'visto' && !m.gravacoes.length, 'o "sim" depois de falar de outra coisa nao troca nada');
+  const r2 = await m.api._botIaResponder(m.env, cfg, doBryan('sim', { menciona: false, responde: true, citado: OFERTA }));
+  conf(r2.acao === 'respondeu' && m.gravacoes.length === 1, 'citando a oferta, vale');
+}
+{
+  const m = monta({ ...cobMundo(), ia: [{ json: { responder: true, texto: 'C1 tá na sua fila' } }] });
+  const cfg = cfgDe(m.api);
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco pagou?'));
+  const r = await m.api._botIaResponder(m.env, cfg, doBryan('não, deixa', { menciona: false }));
+  conf(r.acao === 'respondeu' && r.resposta === 'beleza, deixei como tá' && !m.gravacoes.length && !m.cfgdb[m.api._botIaPendChave(GC, '111222333444@lid')], '"nao": nada muda e a oferta morre');
+}
+{
+  // No grupo de teste a oferta e o "sim" funcionam, mas nada e gravado.
+  const m = monta({ ...cobMundo(), ia: [{ json: { responder: true, texto: 'C1 tá na sua fila' } }] });
+  const cfg = cfgDe(m.api);
+  const quemT = { id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador', chefe: false };
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco pagou?'), { grupoTeste: true, quem: quemT });
+  const r = await m.api._botIaResponder(m.env, cfg, doBryan('sim', { menciona: false }), { grupoTeste: true, quem: quemT });
+  conf(/^\(grupo de teste: não mexi em nada\)/.test(r.resposta) && !m.gravacoes.length, 'grupo de teste: diz o que faria e nao grava');
+  const t = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 95210-8373 | ~Francisco pagou?'), { teste: true, quem: quemT });
+  conf(t.resposta.indexOf('responde *sim*') < 0, 'no Pergunte ao bot a troca nem e oferecida');
+}
+{
+  // O paraguaio e o Daniel (esperando aprovacao).
+  const m = monta({ ...cobMundo(), ia: [JSON_OK] });
+  const cfg = cfgDe(m.api);
+  const r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho nao consigo falar com Braulio Valensuela (59) 95973-3638, ele nao aparece na minha dash'));
+  conf(/Telefone: número de FORA do Brasil no cadastro \(o "DDD" 59 não existe aqui\)/.test(m.chamadas[0].user) && r.resposta.indexOf('responde *sim*') < 0, 'numero de fora do Brasil: a IA sabe e nao tem oferta de troca');
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho de quem é o lead +55 31 7131-4360 | ~Daniel De Souza Firme'));
+  const u = m.chamadas[1].user;
+  conf(/Vendedor \(quem vendeu e cadastrou\): Guilherme\. Cobrador \(dono da cobrança\): Bryan Amorim\./.test(u) && /Na dash de Bryan: NÃO aparece em dash nenhuma \(nem no Kanban nem no app\) até a direção aprovar/.test(u), 'o Daniel: o cobrador e o proprio Bryan, e nao aparece porque espera a aprovacao (o "do Guilherme" de 09/11)');
+  conf(/"de quem é" o pedido quer dizer de qual COBRADOR é a fila/.test(m.chamadas[1].system), 'e a regra do "de quem e" esta no prompt');
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho +55 11 91234-0000 ~Francisco joga ele na minha dash'));
+  conf(/NENHUM pedido tem o telefone da mensagem\. Pelo NOME há estes candidatos/.test(m.chamadas[2].user), 'telefone que nao bate com nada e nome com varios: a IA sabe que o telefone nao bateu (nada de "desse numero")');
+}
+{
+  // A LISTA (06/11, "consegue me enviar em uma lista com nomes em qual devo dar prioridade?").
+  const m = monta({ ...cobMundo(), ia: [JSON_OK] });
+  const cfg = cfgDe(m.api);
+  const r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho consegue me enviar em uma lista com nomes em qual devo dar prioridade?'));
+  const t = r.resposta;
+  conf(r.acao === 'respondeu' && m.chamadas.length === 0 && /sem IA/.test(r.motivo), 'a lista sai do codigo, sem IA');
+  conf(t.indexOf('*Sua fila agora:* 10 em cobrança · 1 te escreveu sem resposta · 3 com retorno vencido · 1 pra hoje · 4 sem retorno') === 0, 'o resumo da fila no topo');
+  const pos = ['Joaquim Pereira de Souza · Sorocaba/SP · te escreveu hoje 10:30', 'Marco Antonio Pereira · Vitória/ES · retorno era 02/11 08:00', 'Raimundo Nascimento · Belém/PA · retorno era 03/11 09:00 · na agência', 'Lazaro Andrade · Goiânia/GO · retorno era ontem 10:00', 'Manoel Bezerra Da Silva · Fortaleza/CE · retorno 14:00', 'Braulio Valensuela · Bela Vista/MS · entregue 01/11 · sem retorno', 'Tereza Barbosa Inácio · Recife/PE · entregue 02/11 · sem retorno', 'Francisco Martins dos Santos Junior · Santarém/PA · entregue 03/11 · sem retorno', 'Lenice de Souza Soares · Salvador/BA · entregue 03/11 · sem retorno'].map((x) => t.indexOf(x));
+  conf(pos.every((p, i) => p > 0 && (i === 0 || p > pos[i - 1])), 'na ordem da Agenda: quem escreveu, retorno vencido (o mais velho primeiro), hoje, sem retorno (o maior valor primeiro)');
+  conf(!/R\$/.test(t) && !/Daniel|Carlos Pereira|Francisco Duarte|Maria Daura/.test(t), 'sem valor, sem o pedido esperando aprovacao, sem o pago, sem o do Haynan e sem o que esta na rua');
+  let x = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho quais estão pra retirar?'));
+  conf(x.resposta === '*Na agência pra retirar (o mais antigo primeiro)*\n1. Raimundo Nascimento · Belém/PA · na agência desde 01/11 · retorno 03/11 09:00', 'lista dos que estao na agencia');
+  x = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho quem pagou hoje?'));
+  conf(/^\*Pagaram hoje\*\n1\. Francisco Duarte de Souza · São Paulo\/SP · pagou 10:00$/.test(x.resposta), 'quem pagou hoje');
+  x = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho me manda os atrasados'));
+  conf(/^\*Sua fila: 3 retornos vencidos\* \(o mais antigo primeiro\)/.test(x.resposta), 'so os retornos vencidos');
+  x = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho manda a lista do Haynan'));
+  conf(/^a fila de Haynan é com ele/.test(x.resposta), 'cobrador nao ve a lista do outro');
+  x = await m.api._botIaResponder(m.env, cfg, doBruno('@Barbadinho manda a lista da cobrança'));
+  conf(/^\*Cobrança agora\*\nBryan: 10 em cobrança · 1 escreveu sem resposta · 3 com retorno vencido · 1 pra hoje · 4 sem retorno\nHaynan: 1 em cobrança · 1 com retorno vencido/.test(x.resposta) && !/Joaquim/.test(x.resposta), 'a direcao sem dizer de quem: o retrato de cada cobrador, sem nome de cliente');
+  x = await m.api._botIaResponder(m.env, cfg, doBruno('@Barbadinho manda a lista do Bryan'));
+  conf(/^\*Fila de Bryan agora:\* 10 em cobrança · 1 escreveu sem resposta/.test(x.resposta), 'a direcao com o nome: a lista daquele cobrador');
+  conf(m.chamadas.length === 0, 'nenhuma lista gastou IA');
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho quantos faltam cobrar hj?'));
+  conf(m.chamadas.length === 1 && /Agenda de Bryan agora: 10 pedidos na fila de cobrança, 3 com retorno vencido, 1 com retorno pra hoje, 4 sem retorno marcado, 1 a caminho \(1 saindo pra entrega\), 1 esperando aprovação da direção/.test(m.chamadas[0].user), 'pergunta de numero nao e lista: vai pra IA, com a agenda dele nos dados');
+}
+{
+  // O LINK (09/11, "nao consigo acessar o checkout dele para enviar o boleto").
+  const m = monta({ ...cobMundo(), ia: [{ json: { responder: true, texto: 'C1 tá em cobrança, falta R$ 497' } }] });
+  const cfg = cfgDe(m.api);
+  let r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho nao consigo acessar o checkout do Francisco Valdimir pra mandar o boleto'));
+  conf(r.resposta.indexOf('Link de pagamento de Francisco Valdimir Pereira Sousa: https://sellwave.com.br/checkout/cod1') > 0, 'o link de pagamento curto vai embaixo da resposta');
+  conf(m.curtos.length === 1 && m.curtos[0].lead_id === '9001' && /checkout\.payt\.com\.br\/f227862e\?/.test(m.curtos[0].url) && /utm_content=ped9001/.test(m.curtos[0].url) && m.curtos[0].created_by === 'bot:' + BRYAN, 'o link curto aponta pro checkout do pedido (o mesmo da ficha, com o utm do pedido)');
+  conf(!/37758853072|document=|full_name/.test(r.resposta) && !/payt|https?:/.test(m.chamadas[0].user), 'nada do cliente no grupo e nenhum link pra IA');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho manda o link de pagamento do Francisco Valdimir de novo'));
+  conf(m.curtos.length === 1 && r.resposta.indexOf('/checkout/cod1') > 0, 'pediu de novo: o mesmo link, sem criar outro');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho manda o rastreio do Francisco Valdimir'));
+  conf(r.resposta.indexOf('Rastreio de Francisco Valdimir Pereira Sousa: https://glico-six.rastreio.vip/rastreio?codigo=888031031052563') > 0, 'o link do rastreio');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho o Francisco Duarte pagou? manda o link'));
+  conf(!/Link de pagamento/.test(r.resposta), 'pedido pago nao ganha link de pagamento');
+}
+{
+  // ANOTAR NO PEDIDO e PASSAR DE COBRADOR (direcao).
+  const m = monta({ ...cobMundo(), ia: [JSON_OK] });
+  const cfg = cfgDe(m.api);
+  let r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho anota no pedido do Francisco Valdimir: vai pagar sexta no pix'));
+  conf(r.acao === 'respondeu' && r.resposta === 'anotado no pedido de Francisco Valdimir Pereira Sousa' && m.chamadas.length === 0, 'anota no pedido: responde sem IA');
+  conf(m.gravacoes.length === 1 && m.gravacoes[0].id === '9001' && m.gravacoes[0].quem === BRYAN && m.gravacoes[0].patch.comment_add.tx === 'vai pagar sexta no pix' && Object.keys(m.gravacoes[0].patch).length === 1, 'grava so a anotacao, como o Bryan');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho anota no pedido do Francisco: liguei e nao atendeu'));
+  conf(/^achei mais de um com esse nome/.test(r.resposta) && m.gravacoes.length === 1, 'nome que bate em varios: pergunta, nao anota');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho anota no pedido do Francisco Valdimir: teste'), { teste: true, quem: { id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador' } });
+  conf(/^\(teste: não anotei nada\)/.test(r.resposta) && m.gravacoes.length === 1, 'no Pergunte ao bot nao grava');
+  r = await m.api._botIaResponder(m.env, cfg, doBruno('@Barbadinho passa o pedido do Francisco Valdimir pro Haynan'));
+  conf(r.resposta === 'feito: o pedido de Francisco Valdimir Pereira Sousa (São Paulo/SP) agora é da fila de Haynan' && m.gravacoes.length === 2 && m.gravacoes[1].patch.cob === HAYNAN && m.gravacoes[1].quem === 'socio_x4dy6d', 'a direcao passa o pedido de cobrador, pela rota da dash');
+  r = await m.api._botIaResponder(m.env, cfg, doBruno('@Barbadinho passa o Francisco Valdimir pro Haynan'));
+  conf(/já é da fila de Haynan/.test(r.resposta) && m.gravacoes.length === 2, 'de novo: ja e dele, nada gravado');
+  const antes = m.chamadas.length;
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho passa o Lazaro Andrade pro Haynan'));
+  conf(m.gravacoes.length === 2 && m.chamadas.length === antes + 1, 'cobrador pedindo pra passar: nao grava, vai pra IA (so a direcao troca o cobrador)');
+  r = await m.api._botIaResponder(m.env, cfg, doBruno('@Barbadinho passa o link pro cliente do Lazaro'));
+  conf(m.gravacoes.length === 2, '"passa o link pro cliente": nao e troca de cobrador');
+}
+{
+  // O cobrador pedindo pra jogar na dash dele um pedido que nao e dele: a IA explica e a direcao e avisada.
+  const leads = COB_LEADS.map((l) => (l.id === 9007 ? { ...l, cob: HAYNAN } : l));
+  const m = monta({ ...cobMundo(), leads, ia: [JSON_OK] });
+  const cfg = cfgDe(m.api);
+  await m.api._botIaResponder(m.env, cfg, { ...doBryan('@Barbadinho joga o Lazaro Andrade na minha dash'), grupo: 'cob' });
+  conf(/Pedido\(s\) com esse nome ou número existem, mas são de outra pessoa: C\d+ \(fila de Haynan\)/.test(m.chamadas[0].user), 'pedido de outro cobrador: a IA diz de quem e');
 }
 
 console.log('\n' + (falhas.length ? 'FALHOU' : 'OK') + ': ' + ok + ' de ' + (ok + falhas.length) + ' conferencias');

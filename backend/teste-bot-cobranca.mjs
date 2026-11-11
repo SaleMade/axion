@@ -96,7 +96,7 @@ function monta(mundo) {
     _brDay: (ts) => new DataFalsa((ts ? ts * 1000 : RELOGIO.agora) - 3 * 3600000).toISOString().slice(0, 10),
     _ehPago: (l) => String((l && l.spg) || '') === 'Pago' || ['Pago', 'Pagos'].includes(String((l && l.col) || '')),
     _COLS_VENDA_CANCELADA: ['Cancelado', 'Cancelado sem Custo'],
-    _getDashData: async () => ({ leads }),
+    _getDashData: async () => ({ leads, tags: mundo.tags || [] }),
     _readConfig: async (_e, k) => (Object.prototype.hasOwnProperty.call(cfgdb, k) ? cfgdb[k] : null),
     _writeConfig: async (_e, k, v) => { cfgdb[k] = String(v); },
     _readConfigMuitas: async (_e, ks) => { const o = {}; for (const k of ks) if (Object.prototype.hasOwnProperty.call(cfgdb, k)) o[k] = cfgdb[k]; return o; },
@@ -457,6 +457,55 @@ titulo('7. A entrega no grupo certo e o Enviar agora');
   conf((await api._botCobProximo(env, cfg)) === 'amanhã às 20:00', 'a tela mostra o proximo resumo da cobranca (hoje ja passou)');
   const desligado = api._botNormaliza({ ativo: true, cobranca: { ativo: false } }, null);
   conf((await api._botCobProximo(env, desligado)) === 'desligado', 'com a cobranca desligada, a tela diz desligado');
+}
+
+// ══ 16. EM COBRANCA x ATRASADOS (10/11/2026) ════════════════════════════════════════════
+// Pedido do Bruno vendo o resumo das 22h: "desses 22 que estao atrasados, alguns deles sao leads que combinaram de pagar
+// em outro dia, combinaram de pagar em duas vezes, ou sao leads que estao em alguma outra condicao e nao estao atrasados
+// (...) deveria ter uma terceira metrica, 'em cobranca'". O relogio aqui e 03/11 20:05.
+titulo('16. Em cobranca (combinado) separado de Atrasados');
+const MUNDO_COMB = {
+  cobradores: [{ id: 'hay', nome: 'Haynan' }, { id: 'ana', nome: 'Ana Paula' }],
+  tags: [{ id: 'tp', name: 'Pagamento Parcial' }, { id: 'td', name: 'Devolução' }, { id: 'tx', name: 'Em Contato' }],
+  leads: [
+    naMesa({ id: 101, vl: 497, cob: 'hay', agend: '2026-11-03T09:00' }),                          // retorno de HOJE (a hora passou): combinado
+    naMesa({ id: 102, vl: 497, cob: 'hay', agend: '2026-11-02T10:00' }),                          // retorno de ontem, nada combinado: atrasado
+    { ...naMesa({ id: 103, vl: 497, cob: 'hay', agend: '2026-11-01T10:00' }), tags: ['tp', 'tx'] }, // duas vezes combinado (tag): combinado
+    naMesa({ id: 104, vl: 300, cob: 'hay', agend: '2026-11-01T10:00', pagamentos: [{ valor: 100 }] }), // pagou uma parte: combinado
+    { ...naMesa({ id: 105, vl: 497, cob: 'hay', col: 'Retirada', agend: '2026-11-02T10:00' }), tags: ['td'] }, // devolucao combinada: combinado
+    naMesa({ id: 106, vl: 497, cob: 'hay', col: 'Saiu para Entrega', agend: '2026-11-01T10:00' }), // nem chegou: fora da fila (a regra velha contava atrasado)
+    naMesa({ id: 107, vl: 497, cob: 'hay' }),                                                     // sem retorno e sem combinado: so faltam cobrar
+    naMesa({ id: 108, vl: 497, cob: 'hay', agend: '2026-11-05T10:00' }),                          // retorno marcado pra frente: combinado
+    { ...pago({ id: 109, vl: 497, pg: '2026-11-03T11:00:00-03:00', cob: 'hay' }), agend: '2026-11-01T10:00' }, // pago: nada
+    naMesa({ id: 110, vl: 197, cob: 'ana', agend: '2026-11-02T10:00:00-03:00' }),                 // o da Ana, atrasado (formato com fuso)
+    { ...naMesa({ id: 111, vl: 497, cob: 'ana', agend: '2026-11-01T10:00' }), tags: ['tx'] },     // tag que nao e combinado: continua atrasado
+  ],
+};
+{
+  const { api, env } = monta(MUNDO_COMB);
+  const cfg = api._botNormaliza({ cobranca: { ativo: true } }, null);
+  const d = await api._botDadosCob(env, DIA, cfg, 'diario');
+  const hay = d.cobradores.find((c) => c.id === 'hay');
+  const ana = d.cobradores.find((c) => c.id === 'ana');
+  conf(hay.em_cobranca === 7, 'faltam cobrar do Haynan: 7 (a fila, sem o que esta na rua e sem o pago)');
+  conf(hay.combinados === 5, 'em cobranca: 5 (retorno de hoje, retorno pra frente, parcela paga, tag Pagamento Parcial, tag Devolucao)');
+  conf(hay.atrasados === 1, 'atrasado de verdade: 1 (retorno de ontem, sem combinado nenhum)');
+  conf(ana.atrasados === 2 && ana.combinados === 0, 'a Ana: 2 atrasados (tag que nao e de combinado nao salva) e nenhum combinado');
+  conf(d.geral.combinados === 5 && d.geral.atrasados === 3 && d.geral.em_cobranca === 9, 'o geral soma os dois');
+  const t = api._botTextoCobranca(cfg, d);
+  conf(t.includes('Faltam cobrar: 7 · Em cobrança: 5 · Atrasados: 1'), 'a linha do resumo: faltam cobrar, em cobranca e atrasados');
+  conf(t.includes('Faltam cobrar: 2 · Atrasados: 2'), 'sem combinado, a linha fica como era');
+  conf(t.includes('Faltam cobrar: 9 · Em cobrança: 5 · Atrasados: 3'), 'e o geral');
+  const semComb = api._botNormaliza({ cobranca: { ativo: true, relatorio: { mostrar: { combinados: false } } } }, null);
+  conf(api._botTextoCobranca(semComb, d).includes('Faltam cobrar: 7 · Atrasados: 1'), 'desligando "Em cobrança" na config, a linha volta a ter so as duas');
+  const outroNome = api._botNormaliza({ cobranca: { ativo: true, relatorio: { rotulos: { combinados: 'Combinados' } } } }, null);
+  conf(api._botTextoCobranca(outroNome, d).includes('Faltam cobrar: 7 · Combinados: 5 · Atrasados: 1'), 'o nome da linha e editavel como os outros');
+  const p = api._botCobPadrao().relatorio;
+  conf(p.mostrar.combinados === true && p.rotulos.combinados === 'Em cobrança', 'nasce ligado, com o nome que o Bruno deu: Em cobrança');
+  const gravada = api._botNormaliza({ cobranca: { ativo: true, relatorio: { mostrar: { convertidos: true, recebido: true, comissao: true, em_cobranca: true, atrasados: true } } } }, null);
+  conf(gravada.cobranca.relatorio.mostrar.combinados === true, 'a config gravada antes (sem a chave) ganha a linha ligada');
+  const soEm = api._botNormaliza({ cobranca: { ativo: true, relatorio: { mostrar: { em_cobranca: false } } } }, null);
+  conf(api._botTextoCobranca(soEm, d).includes('Em cobrança: 5 · Atrasados: 1') && !api._botTextoCobranca(soEm, d).includes('Faltam cobrar: 7'), 'sem "Faltam cobrar", as outras duas ficam numa linha so');
 }
 
 console.log('\n' + (falhas.length ? 'FALHOU' : 'OK') + ': ' + ok + ' de ' + (ok + falhas.length) + ' conferencias');
