@@ -17076,6 +17076,7 @@ const COB_AUTO_DBS = new Set(COB_AUTO_TIPOS.map((t) => t.db));
 const COB_AUTO_PESSOA_KEY = 'cob_auto_pessoa';
 const COB_AUTO_APP_NOVO = [1, 26, 17];          // o primeiro app que conhece `partes`, `falouDesde` e os tipos novos
 const COB_AUTO_GAP_S = 3 * 3600;
+const COB_AUTO_POR_HORA = 12;                   // das que a gente comeca (fora a recepcao), por numero
 const COB_AUTO_PRIO = { pagou: 1, entregue: 2, naoachou: 3, saiu: 4, retirada: 5, naopagou: 6, atrasou: 7 };
 const COB_AUTO_JANELA_S = 72 * 3600;
 const COB_AUTO_ESPERA_S = 60;
@@ -17518,8 +17519,11 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
         const e = _cobAutoEntrou(l, col);
         if (e && agoraMs >= e) {
           const dias = hojeBr - _cobAutoDiaBr(e);
+          // QUEM RETIROU NA AGENCIA nao recebe "chegou na sua casa" (visto no ensaio com o dado real de
+          // 11/11: pedido que foi de Retirada pra Cobranca). O lembrete do pagamento vale igual.
+          const daAgencia = (Array.isArray(l.hist) ? l.hist : []).some((h) => _cobColId(h && h.to) === 'Retirar nos Correios');
           // a foto chega num evento separado, depois do "entregue": espera ate 2 h por ela
-          if (liga.has('ent') && dias <= 1 && agoraMs - e <= 30 * H && (String(l.entrega_url || '') || agoraMs - e >= 2 * H)) {
+          if (liga.has('ent') && !daAgencia && dias <= 1 && agoraMs - e <= 30 * H && (String(l.entrega_url || '') || agoraMs - e >= 2 * H)) {
             poe('ent', 'entregue', 'ent:' + id, e, { quando: dias === 0 ? 'hoje' : 'ontem' });
           }
           const ag = _botIaAgendMs(l);
@@ -17621,6 +17625,24 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
       if (cheio.size) {
         console.log('COB_AUTO_TETO nks=' + [...cheio].join(','));
         lista = lista.filter((x) => !cheio.has(String(x.nk)));
+      }
+      // O RITMO DAS QUE A GENTE COMECA (11/11/2026): no maximo 12 por numero a cada hora. A recepcao e
+      // resposta a quem chamou e nao entra na conta. No dia em que se liga uma automacao nova (ou o
+      // app fica fechado um dia) juntam dezenas na fila; 30 mensagens em 15 minutos pelo mesmo numero
+      // e o padrao que derruba numero. Assim elas saem ao longo de umas horas.
+      if (lista.some((x) => x.tipo !== 'recepcao')) {
+        const r2 = await env.DB.prepare(
+          "SELECT nk, COUNT(*) n FROM swweb_auto WHERE pego_ts > ? AND status IN ('pego','enviado','parcial') AND tipo NOT IN ('recepcao','recepcao_r') GROUP BY nk"
+        ).bind(agoraS - 3600).all();
+        const nHora = new Map(((r2 && r2.results) || []).map((x) => [String(x.nk), Number(x.n) || 0]));
+        lista.sort((a, b) => a.ord - b.ord);
+        lista = lista.filter((x) => {
+          if (x.tipo === 'recepcao') return true;
+          const n = nHora.get(String(x.nk)) || 0;
+          if (n >= COB_AUTO_POR_HORA) return false;
+          nHora.set(String(x.nk), n + 1);
+          return true;
+        });
       }
     } catch (_) { return []; }
   }

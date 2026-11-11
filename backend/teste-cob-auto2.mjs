@@ -111,6 +111,8 @@ const estado = {
     // boas-vindas: pedido ja despachado e pedido ainda nao despachado
     { ...base, id: '2021', nome: 'Sara Ja Saiu', wa: '(31) 90000-2021', col: 'Enviado', track: '888030000002021', ship_ts: Math.floor(T0 / 1000) - 3600, hist: [hist('Preparando', 'Enviado', 1 * H)] },
     { ...base, id: '2022', nome: 'Tais Nao Saiu', wa: '(31) 90000-2022', col: 'A Enviar' },
+    // retirou na AGENCIA ha 1 h: nao e "chegou na sua casa"
+    { ...base, id: '2023', nome: 'Ugo Retirou', wa: '(31) 90000-2023', col: 'Cobrança', track: 'AP555555555BR', ship: 'DELIVERED', hist: [hist('Enviado', 'Retirada', 2 * DIA), hist('Retirada', 'Cobrança', 1 * H)] },
   ],
 };
 sq.prepare('INSERT INTO dashboard_state (id,data,version) VALUES (1,?,1)').run(JSON.stringify(estado));
@@ -118,7 +120,7 @@ let mid = 0;
 const msg = (phone, inst, dir, body, segAtras) => sq.prepare('INSERT INTO wa_messages (msg_id, phone, instance, direction, type, body, push_name, ts, mundo) VALUES (?,?,?,?,?,?,?,?,?)')
   .run('m' + (++mid), phone, inst, dir, 'text', body, '', S() - segAtras, '');
 // todo mundo ja falou com o Bryan ha 5 dias (e foi respondido), menos o Leo; a Mara falou com o Haynan
-for (const n of ['2001', '2002', '2003', '2004', '2005', '2006', '2007', '2008', '2009', '2010', '2011', '2012', '2015', '2017', '2019', '2020']) {
+for (const n of ['2001', '2002', '2003', '2004', '2005', '2006', '2007', '2008', '2009', '2010', '2011', '2012', '2015', '2017', '2019', '2020', '2023']) {
   msg('553190000' + n, I_BRY, 'in', 'oi', 5 * 86400);
   msg('553190000' + n, I_BRY, 'out', 'Boa tarde', 5 * 86400 - 60);
 }
@@ -198,6 +200,7 @@ vale('entregue ha 1 h com foto: a frase do Bruno, com "hoje"', ent.tipo === 'ent
 const foto = (ent.partes || [])[1] || {};
 vale('a foto vai como imagem, com o link assinado', foto.tipo === 'midia' && foto.kind === 'image' && /\/api\/arquivo\/comprovante%2F2002%2Fentrega-1\.jpg\?exp=\d+&sig=[0-9a-f]{32}$/.test(foto.url), foto.url);
 vale('entregue ha 30 min SEM foto: espera a foto chegar', !fila.some((x) => x.nome === 'Bia Sem Foto' && x.tipo === 'entregue'), '');
+vale('quem RETIROU na agencia nao recebe "chegou na sua casa"', !fila.some((x) => x.nome === 'Ugo Retirou' && x.tipo === 'entregue'), fila.filter((x) => x.nome === 'Ugo Retirou').map((x) => x.tipo).join(','));
 vale('na previa da dash o item diz que tem foto', !!naFila('Ana Com Foto', 'entregue') && naFila('Ana Com Foto', 'entregue').foto === true, JSON.stringify(naFila('Ana Com Foto', 'entregue')));
 
 _log('\nENTREGUE E NAO PAGOU\n');
@@ -312,7 +315,21 @@ sq.exec("DELETE FROM swweb_auto WHERE k = 'npg:2012'");
 for (let i = 0; i < 6; i++) { it = await itens(); const n = it.find((x) => x.k === 'npg:2004'); if (n) { iara = n; break; } for (const x of it) await manda(x); }
 vale('no app, o "nao pagou" leva o link curto da casa (nunca o comprido, com CPF e endereco)', iara.k === 'npg:2004' && /Pagar agora: https:\/\/sellwave\.com\.br\/checkout\/[a-z0-9]{7}\n/.test(iara.textos[0]) && !/payt\.com\.br/.test(iara.textos[0]), iara.textos && iara.textos[0].slice(60, 200));
 vale('e o link curto aponta pro checkout do pedido, preenchido', (() => { const x = sq.prepare("SELECT url, lead_id FROM short_links").get(); return x && x.lead_id === '2004' && /^https:\/\/checkout\.payt\.com\.br\/abc123\?/.test(x.url) && /utm_content=ped2004/.test(x.url); })(), JSON.stringify(sq.prepare("SELECT url, lead_id FROM short_links").get()));
-sq.exec("DELETE FROM swweb_auto WHERE k NOT LIKE 'ret:2007:%'");
+sq.exec("DELETE FROM swweb_auto WHERE k NOT IN ('ret:2007:1', 'ret:2007:2')");
+// o ritmo: no maximo 12 das novas por numero a cada hora (a recepcao nao entra na conta)
+const insH = sq.prepare("INSERT INTO swweb_auto (k, tipo, nk, fone, status, n, pego_ts, feito_ts) VALUES (?, 'saiu', ?, ?, 'enviado', 1, ?, ?)");
+for (let i = 0; i < 11; i++) insH.run('sai:hora' + i, NK_BRY, '55319888800' + String(10 + i), S() - 600, S() - 600);
+it = await itens();
+vale('com 11 das novas na ultima hora, so mais UMA sai pelo numero (e a recepcao passa livre)', it.filter((x) => x.tipo !== 'recepcao').length === 1 && it.filter((x) => x.tipo === 'recepcao').length === 2, it.map((x) => x.tipo).join(','));
+insH.run('sai:hora11', NK_BRY, '5531988880099', S() - 600, S() - 600);
+it = await itens();
+vale('com 12, nenhuma das novas sai ate a hora virar', it.every((x) => x.tipo === 'recepcao') && it.length === 2, it.map((x) => x.tipo).join(','));
+vale('o numero do outro cobrador nao e segurado pelo ritmo do Bryan', (await itens(undefined, 'hay')).some((x) => x.tipo === 'saiu'), '');
+AGORA += 51 * 60000;
+it = await itens();
+vale('passada a hora, voltam a sair', it.some((x) => x.tipo !== 'recepcao'), it.map((x) => x.tipo).join(','));
+AGORA = T0;
+sq.exec("DELETE FROM swweb_auto WHERE k LIKE 'sai:hora%'");
 AGORA = Date.UTC(2026, 10, 10, 23, 30, 0);   // 20:30 em Brasilia
 it = await itens();
 vale('depois das 20h nenhuma das novas sai (so a recepcao, que e resposta)', it.every((x) => x.tipo === 'recepcao' || x.tipo === 'postado'), it.map((x) => x.tipo).join(','));
