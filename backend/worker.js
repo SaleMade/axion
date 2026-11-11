@@ -3237,6 +3237,15 @@ const _COLS_VENDA_CANCELADA = ['Cancelado', 'Cancelado sem Custo'];
 // evento da PayLog ou da Payt achava o vendedor pela conversa do cliente (wa_lead) e devolvia o
 // pedido pra ele, e a Chegada de leads e o pixel contavam uma venda que nao existiu.
 const _ehReenvio = (l) => Array.isArray(l && l.tags) && l.tags.some((t) => String(t) === 'reenvio');
+// REENVIO SEM COBRANCA (11/11/2026, pedido do Bruno: "esse lead ja pagou, porem ele nao conseguiu
+// fazer a retirada nos Correios (...) vai ser um pedido que a gente so vai enviar de novo para o
+// cara receber"). E o reenvio de um pedido JA PAGO: a venda e o dinheiro moram no pedido de origem
+// e este so anda na entrega. A marca e a etiqueta 'reenvio' com o valor ZERO de proposito. Com ela:
+// o valor nao volta pro preco do kit no evento da PayLog/Payt, a varredura nao da cobrador, o bot
+// nao conta como pedido nem como recebido e a automacao nao agradece pagamento (os avisos da
+// entrega e da retirada continuam indo). Reenvio que AINDA vai ser cobrado tem valor e segue a
+// regra de cima (o caso de Amambai). Valor vazio NAO e zero: so o 0 gravado de proposito conta.
+const _reenvioSemCobranca = (l) => _ehReenvio(l) && l.vl !== '' && l.vl != null && Number(l.vl) === 0;
 let _waSalesCancOk = false;
 const _quandoDoLead = (l) => { const idn = Number(l && l.id) || 0; const t = Number(l && l.ts) || 0; return t > 1e12 ? Math.floor(t / 1000) : (t > 0 ? t : (idn > 1e12 ? Math.floor(idn / 1000) : idn)); };
 async function _waSalesMarcaCancelada(env, lead, leads) {
@@ -3604,14 +3613,14 @@ async function _fiveUpsertLead(env, p, ctx) {
     setIf('prod', prod.name || offer.title); setIf('trat', offer.title);
     setIf('cep', addr.zipCode); setIf('end', addr.address); setIf('num', addr.number);
     setIf('bairro', addr.neighborhood); setIf('cidade', addr.city); setIf('uf', addr.state);
-    if ((!lead.vl || lead.vl === 0) && offer.price != null) lead.vl = Number(offer.price) || 0;
+    if ((!lead.vl || lead.vl === 0) && offer.price != null && !_reenvioSemCobranca(lead)) lead.vl = Number(offer.price) || 0;
     lead.five_status = ev.toLowerCase();
     if (ev === 'CHARGE_UPDATED') {
       const _cs = String(charge.status || '').toUpperCase();
       // VALOR DO PEDIDO SEM O JURO DO PARCELAMENTO (ver _valorDaVenda). Esta linha gravava
       // charge.amount direto e o card do Jose Francisco virou R$ 541,12 num kit de R$ 497.
       const _vv = _valorDaVenda(offer, charge);
-      if (_vv > 0) lead.vl = _vv;
+      if (_vv > 0 && !_reenvioSemCobranca(lead)) lead.vl = _vv;
       // O que o cliente pagou de verdade fica gravado a parte: e o numero que bate com a
       // fatura/extrato numa conferencia, e some se a gente so guardar o valor da venda.
       if (charge.amount != null) {
@@ -12012,7 +12021,8 @@ function _botCriadoMs(l) {
   if (h) return h;
   return _botParseHora(l && l.data);
 }
-const _botCancelado = (l) => _COLS_VENDA_CANCELADA.includes(String((l && l.col) || ''));
+// reenvio sem cobranca tambem nunca foi pedido: a venda e do pedido de origem (ver _reenvioSemCobranca)
+const _botCancelado = (l) => _COLS_VENDA_CANCELADA.includes(String((l && l.col) || '')) || _reenvioSemCobranca(l);
 const _botManualNaoAceito = (l) => String((l && l.orig) || '') === 'Manual' && !(l && l.aceito) && ['A Enviar', 'Reportado'].includes(String((l && l.col) || ''));
 function _botVendaFutura(l) {
   if (l && l.vf) return true;
@@ -12746,6 +12756,7 @@ async function _botDadosCob(env, dia, cfg, tipo, fresco, stPronto) {
   const geral = { ..._botCobZero(), semana: 0, ontem: { pedidos: 0, recebido: 0 } };
   for (const l of leads) {
     if (!l || l.afl) continue;                         // o mundo do afiliado nao entra
+    if (_reenvioSemCobranca(l)) continue;              // reenvio de pedido ja pago: nada a cobrar nem a receber
     const c = por[String(l.cob || '')] || null;        // sem dono ainda: conta so no geral
     const col = _botColDe(l);
     const pago = _botPago(l);
@@ -12932,7 +12943,7 @@ async function _botUltimoRecebido(env, dia) {
   const ini = _botInicioDia(dia) * 1000, fim = ini + 86400000;
   let ultima = 0, pedidos = 0, valor = 0, fila = 0;
   for (const l of leads) {
-    if (!l || l.afl) continue;
+    if (!l || l.afl || _reenvioSemCobranca(l)) continue;   // reenvio de pedido ja pago nao e recebimento
     if (!_botPago(l)) { if (_BOT_COB_FILA.includes(_botColDe(l))) fila++; continue; }
     const t = _botPagoMs(l);
     if (!t || t < ini || t >= fim) continue;
@@ -17500,7 +17511,9 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
       if (!k || k.length !== 10 || nossos.has(k) || recKeys.has(k)) continue;
       const id = String(l.id), col = _cobColId(l.col), pago = _cobPago(l);
       const poe = (aid, db, key, base, extra) => cands.push({ l, k, aid, db, key, base, ...(extra || {}) });
-      if (pago) {
+      // REENVIO SEM COBRANCA: nao agradece pagamento (o cliente pagou o pedido de origem) e segue pros
+      // avisos da entrega e da retirada abaixo, que e justamente o que ele precisa.
+      if (pago && !_reenvioSemCobranca(l)) {
         const pt = _cobPagoTs(l);
         if (liga.has('pag') && pt && agoraMs >= pt && agoraMs - pt <= 24 * H) poe('pag', 'pagou', 'pag:' + id, pt);
         continue;
@@ -21675,7 +21688,7 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
     // Atualiza dados do lead com info nova vinda da PAYT (se chegou)
     if (data.tracking_code && !lead.track) lead.track = data.tracking_code;
     if (data.payment_method && !lead.pgto) lead.pgto = data.payment_method;
-    if (data.amount && !lead.vl) lead.vl = data.amount;
+    if (data.amount && !lead.vl && !_reenvioSemCobranca(lead)) lead.vl = data.amount;
     // Juro do parcelamento: fica registrado no lead so pra explicar a diferenca na tela.
     if (data.amount_pago > 0 && data.amount > 0 && data.amount_pago > data.amount) {
       lead.vl_cobrado = data.amount_pago;
@@ -22051,7 +22064,7 @@ async function handleFornecedorWebhook(req, env, urlToken) {
     }
     if (lead_data.track && !lead.track) lead.track = lead_data.track;
     if (lead_data.payment_method && !lead.pgto) lead.pgto = lead_data.payment_method;
-    if (lead_data.valor && !lead.vl) lead.vl = lead_data.valor;
+    if (lead_data.valor && !lead.vl && !_reenvioSemCobranca(lead)) lead.vl = lead_data.valor;
     // Garante external_id pra próximas chamadas
     if (lead_data.external_id && !lead.external_id) lead.external_id = lead_data.external_id;
 
@@ -37998,6 +38011,9 @@ async function _cronCobrador(env) {
     for (const l of data.leads) {
       if (!l || l.afl) continue;
       const dono = String(l.cob || '');
+      // REENVIO SEM COBRANCA (ver _reenvioSemCobranca) nao ganha cobrador: nao ha o que cobrar, e o
+      // dono daria a ele um pedido "recebido" de R$ 0 nas contas, no podio e nas comemoracoes.
+      if (!dono && _reenvioSemCobranca(l)) continue;
       if (!dono) { semDono.push(l); continue; }
       if (carga.has(dono) && _cobEmAberto(l)) carga.set(dono, carga.get(dono) + 1);
     }

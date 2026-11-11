@@ -96,6 +96,8 @@ function monta(mundo) {
     _brDay: (ts) => new DataFalsa((ts ? ts * 1000 : RELOGIO.agora) - 3 * 3600000).toISOString().slice(0, 10),
     _ehPago: (l) => String((l && l.spg) || '') === 'Pago' || ['Pago', 'Pagos'].includes(String((l && l.col) || '')),
     _COLS_VENDA_CANCELADA: ['Cancelado', 'Cancelado sem Custo'],
+    // a mesma regra do worker (o teste-reenvio-sem-cobranca prova a de verdade)
+    _reenvioSemCobranca: (l) => Array.isArray(l && l.tags) && l.tags.includes('reenvio') && l.vl !== '' && l.vl != null && Number(l.vl) === 0,
     _getDashData: async () => ({ leads, tags: mundo.tags || [] }),
     _readConfig: async (_e, k) => (Object.prototype.hasOwnProperty.call(cfgdb, k) ? cfgdb[k] : null),
     _writeConfig: async (_e, k, v) => { cfgdb[k] = String(v); },
