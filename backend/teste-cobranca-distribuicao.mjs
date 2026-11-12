@@ -212,5 +212,104 @@ t((r.j.vendedores || []).map((v) => v.name).join(',') === 'Barbara,Guilherme,Kev
 t(r.j.numeros && r.j.numeros.cob_bryan === '5511927335679' && r.j.numeros.cob_haynan === '5515991980514', 'e o WhatsApp que o link abre de cada um', JSON.stringify(r.j.numeros))
 t(r.j.link === 'https://sellwave.com.br/acompanhar-pedido', 'o link mostrado e o novo', r.j.link)
 
+// ══ O RODIZIO DOS NUMEROS DO COBRADOR (12/11/2026) ═══════════════════════════════════════════
+// Pedido do Bruno: "o Haynan aqui esta com dois numeros. Toda vez que um lead chegar para ele, eu
+// gostaria que chegasse por um desses numeros (...) ja ficasse marcado aquele lead naquele numero".
+// Antes o link abria sempre o PRIMEIRO chip Em uso; o segundo ficava parado.
+console.log('\nO RODIZIO DOS NUMEROS: dois numeros Em uso do mesmo cobrador dividem os clientes novos')
+try { sq.exec('ALTER TABLE wa_messages ADD COLUMN mundo TEXT') } catch (_) {}
+sq.exec('CREATE TABLE IF NOT EXISTS swweb_conn (nk TEXT PRIMARY KEY, st TEXT, espontaneo INTEGER DEFAULT 0, modo TEXT, info TEXT, queda TEXT, por TEXT, ts INTEGER)')
+const WA_H2 = 'https://wa.me/5515992860587'
+const NK_A = '1591980514', NK_B = '1592860587'
+const mexe = (f) => { const d = ler(); f(d); sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d)) }
+const marcas = (onde = '1=1') => sq.prepare('SELECT k, nk, at, origem FROM cob_num_cli WHERE ' + onde + ' ORDER BY k').all()
+const marcaDe = (fone) => sq.prepare('SELECT nk, origem FROM cob_num_cli WHERE k = ?').get(fone.slice(2, 4) + fone.slice(-8)) || {}
+const qual = (loc) => (loc.startsWith(WA_HAY) ? 'A' : loc.startsWith(WA_H2) ? 'B' : loc.startsWith(WA_BRY) ? 'Y' : '?')
+const clica = async (fone) => qual((await req('GET', '/acompanhar-pedido/' + b36(fone))).loc)
+let nMsg = 0
+const falou = (fone, n8, segAtras, dono = 'cob_haynan') => sq.prepare('INSERT INTO wa_messages (msg_id, phone, instance, direction, type, body, ts) VALUES (?,?,?,?,?,?,?)')
+  .run('rod' + (++nMsg), fone, 'ax_' + dono + '_' + n8, 'in', 'chat', 'oi', Math.floor(Date.now() / 1000) - segAtras)
+mexe((d) => d.chips.forEach((c) => { if (c.id === 2) c.em_uso = true }))
+await regra({ modo: 'fixo', alvo: 'cob_haynan' })
+let s4 = ''
+for (const f of ['5511970000001', '5511970000002', '5511970000003', '5511970000004']) s4 += await clica(f)
+t(s4 === 'ABAB', 'quatro clientes novos alternam entre os dois numeros', s4)
+t(marcas().length === 4 && marcas().every((m) => m.origem === 'rodizio' && m.at === 'cob_haynan'), 'cada um ficou marcado no numero que recebeu', JSON.stringify(marcas()))
+let de1 = ''
+for (let i = 0; i < 3; i++) de1 += await clica('5511970000001')
+t(de1 === 'AAA', 'o mesmo cliente clicando de novo (ou a previa do WhatsApp) volta sempre pro mesmo numero', de1)
+t(await clica('11970000002') === 'B', 'e o telefone sem o 55 e o mesmo cliente', '')
+t(marcas().length === 4, 'clicar de novo nao cria marca nova nem gasta a vez de ninguem', String(marcas().length))
+r = await req('GET', '/acompanhar-pedido')
+t(r.st === 302 && marcas().length === 4, 'link sem telefone abre um numero e nao marca ninguem', r.st + ' ' + marcas().length)
+
+console.log('\nQUEM JA CONVERSA NUM NUMERO FICA NELE (mensagem de numero desconhecido e o que derruba numero)')
+falou('5511970000010', '92860587', 3600)
+t(await clica('5511970000010') === 'B', 'cliente que ja escreveu no segundo numero cai nele, mesmo com a vez sendo do outro', '')
+t(marcaDe('5511970000010').nk === NK_B && marcaDe('5511970000010').origem === 'conversa', 'e a marca dele diz que foi pela conversa (nao conta como cliente novo no rodizio)', JSON.stringify(marcaDe('5511970000010')))
+falou('5511970000001', '92860587', 60)
+t(await clica('5511970000001') === 'B' && marcaDe('5511970000001').nk === NK_B, 'marcado num numero mas escreveu no outro: vale onde ele esta conversando, e a marca acompanha', JSON.stringify(marcaDe('5511970000001')))
+falou('5511970000011', '91980514', 86400); falou('5511970000011', '92860587', 600)
+t(await clica('5511970000011') === 'B', 'falou nos dois: vale o da mensagem mais recente', '')
+falou('551170000012', '92860587', 600)
+t(await clica('5511970000012') === 'B', 'a conversa gravada sem o nono digito e do mesmo cliente', '')
+falou('5511970000013', '92860587', 70 * 86400)
+const antes13 = marcas("origem = 'rodizio'").length
+await clica('5511970000013')
+t(marcaDe('5511970000013').origem === 'rodizio' && marcas("origem = 'rodizio'").length === antes13 + 1, 'conversa de mais de 60 dias nao prende ninguem: entra no rodizio', JSON.stringify(marcaDe('5511970000013')))
+falou('5511970000014', '27335679', 600, 'cob_bryan')
+t(['A', 'B'].includes(await clica('5511970000014')), 'conversa no numero de OUTRO cobrador nao decide o numero deste', '')
+
+console.log('\nNUMERO FORA DO AR sai da vez enquanto o outro esta de pe')
+sq.prepare("INSERT OR REPLACE INTO swweb_conn (nk, st, ts) VALUES (?, 'qr', 0)").run(NK_B)
+let s3 = ''
+for (const f of ['5511970000021', '5511970000022', '5511970000023']) s3 += await clica(f)
+t(s3 === 'AAA', 'segundo numero pedindo QR: os clientes novos vao todos pro primeiro', s3)
+t(await clica('5511970000010') === 'B', 'quem ja conversa no numero que pede QR continua nele (o celular segue recebendo)', '')
+sq.prepare("UPDATE swweb_conn SET st = 'bloqueado' WHERE nk = ?").run(NK_B)
+t(await clica('5511970000010') === 'A' && marcaDe('5511970000010').nk === NK_A, 'numero BLOQUEADO pelo WhatsApp: ate quem conversava nele passa pro outro', JSON.stringify(marcaDe('5511970000010')))
+sq.prepare("INSERT OR REPLACE INTO swweb_conn (nk, st, ts) VALUES (?, 'caiu', 0)").run(NK_A)
+sq.prepare("UPDATE swweb_conn SET st = 'qr' WHERE nk = ?").run(NK_B)
+t(['A', 'B'].includes(await clica('5511970000024')), 'os dois fora do ar: o link continua abrindo um numero (nunca link morto)', '')
+sq.exec('DELETE FROM swweb_conn')
+
+console.log('\nQUAIS NUMEROS ENTRAM NO RODIZIO: os Em uso (flag ou tag), sem restrito')
+r = await req('GET', '/api/cob/regra', TK.dir)
+const rodH = (r.j.rodizio && r.j.rodizio.cob_haynan) || []
+t(rodH.length === 2 && rodH[0].num === '5515991980514' && rodH[1].num === '5515992860587', 'a tela recebe os dois numeros do rodizio do Haynan', JSON.stringify(rodH))
+const hojeA = marcas("origem = 'rodizio' AND nk = '" + NK_A + "'").length, hojeB = marcas("origem = 'rodizio' AND nk = '" + NK_B + "'").length
+t(rodH[0].hoje === hojeA && rodH[1].hoje === hojeB && hojeA > 0 && hojeB > 0, 'com quantos clientes novos cada um recebeu hoje', JSON.stringify(rodH) + ' x ' + hojeA + '/' + hojeB)
+t(r.j.numeros.cob_haynan === '5515991980514' && (r.j.rodizio.cob_bryan || []).length === 1, 'o campo antigo (um numero por cobrador) continua vindo; o Bryan tem um so', JSON.stringify(r.j.numeros))
+sq.prepare("INSERT OR REPLACE INTO swweb_conn (nk, st, ts) VALUES (?, 'qr', 0)").run(NK_B)
+r = await req('GET', '/api/cob/regra', TK.dir)
+t(r.j.rodizio.cob_haynan[1].fora === true && r.j.rodizio.cob_haynan[0].fora === false, 'e a tela sabe qual numero o app disse que esta fora do ar', JSON.stringify(r.j.rodizio.cob_haynan))
+sq.exec('DELETE FROM swweb_conn')
+mexe((d) => { d.wa_statuses = [{ id: 'st_uso1', label: 'Em uso', papel: 'em_uso' }, { id: 'st_rest1', label: 'Restrito', papel: 'restrito' }]; d.chips.forEach((c) => { if (c.id === 2) { c.em_uso = false; c.wa_st = 'st_uso1' } }) })
+r = await req('GET', '/api/cob/regra', TK.dir)
+t((r.j.rodizio.cob_haynan || []).length === 2, 'numero Em uso pela TAG (sem a flag) tambem entra', JSON.stringify(r.j.rodizio.cob_haynan))
+mexe((d) => d.chips.forEach((c) => { if (c.id === 2) { c.em_uso = true; c.wa_st = 'st_rest1' } }))
+r = await req('GET', '/api/cob/regra', TK.dir)
+t((r.j.rodizio.cob_haynan || []).length === 1 && r.j.rodizio.cob_haynan[0].num === '5515991980514', 'numero com tag de Restrito sai do rodizio', JSON.stringify(r.j.rodizio.cob_haynan))
+t(await clica('5511970000011') === 'A', 'e quem estava nele passa a abrir o numero que sobrou', '')
+mexe((d) => d.chips.forEach((c) => { if (c.id === 2) { c.em_uso = true; c.wa_st = '' } }))
+
+console.log('\nA CONSULTA DA DIRECAO (pra qual numero vai este cliente) nao marca ninguem')
+const nAntes = marcas().length
+r = await req('GET', '/api/cob/regra?fone=5511970000099', TK.dir)
+t(r.j.simula && r.j.simula.quem === 'cob_haynan' && /^55159(9198|9286)/.test(r.j.simula.num) && /rodizio/.test(r.j.simula.porque), 'a direcao ve o cobrador, o numero e o motivo', JSON.stringify(r.j.simula))
+t(marcas().length === nAntes, 'sem gravar marca', marcas().length + ' x ' + nAntes)
+r = await req('GET', '/api/cob/regra?fone=5511970000002', TK.dir)
+t(r.j.simula && r.j.simula.num === '5515992860587' && /marcado/.test(r.j.simula.porque), 'cliente ja marcado: mostra o numero dele', JSON.stringify(r.j.simula))
+r = await req('GET', '/api/cob/regra?fone=5511970000099', TK.hay)
+t(r.st === 200 && !r.j.simula, 'o cobrador nao consulta', JSON.stringify(r.j && r.j.simula))
+
+console.log('\nCOBRADOR COM UM NUMERO SO: nada muda, nada e gravado')
+await regra({ modo: 'fixo', alvo: 'cob_bryan' })
+const nB = marcas().length
+t(await clica('5511970000031') === 'Y' && await clica('5511970000032') === 'Y', 'os clientes do Bryan caem no numero dele', '')
+t(marcas().length === nB && marcas("at = 'cob_bryan'").length === 0, 'e nenhuma marca e criada', String(marcas().length))
+r = await req('GET', '/entrega/' + b36('5515900000001'))
+t(r.st === 302 && (r.loc.startsWith(WA_HAY) || r.loc.startsWith(WA_H2)), 'cliente com pedido do Haynan continua caindo num numero do Haynan', r.loc)
+
 console.log('\n' + ok + ' de ' + (ok + mau) + ' conferencias passaram')
 process.exit(mau ? 1 : 0)

@@ -37940,14 +37940,46 @@ async function handleCobRegra(req, env) {
     return json({ ok: true, regra });
   }
   const regra = await _cobRegra(env);
-  let carga = {}, numeros = {};
+  let carga = {}, numeros = {}, rodizio = {};
   try {
     const d = await _getDashData(env, 0);
     const c = _cobContagens(d && d.leads, ids, regra);
     carga = Object.fromEntries(c.carga);
     // O WHATSAPP QUE O LINK ABRE pra cada cobrador (o mesmo _cobNumeroDe do /acompanhar-pedido).
-    for (const i of ids) numeros[i] = _cobNumeroDe(d && d.chips, i);
+    // `numeros` continua sendo UM por cobrador (a dash publicada antes de 12/11 le assim); `rodizio`
+    // sao todos os numeros que dividem os clientes novos, com quantos cada um recebeu hoje e se o app
+    // disse que ele esta fora do ar (ver O RODIZIO DOS NUMEROS DO COBRADOR).
+    const todos = [];
+    for (const i of ids) {
+      const l = _cobNumerosDe(d, i);
+      numeros[i] = l.length ? l[0].e164 : '';
+      rodizio[i] = l.map((x) => ({ num: x.e164, nk: x.nk, hoje: 0, fora: false }));
+      todos.push(...rodizio[i]);
+    }
+    if (todos.length) {
+      const nksJson = JSON.stringify(todos.map((x) => x.nk));
+      const iniDiaS = Math.floor((Math.floor((Date.now() - _COB_BRT) / 86400000) * 86400000 + _COB_BRT) / 1000);
+      try {
+        await _cobNumTabela(env);
+        const r = await env.DB.prepare("SELECT nk, COUNT(*) n FROM cob_num_cli WHERE origem = 'rodizio' AND criado >= ? AND nk IN (SELECT value FROM json_each(?)) GROUP BY nk").bind(iniDiaS, nksJson).all();
+        const n = new Map(((r && r.results) || []).map((x) => [String(x.nk), Number(x.n) || 0]));
+        for (const x of todos) x.hoje = n.get(x.nk) || 0;
+      } catch (_) { /* sem a contagem a tela mostra zero */ }
+      try {
+        const r = await env.DB.prepare('SELECT nk, st FROM swweb_conn WHERE nk IN (SELECT value FROM json_each(?))').bind(nksJson).all();
+        const st = new Map(((r && r.results) || []).map((x) => [String(x.nk), String(x.st || '')]));
+        for (const x of todos) x.fora = _COB_NUM_FORA.has(st.get(x.nk) || '');
+      } catch (_) { /* sem o estado do app ninguem aparece fora do ar */ }
+    }
+    for (const i of ids) rodizio[i] = rodizio[i].map(({ nk, ...x }) => x);
   } catch (_) { carga = {}; }
+  // PRA QUAL NUMERO VAI ESTE CLIENTE (so a direcao, `?fone=`): a mesma decisao do link, sem marcar
+  // ninguem. E a resposta pra "por que esse cliente caiu naquele numero".
+  let simula = null;
+  const foneQ = String(new URL(req.url).searchParams.get('fone') || '').replace(/\D/g, '');
+  if (dir && foneQ.length >= 10 && foneQ.length <= 13) {
+    try { simula = await _entregaDecide(env, foneQ.length <= 11 ? '55' + foneQ : foneQ, false); } catch (_) { simula = null; }
+  }
   // OS NOMES VEM DAQUI (04/11/2026): o cartao mudou pra tela de Pressels & Roleta, que nao carrega a
   // equipe. Vendedor = cargo atendente da casa, ativo: e de quem sai a mensagem com o link.
   let nomes = {}, vendedores = [];
@@ -37959,9 +37991,10 @@ async function handleCobRegra(req, env) {
     }
   } catch (_) { /* sem nomes a tela mostra o id */ }
   return json({
-    ok: true, regra, carga, numeros, vendedores,
+    ok: true, regra, carga, numeros, rodizio, vendedores,
     cobradores: cobs.map((c) => ({ id: String(c.id), name: nomes[String(c.id)] || String(c.id) })),
     link: 'https://sellwave.com.br/acompanhar-pedido',
+    ...(simula ? { simula } : {}),
   });
 }
 
@@ -37985,15 +38018,137 @@ function _entregaFone(codigo) {
   const d = Number.isSafeInteger(n) ? String(n) : '';
   return d.length >= 10 && d.length <= 13 ? d : '';
 }
-function _cobNumeroDe(chips, quem) {
-  const meus = (Array.isArray(chips) ? chips : []).filter((c) => c && String(c.at || '') === String(quem || '') && String(c.st || 'ativo') === 'ativo' && _cobDig(c.num).length >= 10);
-  const c = meus.find((x) => x.em_uso) || meus[0];
-  if (!c) return '';
-  const d = _cobDig(c.num);
-  return d.length <= 11 ? '55' + d : d;
+// ══ O RODIZIO DOS NUMEROS DO COBRADOR (12/11/2026) ════════════════════════════════════════════
+// Pedido do Bruno: "o Haynan aqui esta com dois numeros. Toda vez que um lead chegar para ele, eu
+// gostaria que chegasse por um desses numeros (...) ja ficasse marcado aquele lead naquele numero
+// para fazer o disparo por aquele numero", pra nenhum numero carregar a cobranca sozinho. Ate aqui o
+// link abria SEMPRE o primeiro chip "Em uso" do cobrador: o segundo numero ficava parado.
+//
+// A DIVISAO ACONTECE NA CHEGADA. O cliente clica no link da mensagem do vendedor e cai num dos
+// numeros "Em uso" do cobrador, alternando. A mensagem automatica sai pelo numero em que o cliente
+// escreveu (_cobAutoItens), entao dividir a chegada divide os envios. O que NAO se faz: passar pra
+// outro numero o cliente que ja conversa num deles. A mensagem chegaria de um numero que ele nunca
+// viu, e mensagem de desconhecido (bloqueio, denuncia) e justamente o que derruba numero.
+//
+// O NUMERO DE UM CLIENTE, nesta ordem:
+//   1. onde ele escreveu por ultimo (60 dias), se esse numero ainda esta no rodizio do cobrador;
+//   2. a marca dele (tabela cob_num_cli): quem ja clicou volta sempre pro mesmo numero, mesmo sem ter
+//      escrito ainda. Sem ela cada visita levaria pra um numero (e o WhatsApp visita o link sozinho
+//      pra montar a previa, antes de o cliente clicar);
+//   3. o rodizio: o numero que recebeu MENOS clientes novos nas ultimas 24 h; empate, o que recebeu
+//      ha mais tempo. Numero que o app reportou caido, pedindo QR ou bloqueado fica fora da vez
+//      enquanto outro do mesmo cobrador estiver de pe.
+// Quem ja esta num numero so sai dele se o numero saiu do rodizio (deixou de ser Em uso, foi banido
+// na Contingencia) ou foi bloqueado pelo WhatsApp. Com UM numero nao ha o que dividir: nada e lido
+// nem gravado, e o caminho de antes.
+const _COB_NUM_FORA = new Set(['caiu', 'qr', 'bloqueado']);   // swweb_conn.st (ver estadoConn do app)
+const COB_NUM_JANELA_S = 86400;
+let _cobNumTabOk = false;
+async function _cobNumTabela(env) {
+  if (_cobNumTabOk) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS cob_num_cli (k TEXT PRIMARY KEY, nk TEXT NOT NULL, at TEXT, origem TEXT, criado INTEGER, mexido INTEGER)').run();
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_cob_num_cli_nk ON cob_num_cli (nk, criado)').run(); } catch (_) { /* sem indice so fica mais lento */ }
+  _cobNumTabOk = true;
 }
-async function handleEntregaLink(req, env, codigo) {
-  const fone = _entregaFone(codigo);
+// OS NUMEROS DO RODIZIO DE UMA PESSOA, na ordem da Contingencia: os chips ativos dela que estao "Em
+// uso" (a flag ou a tag, o mesmo _chipEmUso da roleta) e sem tag de restrito ou banido. Sem nenhum
+// Em uso vale UM numero ativo, como sempre foi. `data` = o estado (ou so a lista de chips).
+function _cobNumerosDe(data, quem) {
+  const st = Array.isArray(data) ? { chips: data } : (data || {});
+  const emUso = _emUsoIdsDe(st), foraTag = _foraIdsDe(st);
+  const ativos = [], vistos = new Set();
+  for (const c of (Array.isArray(st.chips) ? st.chips : [])) {
+    if (!c || String(c.at || '') !== String(quem || '') || String(c.st || 'ativo') !== 'ativo') continue;
+    const d = _cobDig(c.num);
+    const nk = _waNumKey(d);
+    if (d.length < 10 || nk.length !== 10 || vistos.has(nk)) continue;
+    vistos.add(nk);
+    const tag = String(c.wa_st || '');
+    ativos.push({ nk, e164: d.length <= 11 ? '55' + d : d, uso: !!c.em_uso || _chipEmUso(c, emUso), fora: foraTag.has(tag) || foraTag.has(tag.toLowerCase()) });
+  }
+  const noRodizio = ativos.filter((x) => x.uso && !x.fora);
+  if (noRodizio.length) return noRodizio;
+  const um = ativos.find((x) => x.uso) || ativos.find((x) => !x.fora) || ativos[0];
+  return um ? [um] : [];
+}
+function _cobNumeroDe(data, quem) {
+  const l = _cobNumerosDe(data, quem);
+  return l.length ? l[0].e164 : '';
+}
+// O NUMERO DO COBRADOR `quem` PRA ESTE CLIENTE (ver o comentario de cima). `grava` = guarda a marca
+// (o clique de verdade); a consulta da dash pergunta sem gravar. Devolve { num, nk, porque } ou null.
+async function _cobNumeroDoCliente(env, data, quem, fone, grava) {
+  const lista = _cobNumerosDe(data, quem);
+  if (!lista.length) return null;
+  const sai = (x, porque) => ({ num: x.e164, nk: x.nk, porque });
+  if (lista.length === 1) return sai(lista[0], 'unico');
+  const agoraS = Math.floor(Date.now() / 1000);
+  const porNk = new Map(lista.map((x) => [x.nk, x]));
+  const k = _waNumKey(fone);
+  const cli = (k && k.length === 10) ? k : '';
+  try {
+    await _cobNumTabela(env);
+    const nksJson = JSON.stringify(lista.map((x) => x.nk));
+    let stDe = new Map();
+    try {
+      const rc = await env.DB.prepare('SELECT nk, st FROM swweb_conn WHERE nk IN (SELECT value FROM json_each(?))').bind(nksJson).all();
+      stDe = new Map(((rc && rc.results) || []).map((x) => [String(x.nk), String(x.st || '')]));
+    } catch (_) { /* sem o estado do app, todos valem */ }
+    const bloq = (nk) => stDe.get(nk) === 'bloqueado';
+    const temSemBloq = lista.some((x) => !bloq(x.nk));
+    // o numero em que o cliente JA ESTA: so sai dele se o numero saiu do rodizio ou foi bloqueado
+    const fica = (nk) => porNk.has(nk) && !(bloq(nk) && temSemBloq);
+    let marca = null, escolhido = null, porque = '';
+    if (cli) {
+      // 1. onde ele escreveu por ultimo (so mensagem DELE conta, como no icone do app)
+      try {
+        const fones = _cobAutoVariantes(fone);
+        if (fones.length) {
+          const r = await env.DB.prepare(
+            "SELECT instance, MAX(ts) ts FROM wa_messages WHERE phone IN (SELECT value FROM json_each(?)) AND direction='in' AND ts > ? AND "
+            + _msgDoMundoSql('mundo', '') + ' GROUP BY instance'
+          ).bind(JSON.stringify(fones), agoraS - 60 * 86400).all();
+          let tsM = 0;
+          for (const x of ((r && r.results) || [])) {
+            const n8 = _instNum8(x.instance), ts = Number(x.ts) || 0;
+            const a = lista.find((y) => y.nk.slice(-8) === n8);
+            if (a && ts > tsM && fica(a.nk)) { tsM = ts; escolhido = a; porque = 'conversa'; }
+          }
+        }
+      } catch (_) { /* sem a conversa, vale a marca */ }
+      // 2. a marca dele
+      try { marca = await env.DB.prepare('SELECT nk FROM cob_num_cli WHERE k = ?').bind(cli).first(); } catch (_) { marca = null; }
+      if (!escolhido && marca && fica(String(marca.nk))) { escolhido = porNk.get(String(marca.nk)); porque = 'marcado'; }
+    }
+    // 3. o rodizio
+    if (!escolhido) {
+      const dePe = lista.filter((x) => !_COB_NUM_FORA.has(stDe.get(x.nk) || ''));
+      const r = await env.DB.prepare(
+        "SELECT nk, COUNT(*) n, MAX(criado) ult FROM cob_num_cli WHERE origem = 'rodizio' AND criado > ? AND nk IN (SELECT value FROM json_each(?)) GROUP BY nk"
+      ).bind(agoraS - COB_NUM_JANELA_S, nksJson).all();
+      const cont = new Map(((r && r.results) || []).map((x) => [String(x.nk), { n: Number(x.n) || 0, ult: Number(x.ult) || 0 }]));
+      const peso = (x) => cont.get(x.nk) || { n: 0, ult: 0 };
+      escolhido = (dePe.length ? dePe : lista).slice().sort((a, b) => (peso(a).n - peso(b).n) || (peso(a).ult - peso(b).ult))[0];
+      porque = 'rodizio';
+    }
+    // A MARCA: o sorteado sempre; a conversa, so quando a marca diz outra coisa. `criado` e a data que
+    // o rodizio conta, por isso so anda quando o cliente foi SORTEADO de novo.
+    if (grava && cli && (porque === 'rodizio' || (porque === 'conversa' && (!marca || String(marca.nk) !== escolhido.nk)))) {
+      try {
+        await env.DB.prepare(
+          'INSERT INTO cob_num_cli (k, nk, at, origem, criado, mexido) VALUES (?,?,?,?,?,?) ON CONFLICT(k) DO UPDATE SET nk = excluded.nk, at = excluded.at, origem = excluded.origem,'
+          + " criado = CASE WHEN excluded.origem = 'rodizio' THEN excluded.criado ELSE cob_num_cli.criado END, mexido = excluded.mexido"
+        ).bind(cli, escolhido.nk, String(quem || ''), porque, agoraS, agoraS).run();
+      } catch (_) { /* sem a marca o proximo clique sorteia de novo; o link nao cai por isso */ }
+    }
+    return sai(escolhido, porque);
+  } catch (_) {
+    return sai(lista[0], 'erro');   // banco fora: o primeiro numero, como era antes do rodizio
+  }
+}
+// QUEM ATENDE ESTE TELEFONE E EM QUAL NUMERO: a decisao do link, sem o redirecionamento. `grava`
+// false = a consulta da dash (nao marca ninguem).
+async function _entregaDecide(env, fone, grava) {
   const cobs = await _cobradoresDaCasa(env);
   const ids = cobs.map((c) => String(c.id));
   // A DIRECAO COMO DONA (09/11/2026): pedido que o Bruno tomou pra si abre o numero DELE, se ele tiver
@@ -38015,16 +38170,27 @@ async function handleEntregaLink(req, env, codigo) {
       }
     }
     if (lead && ids.includes(String(lead.cob || ''))) { quem = String(lead.cob); porque = 'dono'; }
-    else if (lead && direcao.has(String(lead.cob || '')) && _cobNumeroDe(data.chips, lead.cob)) { quem = String(lead.cob); porque = 'direcao'; }
+    else if (lead && direcao.has(String(lead.cob || '')) && _cobNumeroDe(data, lead.cob)) { quem = String(lead.cob); porque = 'direcao'; }
     else if (lead) quem = _cobEscolhe(regra, lead, ids, carga, novos);
     else {
       const at = fone ? await resolveAtByPhone(env, fone).catch(() => null) : null;
       quem = _cobEscolhe(regra, { at: at || '' }, ids, carga, novos);
     }
   }
-  // O numero de quem a regra escolheu; sem numero ativo dele, o de qualquer outro cobrador.
-  let num = _cobNumeroDe(data.chips, quem);
-  if (!num) for (const i of ids) { num = _cobNumeroDe(data.chips, i); if (num) { porque += '+outro'; break; } }
+  // O numero de quem a regra escolheu. COBRADOR COM MAIS DE UM NUMERO EM USO: o rodizio (12/11/2026,
+  // ver _cobNumeroDoCliente). A direcao fica no primeiro numero dela: os chips dela sao de venda, e
+  // nao e entre eles que a cobranca se divide. Sem numero ativo, o de qualquer outro cobrador.
+  let num = '';
+  if (quem && ids.includes(quem)) {
+    const e = await _cobNumeroDoCliente(env, data, quem, fone, grava);
+    if (e) { num = e.num; if (e.porque !== 'unico') porque += ', ' + e.porque; }
+  } else num = _cobNumeroDe(data, quem);
+  if (!num) for (const i of ids) { num = _cobNumeroDe(data, i); if (num) { porque += '+outro'; break; } }
+  return { quem, num, porque };
+}
+async function handleEntregaLink(req, env, codigo) {
+  const fone = _entregaFone(codigo);
+  const { quem, num, porque } = await _entregaDecide(env, fone, true);
   console.log('ENTREGA_LINK ' + (fone ? fone.slice(-4) : '-') + ' -> ' + (quem || '-') + ' (' + porque + ')');
   if (!num) return new Response('Este link de entrega está sem atendente no momento. Fale com quem te atendeu na compra.', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
   return new Response(null, { status: 302, headers: { Location: 'https://wa.me/' + num + '?text=' + encodeURIComponent(ENTREGA_TEXTO), 'cache-control': 'no-store' } });
@@ -38158,6 +38324,9 @@ async function _cronPurga(env) {
   try { await env.DB.prepare("DELETE FROM dc_events    WHERE received_at < strftime('%s','now')-2592000").run(); } catch (_) {}   // 30 dias
   try { await env.DB.prepare("DELETE FROM wa_send_fail WHERE ts < strftime('%s','now')-2592000").run(); } catch (_) {}
   try { await env.DB.prepare("DELETE FROM wa_autoreply_log WHERE ts < strftime('%s','now')-2592000").run(); } catch (_) {}
+  // A marca "este cliente fala naquele numero do cobrador" (ver O RODIZIO DOS NUMEROS DO COBRADOR):
+  // 120 dias sem mexer, o pedido ja teve desfecho.
+  try { await env.DB.prepare("DELETE FROM cob_num_cli WHERE mexido < strftime('%s','now')-10368000").run(); } catch (_) {}
 }
 
 // ENXUGA OS LEADS NO ESTADO (12/09/2026, pedido do Bruno). `lead.raw` e o texto cru do "Pedido
