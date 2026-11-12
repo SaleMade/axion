@@ -18329,6 +18329,14 @@ async function handleSwWeb(req, env, path) {
     if (_colh.length) console.log('SWWEB_COLHEITA n=' + _colh.length + ' entrada=' + _colh.filter((e) => !e.fromMe).length
       + ' funil=' + _colh.filter((e) => e.via === 'colheita-funil').length + ' por=' + String(u.id)
       + ' nums=' + [...new Set(_colh.map((e) => _k8(e.selfNumber).slice(-4)))].join(','));
+    // LIGACAO NAO E MENSAGEM (12/11/2026): sai do lote antes da ingestao e vai pra swweb_ligacoes.
+    // Ja passou pela TRAVA 1 (so numero deste usuario). Ver o _swwebGravaLigacoes.
+    const _ligsCap = limpos.filter((e) => e && String(e.type || '') === 'call_log');
+    if (_ligsCap.length) {
+      try { await _swwebGravaLigacoes(env, _ligsCap, u); } catch (eL) { console.error('[swweb] ligacoes: ' + String((eL && eL.message) || eL)); }
+      for (let i = limpos.length - 1; i >= 0; i--) if (limpos[i] && String(limpos[i].type || '') === 'call_log') limpos.splice(i, 1);
+      if (!limpos.length) return json({ ok: true, ack: _ligsCap.map((e) => String(e.msgId || '')), barrados });
+    }
     if (!limpos.length) return json({ ok: true, ack: [], barrados });
 
     try {
@@ -32745,6 +32753,40 @@ async function _swwebQuedaTabela(env) {
   if (_swQuedaOk) return;
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_queda (nk TEXT PRIMARY KEY, pronto_ts INTEGER, pronto_por TEXT, em INTEGER, motivo TEXT, por TEXT, feito INTEGER DEFAULT 0)').run();
   _swQuedaOk = true;
+}
+
+// AS LIGACOES DE CADA NUMERO (12/11/2026). Pedido do Bruno: os numeros do Kevin caiam "toda vez que
+// manda funil ou tenta fazer ligacao", e a ligacao era a unica coisa que nao deixava rastro (o agente
+// jogava o call_log fora). O agente agora manda cada ligacao num evento proprio pela rota da captura;
+// a rota tira esses eventos do lote ANTES da ingestao (ligacao nao e mensagem: nao vira bolha, lead,
+// venda, nem prova de numero vivo) e grava aqui. Uma linha por ligacao (msg_id do WhatsApp); a mesma
+// ligacao que volta com a duracao ou o desfecho preenchidos atualiza a linha. `velha` = chegou na
+// reconexao, com a hora original. Conta por numero: SELECT nk8, de_mim, count(*) FROM swweb_ligacoes.
+let _swLigOk = false;
+async function _swwebGravaLigacoes(env, ligs, u) {
+  if (!_swLigOk) {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_ligacoes (msg_id TEXT PRIMARY KEY, nk8 TEXT, phone TEXT, de_mim INTEGER, ts INTEGER, video INTEGER, dur INTEGER, desfecho TEXT, velha INTEGER, por TEXT, criado INTEGER)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS ix_swweb_lig_nk_ts ON swweb_ligacoes (nk8, ts)').run();
+    _swLigOk = true;
+  }
+  const st = [];
+  for (const e of ligs.slice(0, 200)) {
+    const id = String((e && e.msgId) || '').slice(0, 120);
+    if (!id) continue;
+    const nk8 = String(e.selfNumber || '').replace(/\D/g, '').slice(-8);
+    const fone = String(e.phone || '').replace(/\D/g, '').slice(0, 20);
+    const lg = (e.ligacao && typeof e.ligacao === 'object') ? e.ligacao : {};
+    const dur = Math.max(0, Math.min(86400, Math.round(Number(lg.dur) || 0)));
+    const desf = String(lg.desfecho || '').slice(0, 30);
+    st.push(env.DB.prepare(
+      "INSERT INTO swweb_ligacoes (msg_id, nk8, phone, de_mim, ts, video, dur, desfecho, velha, por, criado) VALUES (?,?,?,?,?,?,?,?,?,?,strftime('%s','now'))" +
+      " ON CONFLICT(msg_id) DO UPDATE SET dur=MAX(swweb_ligacoes.dur, excluded.dur)," +
+      " desfecho=CASE WHEN excluded.desfecho<>'' THEN excluded.desfecho ELSE swweb_ligacoes.desfecho END"
+    ).bind(id, nk8, fone, e.fromMe ? 1 : 0, Math.floor(Number(e.ts) || 0), lg.video ? 1 : 0, dur, desf, e.velha ? 1 : 0, String((u && u.id) || '')));
+    console.log('SWWEB_LIGACAO nk=' + nk8 + ' ' + (e.fromMe ? 'fez' : 'recebeu') + ' tel=..' + fone.slice(-4)
+      + ' dur=' + dur + ' desfecho=' + desf + (lg.video ? ' video' : '') + (e.velha ? ' velha' : '') + ' por=' + String((u && u.id) || ''));
+  }
+  if (st.length) await env.DB.batch(st);
 }
 
 // Chamado pelo POST /api/swweb/conexao depois de gravar o estado. Devolve 'caiu' ou 'bloqueado'

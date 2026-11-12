@@ -755,6 +755,8 @@
   // precisar abrir o DevTools na maquina do vendedor pra ler. E e o numero que decide se a espera
   // de 6s esta certa, curta ou desperdicio.
   var esperou = {}
+  // LIGACAO JA CONTADA, por id: guarda duracao|desfecho pra so mandar de novo quando mudar.
+  var ligVistas = {}
 
   function capturar(msg, solta) {
     try {
@@ -780,6 +782,24 @@
       // O `ciphertext` fica de FORA desta lista: ele tem tratamento proprio logo abaixo (espera a
       // versao legivel chegar), e descartar aqui perderia a mensagem de verdade.
       var tipoCru = String(msg.type || 'chat').toLowerCase()
+      // LIGACAO E CONTADA, NAO CAPTURADA (12/11/2026). Os numeros do Kevin caiam "toda vez que manda
+      // funil ou liga", e a ligacao nao deixava rastro nenhum: o call_log morria no filtro logo
+      // abaixo. Agora ele sai num evento proprio (type 'call_log', sem texto) que o worker separa da
+      // conversa e grava em swweb_ligacoes: nao vira bolha, nao vira lead e nao conta como "o numero
+      // esta vivo" pro alarme de numero mudo. Sai uma vez por id, e de novo so se a duracao ou o
+      // desfecho mudarem.
+      if (tipoCru === 'call_log') {
+        var lg = { video: msg.isVideoCall ? 1 : 0, dur: Number(msg.callDuration) || 0, desfecho: String(msg.callOutcome || '').slice(0, 30) }
+        var assina = lg.dur + '|' + lg.desfecho
+        if (ligVistas[id] === assina) return
+        ligVistas[id] = assina
+        manda({
+          msgId: id, via: String((msg && msg.__swVia) || ''), selfNumber: numeroDoAparelho(), phone: pr.digits,
+          lid: pr.isLid ? 1 : 0, velha: ts && (Date.now() / 1000 - ts) > 1800 ? 1 : 0, fromMe: deMim,
+          type: 'call_log', body: '', pushName: '', ts: ts, cifraMs: 0, cifraSoltas: window.__swCifraSoltas || 0, ligacao: lg,
+        })
+        return
+      }
       if (tipoCru !== 'ciphertext' && NAO_E_MSG.test(tipoCru)) return
       if (tipoCru === 'ciphertext' && !solta) {
         if (!segurados[id] && !vistas[id]) {

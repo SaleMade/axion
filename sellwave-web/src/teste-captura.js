@@ -108,11 +108,31 @@ async function rodar() {
   // o ruido escondia exatamente o caso que o alarme existe pra achar. Foi o dia do (17) 99701-1859,
   // com 699 cliques e zero mensagem de verdade.
   console.log('\nAVISO DE PROTOCOLO NAO E MENSAGEM')
-  for (const t of ['e2e_notification', 'notification_template', 'revoked', 'call_log', 'protocol']) {
+  for (const t of ['e2e_notification', 'notification_template', 'revoked', 'protocol']) {
     await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: t, body: '', id: { id: 'RUIDO_' + t, fromMe: false } })) + '); "ok"')
     await espera(250)
     conta(t + ' nao vira mensagem', (await js('window.__enviados.length')) === 0,
       'enviados=' + (await js('window.__enviados.length')))
+  }
+  // LIGACAO VIRA EVENTO PROPRIO (12/11/2026): sai com type 'call_log', sem texto, com duracao e
+  // desfecho, pro worker contar as ligacoes de cada numero. Nao pode virar mensagem de conversa.
+  await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: 'call_log', body: '', callDuration: 42, callOutcome: 'Connected', isVideoCall: false, id: { id: 'LIG1', fromMe: true }, from: '5515974060653@c.us', to: '5511999998888@c.us' })) + '); "ok"')
+  await espera(250)
+  {
+    const lig = await js('window.__enviados')
+    conta('ligacao sai como evento call_log, uma vez', lig.length === 1 && lig[0].type === 'call_log', JSON.stringify(lig).slice(0, 200))
+    conta('e leva quem ligou, o telefone, a duracao e o desfecho, sem texto',
+      lig.length === 1 && lig[0].fromMe === true && lig[0].phone === '5511999998888' && lig[0].ligacao && lig[0].ligacao.dur === 42 && lig[0].ligacao.desfecho === 'Connected' && lig[0].body === '',
+      JSON.stringify(lig).slice(0, 200))
+  }
+  await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: 'call_log', body: '', callDuration: 42, callOutcome: 'Connected', id: { id: 'LIG1', fromMe: true }, from: '5515974060653@c.us', to: '5511999998888@c.us' })) + '); "ok"')
+  await espera(250)
+  conta('a mesma ligacao repetida nao sai de novo', (await js('window.__enviados.length')) === 0, 'enviados=' + (await js('window.__enviados.length')))
+  await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: 'call_log', body: '', callDuration: 0, callOutcome: 'Missed', id: { id: 'LIG2', fromMe: false } })) + '); "ok"')
+  await espera(250)
+  {
+    const lig = await js('window.__enviados')
+    conta('ligacao perdida que o lead fez tambem sai, como recebida', lig.length === 1 && lig[0].type === 'call_log' && lig[0].fromMe === false && lig[0].ligacao.desfecho === 'Missed', JSON.stringify(lig).slice(0, 200))
   }
   // E A DE GENTE CONTINUA PASSANDO: o filtro nao pode ter levado mensagem junto.
   await js('window.__enviados = []; window.__dispara(' + JSON.stringify(msgBase({ type: 'chat', body: 'tenho interesse', id: { id: 'DEPOIS_DO_FILTRO', fromMe: false } })) + '); "ok"')
