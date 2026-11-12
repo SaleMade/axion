@@ -448,6 +448,16 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   (`/api/cob/auto`, `app_config cob_auto`, desligado sem config). Sem o computador do cobrador ligado com o
   app aberto, nada sai: a recepção sai quando ele abrir (janela de 72 h). Testes: `src/teste-auto-cobranca.mjs`
   (61), `backend/teste-cob-auto.mjs` (54).
+- **12/11/2026 — A AUTOMÁTICA SÓ SAI COM O COBRADOR LIVRE (1.26.18).** Pedido do Bruno: disparar "quando o
+  meu cobrador não estiver em ligação, quando ele não estiver respondendo a ninguém, quando estiver tudo
+  tranquilo". Quem sabe disso é a página de cada número: `window.__swOcupado` no agente (microfone aberto,
+  ligação tocando ou recém terminada, tecla/clique/rolagem de verdade, mensagem que ele mandou daqui ou do
+  celular, item do painel, áudio tocando), com 90 s de calma (`CALMA_MS`). **Dois níveis:** o `__swChatDe`
+  recusa sozinho quando o ocupado é aquele número (vale pra qualquer app desde a 1.26.14, chega pelo agente
+  do R2), e o `cobradorOcupado` do main pergunta a TODOS os números abertos antes de cada rodada e de cada
+  cliente, porque ocupado é a pessoa (ligação num número segura a automática do outro). Ligação feita pelo
+  celular só é vista quando acaba. Não tem válvula de tempo: quem não para 90 s não libera. Testes:
+  `src/teste-ocupado.js` (32, o agente numa página de verdade) e `src/teste-auto-cobranca.mjs` (106).
 
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 
