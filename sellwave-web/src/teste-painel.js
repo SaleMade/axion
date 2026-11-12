@@ -2186,12 +2186,16 @@ app.whenReady().then(async () => {
   await js2('window.__swCob.move("9004", "Pagos")')
   await espera(300)
   conta('kanban: arrastar pra Pagos NAO grava calado, abre a ficha pra confirmar o valor', (await salvas()).length === nS1 && (await js2('window.__swCob.estado().fichaId')) === '9004')
-  // O COBRADOR SO LEVA PRA PAGOS OU PRA PERDA (03/11, igual a dash): etapa de entrega e recusada
+  // REQUER ATENCAO VIROU DESTINO DO COBRADOR (12/11/2026, pedido do Bruno), igual ao worker e a dash.
+  conta('kanban: Requer Atenção e destino do cobrador; Enviado e Pagos->Requer Atenção nao',
+    (await js2('window.SWCob.podeIrCob("Entregues", "Requer Atenção")')) === true && (await js2('window.SWCob.podeIrCob("Entregues", "Enviados")')) === false && (await js2('window.SWCob.podeIrCob("Pagos", "Requer Atenção")')) === false && (await js2('window.SWCob.podeIrCob("Pagos", "Frustrados")')) === true,
+    'ok')
+  // O COBRADOR SO LEVA PRA PAGOS, REQUER ATENCAO OU PERDA (03/11 e 12/11, igual a dash): etapa de entrega e recusada
   // na tela, sem gravar nada.
-  await js2('window.__swCob.move("9004", "Requer Atenção")')
+  await js2('window.__swCob.move("9004", "Enviados")')
   await espera(300)
   const recusouEt = await js2('document.getElementById("cob-aviso").textContent')
-  conta('kanban: etapa de entrega nao e destino do cobrador (nao grava e diz por que)', (await salvas()).length === nS1 && /Pagos ou pra uma frustração/.test(recusouEt), recusouEt)
+  conta('kanban: etapa de entrega nao e destino do cobrador (nao grava e diz por que)', (await salvas()).length === nS1 && /Pagos, Requer Atenção ou uma frustração/.test(recusouEt), recusouEt)
   await js2('window.__swCob.move("9004", "Frustrados")')
   await espera(300)
   const mv = (await salvas()).slice(nS1)

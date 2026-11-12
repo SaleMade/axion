@@ -420,7 +420,7 @@
 
   function desenhaKanban() {
     const l = visiveis()
-    resumo.innerHTML = '<span>Arraste pra Pagos ou pra uma frustração. Pago pede o valor recebido; as etapas de entrega mudam sozinhas.</span>'
+    resumo.innerHTML = '<span>Arraste pra Pagos, Requer Atenção ou uma frustração. Pago pede o valor recebido; as etapas de entrega mudam sozinhas.</span>'
     const porCol = new Map()
     for (const p of l) { if (!porCol.has(p.col)) porCol.set(p.col, []); porCol.get(p.col).push(p) }
     const ordem = (a, b) => (Number(b.entrou) || 0) - (Number(a.entrou) || 0)   // o ultimo que entrou fica em cima
@@ -543,7 +543,7 @@
     const p = dados.pedidos.find((x) => String(x.id) === String(id))
     if (!p || p.col === para) return
     if (para === 'Pagos') { avisa('Confira o valor recebido e confirme na ficha.'); abreFicha(p.id); return }
-    if (!C.podeIrCob(p.col, para)) { avisa('Por aqui o pedido só vai pra Pagos ou pra uma frustração. As etapas de entrega mudam sozinhas.'); return }
+    if (!C.podeIrCob(p.col, para)) { avisa('Por aqui o pedido só vai pra Pagos, Requer Atenção ou uma frustração. As etapas de entrega mudam sozinhas.'); return }
     // MOVE NA HORA e grava depois; a dash recusou, volta e diz por que.
     const antes = { col: p.col, colBruta: p.colBruta, spg: p.spg }
     p.col = para; p.colBruta = para; p.entrou = Date.now()

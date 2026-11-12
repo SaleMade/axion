@@ -369,6 +369,12 @@ r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { col: 'Retirar nos Corre
 vale('a mesma coluna com outro nome nao conta como mudanca', !(r.d.negados || []).includes('col'), JSON.stringify(r.d.negados));
 r = await chama(TK.hay, '/api/lead/' + L_RET, { patch: { col: 'Frustrados' } });
 vale('pra perda ele leva', r.st === 200 && !(r.d.negados || []).length && colDe(L_RET) === 'Frustrados', JSON.stringify({ neg: r.d.negados, col: colDe(L_RET) }));
+// REQUER ATENCAO VIROU DESTINO DO COBRADOR (12/11/2026, pedido do Bruno: o Bryan nao conseguia tirar da
+// fila o pedido em que o lead nao responde). Mas de Pagos continua so pra perda.
+r = await chama(TK.hay, '/api/lead/' + L_ENV, { patch: { col: 'Requer Atenção' } });
+vale('cobrador leva pra Requer Atenção', r.st === 200 && !(r.d.negados || []).includes('col') && colDe(L_ENV) === 'Requer Atenção', JSON.stringify({ neg: r.d.negados, col: colDe(L_ENV) }));
+r = await chama(TK.hay, '/api/lead/' + L_PAGO_VELHO_SEM, { patch: { col: 'Requer Atenção' } });
+vale('mas nao tira de Pagos pra Requer Atenção (de Pagos so pra perda)', (r.d.negados || []).includes('col') && colDe(L_PAGO_VELHO_SEM) === 'Pago', JSON.stringify({ neg: r.d.negados, col: colDe(L_PAGO_VELHO_SEM) }));
 r = await chama(TK.dir, '/api/lead/' + L_ENV, { patch: { col: 'Saiu para Entrega' } });
 vale('a direcao continua movendo pra qualquer etapa', r.st === 200 && colDe(L_ENV) === 'Saiu para Entrega', colDe(L_ENV));
 

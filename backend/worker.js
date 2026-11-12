@@ -3166,7 +3166,13 @@ const _COL_CANON = {
 };
 const _colCanon = (c) => _COL_CANON[String(c || '')] || String(c || '');
 // Pra onde o COBRADOR pode levar um pedido (03/11/2026, ver handleUpdateLead): Pagos e as perdas.
-const _COB_PODE_IR = new Set(['Pago', 'Frustrados', 'Roubos', 'Devolvido', 'Retornado', 'Cancelado']);
+// REQUER ATENCAO TAMBEM (12/11/2026, pedido do Bruno): o Bryan queria tirar da fila o pedido em que o
+// lead nao responde e nao conseguia arrastar. Nao e etapa de entrega que a plataforma decide, e o
+// desvio de "precisa de alguem olhar"; a proxima atualizacao NOVA da PayLog/Five passa por cima, como
+// em qualquer arrasto (col_plat).
+const _COB_PODE_IR = new Set(['Pago', 'Requer Atenção', 'Frustrados', 'Roubos', 'Devolvido', 'Retornado', 'Cancelado']);
+// Saindo de Pagos o cobrador so vai pra perda (como a dash): Pagos e dinheiro que entrou.
+const _COB_SAI_DE_PAGO = new Set(['Frustrados', 'Roubos', 'Devolvido', 'Retornado', 'Cancelado']);
 // ══ A DECISAO DA EQUIPE E A ULTIMA PALAVRA (17/10/2026, regra do Bruno) ══════════════════════════
 //
 // "Se a gente marcou como pago e a plataforma esta falando que esse pedido foi furtado, a resposta que
@@ -7899,13 +7905,15 @@ async function handleUpdateLead(req, env, leadId) {
     nega(dir, 'at', 'com_pct', 'cob');
     nega(_podeVl, 'vl');
     nega(canManage, 'spg', 'col');
-    // O COBRADOR SO LEVA O PEDIDO PRA PAGOS OU PRA PERDA (03/11/2026, pedido do Bruno: "que as duas
+    // O COBRADOR SO LEVA O PEDIDO PRA PAGOS, REQUER ATENCAO (12/11) OU PERDA (03/11/2026, pedido do Bruno: "que as duas
     // ferramentas estejam sincronizadas"). As etapas de entrega (A enviar, Preparando, Enviado, Saiu
     // pra entrega, Retirada, Cobranca) quem move e a Five/PayLog; cobrador arrastando ali so desmancha
     // o que a plataforma disse. A trava e AQUI, pra dash, o app de celular e o SellWave Web valerem
     // igual: as telas so escondem o que este `if` recusa. Mesma coluna (com apelido) nao e mudanca.
     if (!dir && String(u.role || '').toLowerCase() === 'cobrador' && 'col' in patch && patch.col && !negados.includes('col')
-      && _colCanon(patch.col) !== _colCanon(fromCol) && !_COB_PODE_IR.has(_colCanon(patch.col))) negados.push('col');
+      && _colCanon(patch.col) !== _colCanon(fromCol) && (!_COB_PODE_IR.has(_colCanon(patch.col))
+        // DE PAGOS, SO PRA PERDA (igual a dash, podeSairDePagos): Requer Atencao nao tira venda da receita.
+        || (_colCanon(fromCol) === 'Pago' && !_COB_SAI_DE_PAGO.has(_colCanon(patch.col))))) negados.push('col');
     // AGENDAR RETORNO E ATENDIMENTO, NAO E DINHEIRO NEM ETAPA (10/09/2026).
     //
     // Estava na mesma trava do `spg` e do `col`, ou seja so diretor e cobrador. Resultado: o

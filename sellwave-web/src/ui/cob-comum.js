@@ -43,8 +43,11 @@
   // PRA ONDE O COBRADOR LEVA UM PEDIDO (03/11/2026, pedido do Bruno: "que as duas ferramentas estejam
   // sincronizadas"): so Pagos (pedindo o valor) e as perdas. As etapas de entrega quem move e a
   // Five/PayLog. A trava de verdade e do servidor (handleUpdateLead); aqui a tela so nao oferece.
-  const DESTINOS_COB = ['Pagos', ...SAIDAS_DE_PAGOS]
-  const podeIrCob = (de, para) => !!para && de !== para && DESTINOS_COB.includes(para) && !(de === 'Pagos' && para === 'Pagos')
+  // Requer Atencao tambem (12/11/2026, pedido do Bruno: tirar da fila o pedido em que o lead nao
+  // responde). Mesma lista do _COB_PODE_IR do worker e do podeMover do Kanban da dash.
+  const DESTINOS_COB = ['Pagos', 'Requer Atenção', ...SAIDAS_DE_PAGOS]
+  // De Pagos so pra perda, como antes: Requer Atencao nao tira venda da receita.
+  const podeIrCob = (de, para) => !!para && de !== para && DESTINOS_COB.includes(para) && (de !== 'Pagos' || SAIDAS_DE_PAGOS.includes(para))
 
   // A FILA DE COBRANCA e o que esta CHEGANDO: as mesmas duas listas do app de celular do cobrador
   // (pages/app/cobranca.js). Retirar nos Correios entra na fila por decisao do Bruno (06/10).
@@ -595,7 +598,7 @@
       if (acao === 'etapa') {
         const para = String((fx.querySelector('.fx-etapa') || {}).value || '')
         if (!para) { diz('Escolha a etapa.', true); return }
-        if (!podeIrCob(p.col, para)) { diz('Por aqui o pedido só vai pra Pagos ou pra uma frustração.', true); return }
+        if (!podeIrCob(p.col, para)) { diz('Por aqui o pedido só vai pra Pagos, Requer Atenção ou uma frustração.', true); return }
         await grava({ col: para, antes: { spg: p.spg || '', col: p.colBruta || '' } }, 'Movido para ' + colDef(para).lbl + '.')
         return
       }
