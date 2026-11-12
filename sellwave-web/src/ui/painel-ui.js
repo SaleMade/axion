@@ -2553,6 +2553,9 @@ function desenhaAuto() {
   if (!window.swp.autoConfig) return vazio('Atualize o app pra ver as automações.')
   if (!auto.tipos.length) return vazio(auto.carregando || !auto.em ? 'Carregando' : (auto.erro || 'Nenhuma automação por aqui.'))
   let h = '<div class="au">'
+  // 12/11/2026: o envio espera o cobrador ficar livre (cobradorOcupado no main). Dito aqui pra ele nao
+  // achar que travou quando a mensagem demora a sair no meio do atendimento.
+  h += '<div class="au-nota">As mensagens saem quando você está livre: fora de ligação e sem responder ninguém há 1 minuto e meio.</div>'
   if (!auto.numeros) h += '<div class="au-aviso">Nenhum número de cobrança no seu nome. As mensagens saem pelo número do cobrador aberto neste computador.</div>'
   for (const t of auto.tipos) {
     const txs = Array.isArray(t.textos) ? t.textos : []

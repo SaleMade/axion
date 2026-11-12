@@ -4345,6 +4345,8 @@ async function rodaAuto(it) {
       espera(20000).then(() => null),
     ])
   } catch (_) { c = null }
+  // a pagina disse que ele esta ocupado NESTE numero (voltou a mexer depois da pergunta do laco)
+  if (c && c.ocupado) { anotaEspera(String(c.erro || 'cobrador ocupado')); return 'depois' }
   const v = confereAuto(it, c, Math.floor(Date.now() / 1000))
   if (v && v.depois) {
     if (!v.conta) { anota('[auto] ' + it.k + ' depois: ' + v.depois); return 'depois' }
@@ -4394,6 +4396,30 @@ async function rodaAuto(it) {
   }
   return tudo ? 'enviado' : 'falhou'
 }
+// O COBRADOR ESTA LIVRE? (12/11/2026, pedido do Bruno: a automatica so sai "quando o meu cobrador nao
+// estiver em ligacao, quando ele nao estiver respondendo a ninguem, quando estiver tudo tranquilo".)
+// Cada pagina sabe do seu numero (__swOcupado no agente: microfone aberto, ligacao, tecla ou clique,
+// mensagem que ele mandou, audio tocando). Aqui a pergunta vai pra TODOS os numeros abertos, porque
+// quem esta ocupado e a PESSOA: ligacao num numero segura a automatica do outro. Funil saindo pelo
+// painel tambem e ele trabalhando. Devolve '' (livre) ou o motivo, pro registro.
+// Pagina que nao responde em 3 s nao vota (agente antigo, numero carregando): nesse numero o
+// __swChatDe ainda recusa sozinho na hora de mandar.
+async function cobradorOcupado() {
+  if (disparos.size) return 'um funil está saindo pelo painel'
+  const vivos = [...abertos.entries()].filter(([, s]) => s && s.connUltimo === 'pronto' && s.view && !s.view.webContents.isDestroyed())
+  const rs = await Promise.all(vivos.map(([nk, s]) => perguntaPagina(s.view.webContents, 'window.__swOcupado ? window.__swOcupado() : null', 3000)
+    .then((r) => ({ nk, r }), () => ({ nk, r: null }))))
+  const o = rs.find((x) => x.r && x.r.ocupado)
+  return o ? String(o.r.motivo || 'ocupado') + ' (' + (cheioDe(o.nk) || o.nk) + ')' : ''
+}
+// O registro nao enche: uma linha quando o motivo muda, e de novo a cada 10 min se continuar.
+let autoEspera = { motivo: '', em: 0 }
+function anotaEspera(motivo) {
+  const a = Date.now()
+  if (motivo === autoEspera.motivo && a - autoEspera.em < 600000) return
+  autoEspera = { motivo, em: a }
+  anota('[auto] esperando o cobrador ficar livre: ' + motivo)
+}
 async function autoCobranca() {
   if (autoRodando || !config.token || Date.now() < autoProximaEm) return
   const nks = [...abertos.keys()].filter((nk) => {
@@ -4403,6 +4429,9 @@ async function autoCobranca() {
   if (!nks.length) return
   autoRodando = true
   try {
+    // SO COM O COBRADOR LIVRE: ocupado, nem pergunta ao servidor; olha de novo em 30 s.
+    const ocupado = await cobradorOcupado()
+    if (ocupado) { anotaEspera(ocupado); autoProximaEm = Date.now() + 30000; return }
     let d = null
     try {
       const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/auto?nks=' + nks.join(','), { headers: cabecalhos(), signal: AbortSignal.timeout(25000) })
@@ -4413,6 +4442,11 @@ async function autoCobranca() {
     autoProximaEm = Date.now() + Math.max(30, Math.min(600, Number(d.proxima) || 60)) * 1000
     const itens = (Array.isArray(d.itens) ? d.itens : []).filter((x) => x && x.k && nks.includes(String(x.nk))).slice(0, AUTO_POR_RODADA)
     for (let i = 0; i < itens.length; i++) {
+      // ele pode ter voltado a trabalhar no respiro entre um cliente e outro: o resto fica pra depois
+      if (i > 0) {
+        const voltou = await cobradorOcupado()
+        if (voltou) { anotaEspera(voltou); autoProximaEm = Date.now() + 30000; return }
+      }
       let r = ''
       try { r = await rodaAuto(itens[i]) } catch (e) { anota('[auto] ' + itens[i].k + ' erro: ' + ((e && e.message) || e)) }
       // O RESPIRO entre um cliente e outro, so depois de mandar de verdade.

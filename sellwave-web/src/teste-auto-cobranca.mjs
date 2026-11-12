@@ -62,10 +62,12 @@ function montaChatDe(W) {
   const codigo = [
     linhaQueComeca(AG, 'var JID ='), linhaQueComeca(AG, 'var ehPessoa ='), linhaQueComeca(AG, 'var NAO_E_MSG ='),
     'function autenticado() { return !!(window.WPP && window.WPP.__auth !== false) }',
+    linhaQueComeca(AG, 'var CALMA_MS ='), linhaQueComeca(AG, 'var oc = {'), recorta(AG, 'function micAberto(agora)'), recorta(AG, 'function ocupadoAgora(agora)'),
     recorta(AG, 'function partes(wid)'), recorta(AG, 'function telefoneDoChat(c, id)'),
     recorta(AG, 'window.__swChatDe = function (fone, codigo)'),
   ].join('\n')
   vm.runInContext(codigo, ctx)
+  montaChatDe.oc = ctx.oc   // o estado do "cobrador ocupado" desta pagina de mentira
   return ctx.window.__swChatDe
 }
 {
@@ -101,6 +103,14 @@ function montaChatDe(W) {
   const chatDe2 = montaChatDe({ __auth: false, chat: W.chat })
   r = await chatDe2('5511999990001', '')
   vale('WhatsApp ainda carregando: ok falso, nada estoura', r.ok === false && /carregando/.test(r.erro), JSON.stringify(r))
+  // O COBRADOR OCUPADO NESTE NUMERO (12/11/2026): a conferencia recusa antes de olhar a conversa
+  const chatDe4 = montaChatDe(W)
+  montaChatDe.oc.mao = Date.now() - 20000
+  r = await chatDe4('5511999990001', '')
+  vale('cobrador mexendo no WhatsApp ha 20 s: a conferencia recusa (ok falso, ocupado)', r.ok === false && r.ocupado === true && /cobrador ocupado: mexendo no WhatsApp/.test(r.erro), JSON.stringify(r))
+  montaChatDe.oc.mao = Date.now() - 95000
+  r = await chatDe4('5511999990001', '')
+  vale('95 s sem mexer: a conferencia volta a ler a conversa', r.ok === true && r.achou === true, JSON.stringify(r))
   const chatDe3 = montaChatDe({ chat: { list: async () => chats, getMessages: async () => { throw new Error('rede caiu') } } })
   r = await chatDe3('5511999990001', '')
   vale('getMessages que falha vira ok falso com o erro', r.ok === false && /rede caiu/.test(r.erro), JSON.stringify(r))
@@ -179,7 +189,7 @@ function montaRoda(op) {
     return { ok: true, json: async () => resp }
   }
   const F = new Function('abertos', 'prontoCob', 'disparos', 'autoNoAr', 'espera', 'anota', 'avisaPainel', 'avisaCasca', 'mandaItem', 'fetch', 'config', 'cabecalhos', [
-    'const autoDepois = new Map()',
+    'const autoDepois = new Map()', "let autoEspera = { motivo: '', em: 0 }", recorta(MN, 'function anotaEspera(motivo)'),
     recorta(MN, 'function esperaDoTexto(texto, i, sorte)'), recorta(MN, 'function confereAuto(it, c, agoraS)'),
     recorta(MN, 'async function postaAuto(rota, corpo)'), recorta(MN, 'async function rodaAuto(it)'), 'return { rodaAuto, autoDepois }',
   ].join('\n'))(
@@ -329,11 +339,12 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
 }
 // ── o laco
 function montaLaco(op) {
-  const log = { fetch: [], rodou: [], esperas: [] }
+  const log = { fetch: [], rodou: [], esperas: [], anota: [], perguntas: 0 }
   const agora = op.agora || 10_000_000
   const abertos = new Map(Object.entries(op.abertos || { '1127335679': { prontoEm: agora - 200000 } }))
-  const F = new Function('config', 'abertos', 'alugados', 'ehDeCobranca', 'prontoCob', 'fetch', 'cabecalhos', 'ajustaRelogio', 'rodaAuto', 'espera', 'anota', 'Date', [
+  const F = new Function('config', 'abertos', 'alugados', 'ehDeCobranca', 'prontoCob', 'fetch', 'cabecalhos', 'ajustaRelogio', 'rodaAuto', 'espera', 'anota', 'Date', 'cobradorOcupado', [
     'const AUTO_PRONTO_MS = 120000', 'const AUTO_POR_RODADA = 4', 'let autoRodando = false', 'let autoProximaEm = 0',
+    "let autoEspera = { motivo: '', em: 0 }", recorta(MN, 'function anotaEspera(motivo)'),
     recorta(MN, 'async function autoCobranca()'),
     'return { autoCobranca, prox: () => autoProximaEm, rodando: () => autoRodando }',
   ].join('\n'))(
@@ -342,7 +353,9 @@ function montaLaco(op) {
     async (url) => { log.fetch.push(url); if (op.falhaRede) throw new Error('sem rede'); return { ok: true, json: async () => op.resposta } },
     () => ({}), () => {},
     async (it) => { log.rodou.push(it.k); return op.resultado || 'enviado' },
-    async (ms) => { log.esperas.push(ms) }, () => {}, { now: () => agora },
+    async (ms) => { log.esperas.push(ms) }, (t) => log.anota.push(t), { now: () => agora },
+    // `ocupado` = o que o cobradorOcupado responde a cada pergunta (texto, ou funcao da vez)
+    async () => { log.perguntas++; return typeof op.ocupado === 'function' ? op.ocupado(log.perguntas) : (op.ocupado || '') },
   )
   return { F, log, agora }
 }
@@ -379,6 +392,73 @@ function montaLaco(op) {
   await a.F.autoCobranca()
   vale('pulado nao gasta respiro', a.log.rodou.length === 2 && a.log.esperas.length === 0, a.log.esperas.join(','))
 }
+// ── SO COM O COBRADOR LIVRE (12/11/2026, pedido do Bruno: "quando o meu cobrador nao estiver em ligacao,
+// quando ele nao estiver respondendo a ninguem, quando estiver tudo tranquilo")
+console.log('\n=== main: a automatica espera o cobrador ficar livre ===\n')
+{
+  const itens = ['a', 'b', 'c'].map((x) => ({ k: 'rec:' + x, nk: '1127335679' }))
+  let a = montaLaco({ resposta: { ok: true, itens, proxima: 60 }, ocupado: 'em ligação (11) 92733-5679' })
+  await a.F.autoCobranca()
+  vale('cobrador em ligacao: nem pergunta ao servidor, nada sai', a.log.fetch.length === 0 && a.log.rodou.length === 0, a.log.fetch.length + ' ' + a.log.rodou.length)
+  vale('olha de novo em 30 s e solta a trava', a.F.prox() === a.agora + 30000 && a.F.rodando() === false, String(a.F.prox() - a.agora))
+  vale('o registro diz por que esta esperando', a.log.anota.length === 1 && /esperando o cobrador ficar livre: em ligação/.test(a.log.anota[0]), a.log.anota.join(' | '))
+  await a.F.autoCobranca()
+  vale('o relogio do app nao deixa perguntar de novo antes dos 30 s', a.log.perguntas === 1, String(a.log.perguntas))
+  a = montaLaco({ resposta: { ok: true, itens, proxima: 60 }, ocupado: '' })
+  await a.F.autoCobranca()
+  vale('cobrador livre: tudo como antes (pergunta e manda os tres)', a.log.fetch.length === 1 && a.log.rodou.join(',') === 'rec:a,rec:b,rec:c', a.log.rodou.join(','))
+  vale('e confere de novo antes de cada cliente seguinte (1 no comeco + 2 no meio)', a.log.perguntas === 3, String(a.log.perguntas))
+  a = montaLaco({ resposta: { ok: true, itens, proxima: 60 }, ocupado: (n) => (n >= 2 ? 'respondendo um cliente (11) 92733-5679' : '') })
+  await a.F.autoCobranca()
+  vale('voltou a trabalhar no respiro entre dois clientes: o primeiro saiu, o resto espera', a.log.rodou.join(',') === 'rec:a' && a.F.prox() === a.agora + 30000 && a.F.rodando() === false, a.log.rodou.join(','))
+}
+{
+  // a mesma linha no registro nao se repete a cada 30 s
+  const linhas = []
+  let agoraT = 1_000_000
+  const F = new Function('anota', 'Date', ["let autoEspera = { motivo: '', em: 0 }", recorta(MN, 'function anotaEspera(motivo)'), 'return anotaEspera'].join('\n'))((t) => linhas.push(t), { now: () => agoraT })
+  F('em ligação'); agoraT += 30000; F('em ligação'); agoraT += 30000; F('mexendo no WhatsApp'); agoraT += 601000; F('mexendo no WhatsApp')
+  vale('o registro so anota quando o motivo muda, e de novo depois de 10 min', linhas.length === 3, linhas.join(' | '))
+}
+{
+  // cobradorOcupado: a pergunta vai pra TODOS os numeros abertos e de pe
+  const monta = (paginas, disparos) => {
+    const perguntadas = []
+    const abertos = new Map(Object.entries(paginas).map(([nk, p]) => [nk, { connUltimo: p.conn || 'pronto', view: { webContents: { nk, isDestroyed: () => !!p.destruida } } }]))
+    const F = new Function('disparos', 'abertos', 'perguntaPagina', 'cheioDe', [recorta(MN, 'async function cobradorOcupado()'), 'return cobradorOcupado'].join('\n'))(
+      disparos || new Map(), abertos,
+      async (wc, codigo) => { perguntadas.push(wc.nk + ' ' + codigo); const p = paginas[wc.nk]; if (p.estoura) throw new Error('pagina caiu'); return p.r === undefined ? null : p.r },
+      (nk) => (nk === '1591980514' ? '(15) 99198-0514' : ''),
+    )
+    return { F, perguntadas }
+  }
+  let m = monta({ '1591980514': { r: { ocupado: false, motivo: '' } }, '1592860587': { r: { ocupado: false, motivo: '' } } })
+  let resp = await m.F()
+  vale('dois numeros abertos e quietos: livre', resp === '', resp)
+  vale('pergunta aos dois, pelo __swOcupado da pagina', m.perguntadas.length === 2 && m.perguntadas.every((x) => /window\.__swOcupado \? window\.__swOcupado\(\) : null/.test(x)), m.perguntadas.join(' | '))
+  m = monta({ '1591980514': { r: { ocupado: true, motivo: 'em ligação ou gravando áudio' } }, '1592860587': { r: { ocupado: false, motivo: '' } } })
+  resp = await m.F()
+  vale('ligacao num numero segura a automatica do OUTRO (quem esta ocupado e a pessoa)', resp === 'em ligação ou gravando áudio ((15) 99198-0514)', resp)
+  m = monta({ '1591980514': { r: null }, '1592860587': { estoura: true } })
+  resp = await m.F()
+  vale('pagina que nao responde (agente antigo) ou que estoura nao vota e nao derruba', resp === '', resp)
+  m = monta({ '1591980514': { conn: 'qr', r: { ocupado: true, motivo: 'x' } }, '1592860587': { destruida: true, r: { ocupado: true, motivo: 'x' } } })
+  resp = await m.F()
+  vale('numero pedindo QR ou ja fechado nem e perguntado', resp === '' && m.perguntadas.length === 0, m.perguntadas.join(' | '))
+  m = monta({ '1591980514': { r: { ocupado: false } } }, new Map([['1591980514', { funil: 'x' }]]))
+  resp = await m.F()
+  vale('funil saindo pelo painel: ocupado, sem nem perguntar as paginas', /funil/.test(resp) && m.perguntadas.length === 0, resp)
+}
+{
+  // rodaAuto: a pagina disse "ocupado" na hora de conferir a conversa
+  const a = montaRoda({ chatDe: { ok: false, ocupado: true, erro: 'cobrador ocupado: mexendo no WhatsApp' } })
+  const r = await a.F.rodaAuto(REC)
+  vale('pagina ocupada na conferencia: fica pra depois, sem pegar no servidor e sem mandar', r === 'depois' && a.log.posts.length === 0 && a.log.mandou.length === 0, r + ' ' + a.log.posts.length)
+  vale('e nao conta como conversa perdida (nao vira pulado na quinta volta)', a.F.autoDepois.size === 0, String(a.F.autoDepois.size))
+  for (let i = 0; i < 6; i++) await a.F.rodaAuto(REC)
+  vale('pode esperar quantas voltas for: continua sem pegar', a.log.posts.length === 0, String(a.log.posts.length))
+}
+vale('o agente e o main falam a mesma lingua (__swOcupado e o campo ocupado)', /window\.__swOcupado = function \(\) \{ var m = ocupadoAgora\(\); return \{ ocupado: !!m, motivo: m \} \}/.test(AG) && /if \(c && c\.ocupado\)/.test(MN))
 vale('a hibernacao e o "recarregar todos" respeitam quem esta mandando automatica', /!disparos\.has\(s\.nk\) && !autoNoAr\.has\(s\.nk\)/.test(MN) && /if \(disparos\.has\(nk\) \|\| autoNoAr\.has\(nk\)\) \{ noFunil \+= 1; continue \}/.test(MN))
 vale('o laco esta ligado no relogio do app (a cada 15 s)', /setInterval\(\(\) => \{ autoCobranca\(\)\.catch\(\(\) => \{\}\) \}, AUTO_TICK_MS\)/.test(MN) && /const AUTO_TICK_MS = 15000/.test(MN))
 vale('o "de pe desde" e carimbado na virada pra pronto', /if \(st === 'pronto'\) s\.prontoEm = Date\.now\(\)/.test(MN))

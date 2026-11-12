@@ -51,6 +51,14 @@
         P.play = function () {
           try {
             var el = this
+            // OUVINDO (ver O COBRADOR ESTA LIVRE, mais abaixo): som de verdade tocando, que e o audio do
+            // cliente ou um video com som. O plim (mudo ou curto) e o toque de ligacao (repete) nao contam.
+            if (!el.__swOuve) {
+              el.__swOuve = true
+              el.addEventListener('timeupdate', function () {
+                try { if (!el.muted && !el.loop && !el.paused && !(isFinite(el.duration) && el.duration < 4)) window.__swSomEm = Date.now() } catch (_) { /* ok */ }
+              })
+            }
             var ehAudio = (typeof HTMLAudioElement === 'undefined') || (el instanceof HTMLAudioElement)
             var doLead = /^blob:/i.test(String(el.currentSrc || el.src || ''))
             if (ehAudio && !el.srcObject && !doLead && !foiClique()) {
@@ -83,6 +91,58 @@
       }
     } catch (_) { /* ok */ }
   })()
+
+  // ──────────────────────────────────────────────── O COBRADOR ESTA LIVRE? (12/11/2026)
+  // Pedido do Bruno: a mensagem automatica so sai "quando o meu cobrador nao estiver em ligacao,
+  // quando ele nao estiver respondendo a ninguem, quando estiver tudo tranquilo". O servidor nao tem
+  // como saber (a ligacao so vira registro quando acaba, e quem esta digitando ainda nao mandou nada):
+  // quem sabe e esta pagina. `__swOcupado()` responde por ESTE numero; o app pergunta a todos os
+  // numeros abertos antes de mandar (cobradorOcupado no main), e o __swChatDe recusa sozinho quando o
+  // ocupado e este, o que vale ate pro app que ainda nao pergunta.
+  //   microfone aberto ..... ligacao em andamento, ou ele gravando um audio
+  //   ligacao .............. tocando agora, ou que acabou de terminar
+  //   mao no WhatsApp ...... tecla, clique ou rolagem nesta pagina
+  //   respondeu alguem ..... mensagem nossa que nao foi o app que mandou (daqui ou do celular)
+  //   painel ............... funil ou mensagem pronta que ele disparou
+  //   ouvindo .............. audio ou video tocando com som
+  // Tudo precisa estar quieto ha CALMA_MS. O microfone tem validade: se o WhatsApp esquecer um aberto,
+  // em 2 h ele deixa de contar (senao a automatica daquele numero ficaria muda ate recarregar).
+  // LIGACAO FEITA PELO CELULAR nao aparece aqui enquanto acontece: so quando acaba (o call_log).
+  var CALMA_MS = 90000
+  var oc = { mao: 0, saiu: 0, painel: 0, lig: 0, nossoAte: 0, mics: [] }
+  function micAberto(agora) {
+    oc.mics = oc.mics.filter(function (m) { try { return !!(m && m.t && m.t.readyState === 'live' && agora - m.em < 7200000) } catch (_) { return false } })
+    return oc.mics.length > 0
+  }
+  // '' = livre; senao o motivo, do jeito que vai pro registro do app.
+  function ocupadoAgora(agora) {
+    agora = agora || Date.now()
+    if (micAberto(agora)) return 'em ligação ou gravando áudio'
+    if (agora < (window.__swLigandoAte || 0) || agora - oc.lig < CALMA_MS) return 'em ligação'
+    if (agora - oc.mao < CALMA_MS) return 'mexendo no WhatsApp'
+    if (agora - oc.saiu < CALMA_MS) return 'respondendo um cliente'
+    if (agora - oc.painel < CALMA_MS) return 'mandando pelo painel'
+    if (agora - (window.__swSomEm || 0) < CALMA_MS) return 'ouvindo um áudio'
+    return ''
+  }
+  window.__swOcupado = function () { var m = ocupadoAgora(); return { ocupado: !!m, motivo: m } }
+  try {
+    var md = navigator.mediaDevices
+    if (md && typeof md.getUserMedia === 'function' && !md.__swMic) {
+      var gum0 = md.getUserMedia
+      md.getUserMedia = function () {
+        return gum0.apply(md, arguments).then(function (st) {
+          try { st.getAudioTracks().forEach(function (t) { oc.mics.push({ t: t, em: Date.now() }) }) } catch (_) { /* ok */ }
+          return st
+        })
+      }
+      md.__swMic = true
+    }
+  } catch (_) { /* sem o microfone vigiado, valem os outros sinais */ }
+  try {
+    var mexeu = function (e) { if (!e || e.isTrusted !== false) oc.mao = Date.now() }
+    ;['keydown', 'mousedown', 'wheel', 'touchstart'].forEach(function (n) { document.addEventListener(n, mexeu, { capture: true, passive: true }) })
+  } catch (_) { /* ok */ }
 
   // SO CONVERSA DE PESSOA. Lista de PERMITIDOS, usada tanto pra achar a conversa quanto pra
   // capturar e pra ENVIAR. Antes ela so valia na captura: com um grupo aberto na tela, o painel
@@ -528,6 +588,10 @@
     window.__swParar = false
     var dataUri = item.dataUri
     if (item.tipo !== 'texto' && !dataUri) return Promise.reject(new Error('mídia não veio junto'))
+    // O QUE O APP MANDA NAO E "o cobrador respondendo" (ver O COBRADOR ESTA LIVRE): a janela cobre a
+    // pausa, o envio e a volta da mensagem pela captura. Item do PAINEL (sem `auto`) e ele trabalhando.
+    var marcaNosso = function (folga) { oc.nossoAte = Date.now() + folga; if (!item.auto) oc.painel = Date.now() }
+    marcaNosso(150000)
     var ehPrimeiro = ehComecoDeFunil(chatId)
     var ant = fimDoItem[chatId]
     // A DURACAO DESTE AUDIO e medida agora pra ficar guardada: quem precisa dela e o item SEGUINTE,
@@ -574,8 +638,8 @@
       }).then(function () { return true })
     // O FIM E MARCADO DE QUALQUER JEITO, inclusive quando o envio falha: o item seguinte do mesmo
     // funil continua sendo "o seguinte", e nao um comeco de funil que dispensaria o respiro.
-    })).then(function (r) { marcaFimDoItem(chatId, item.kind || item.tipo, item.__dur); return r },
-      function (e) { marcaFimDoItem(chatId, item.kind || item.tipo, item.__dur); throw e })
+    })).then(function (r) { marcaNosso(10000); marcaFimDoItem(chatId, item.kind || item.tipo, item.__dur); return r },
+      function (e) { marcaNosso(10000); marcaFimDoItem(chatId, item.kind || item.tipo, item.__dur); throw e })
   }
 
   // O que o painel pergunta a cada pulso.
@@ -793,6 +857,9 @@
         var assina = lg.dur + '|' + lg.desfecho
         if (ligVistas[id] === assina) return
         ligVistas[id] = assina
+        // A LIGACAO ACABOU DE TERMINAR (o registro so nasce no fim dela): ele ainda esta com o cliente
+        // na cabeca. Conta como ocupado (ver O COBRADOR ESTA LIVRE). Releitura de conversa antiga nao.
+        if (!(msg && msg.__swVia) && ts && Date.now() / 1000 - ts < 10800) oc.lig = Date.now()
         manda({
           msgId: id, via: String((msg && msg.__swVia) || ''), selfNumber: numeroDoAparelho(), phone: pr.digits,
           lid: pr.isLid ? 1 : 0, velha: ts && (Date.now() / 1000 - ts) > 1800 ? 1 : 0, fromMe: deMim,
@@ -801,6 +868,10 @@
         return
       }
       if (tipoCru !== 'ciphertext' && NAO_E_MSG.test(tipoCru)) return
+      // O COBRADOR ACABOU DE RESPONDER ALGUEM (ver O COBRADOR ESTA LIVRE): mensagem nossa, de agora, que
+      // nao foi o app que mandou e nao veio da releitura de conversa antiga. Vale a que ele mandou pelo
+      // celular. 10 min de folga no "de agora" aguentam o relogio do computador fora do lugar.
+      if (deMim && ts && Math.abs(Date.now() / 1000 - ts) < 600 && Date.now() > oc.nossoAte && !(msg && msg.__swVia)) oc.saiu = Date.now()
       if (tipoCru === 'ciphertext' && !solta) {
         if (!segurados[id] && !vistas[id]) {
           segurados[id] = {
@@ -1319,6 +1390,10 @@
       if (!W || !W.chat || typeof W.chat.list !== 'function' || typeof W.chat.getMessages !== 'function' || !autenticado()) {
         return Promise.resolve({ ok: false, erro: 'o WhatsApp ainda esta carregando' })
       }
+      // O COBRADOR ESTA OCUPADO NESTE NUMERO (ligacao, digitando, respondendo alguem): a automatica
+      // espera. O main le `ok: false` como "depois": nao pega o item e nao conta como conversa perdida.
+      var ocup = ocupadoAgora()
+      if (ocup) return Promise.resolve({ ok: false, ocupado: true, erro: 'cobrador ocupado: ' + ocup })
       var chave = function (v) {
         var d = String(v || '').replace(/\D/g, '')
         if (d.length >= 12 && d.slice(0, 2) === '55') d = d.slice(2)
