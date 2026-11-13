@@ -37,7 +37,9 @@ let cobModo = false
 let cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: [], em: 0 }
 // A ABA AUTOMACOES (11/11/2026, so na versao de cobrador; ver "automacoes" la embaixo). Aqui em cima
 // pelo mesmo motivo: o desenha() le.
-let auto = { em: 0, carregando: false, erro: '', tipos: [], ultimos: [], numeros: 0, salvando: '', aberto: '' }
+// `edita` = o texto aberto pra editar ({ id, campo, valor, original, erro, salvando }); `pode` = o
+// servidor e o app sabem editar; `dir`/`de` = quem olha e a direcao, vendo a aba de um cobrador.
+let auto = { em: 0, carregando: false, erro: '', tipos: [], ultimos: [], numeros: 0, salvando: '', aberto: '', edita: null, pode: false, dir: false, de: null, varRot: {}, redesenha: false }
 let soFavs = false        // o mesmo filtro do inbox: estrela ao lado dos chips
 let filtro = ''
 let tipoFiltro = ''          // '' = todos
@@ -322,7 +324,15 @@ function desenha() {
     voltaFoco(_foco)
     return
   }
-  if (aba === 'auto') { const rolo = corpo.scrollTop; corpo.innerHTML = desenhaAuto(); ligaAuto(corpo); corpo.scrollTop = rolo; return }
+  if (aba === 'auto') {
+    // QUEM ESTA ESCREVENDO NAO E INTERROMPIDO (13/11/2026): o redesenho de fundo trocaria a caixa de
+    // texto no meio de uma tecla (o acento do teclado brasileiro sao duas) e levaria o cursor embora.
+    // O que a propria aba pede (abrir, salvar, cancelar) passa pelo `auto.redesenha`.
+    const cx = corpo.querySelector('[data-area]')
+    if (cx && auto.edita && document.activeElement === cx && !auto.redesenha) return
+    auto.redesenha = false
+    const rolo = corpo.scrollTop; corpo.innerHTML = desenhaAuto(); ligaAuto(corpo); corpo.scrollTop = rolo; return
+  }
   if (aba === 'pedidos' && cobModo) { corpo.innerHTML = desenhaCob(); ligaCob(corpo); return }
   if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); voltaFoco(_foco); return }
 
@@ -2462,6 +2472,7 @@ function aplicaModo(v) {
   const abaAuto = $('aba-auto')
   if (abaAuto) abaAuto.hidden = !cobModo
   const saiuDaAuto = !cobModo && aba === 'auto'
+  auto.edita = null
   cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: cob.prontos || [], em: 0 }
   // O ROTEIRO E OUTRO (de venda pra cobranca, ou de volta): rele na hora em vez de esperar o vazio.
   roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
@@ -2520,6 +2531,99 @@ function recebeAuto(r) {
   auto.ultimos = Array.isArray(r.ultimos) ? r.ultimos : []
   auto.numeros = Number(r.numeros) || 0
   auto.erro = ''
+  // EDITAR O TEXTO (13/11/2026): so com servidor e app que sabem. A direcao no "ver como" chega com
+  // `dir` e `de` (o cobrador que ela esta vendo); trocou de pessoa, o texto aberto nao e mais o dela.
+  const deAntes = auto.de && auto.de.id
+  auto.pode = !!r.edita && !!window.swp.autoTexto
+  auto.dir = !!r.dir
+  auto.de = (r.de && typeof r.de === 'object') ? { id: String(r.de.id || ''), nome: String(r.de.nome || '') } : null
+  auto.varRot = (r.varRot && typeof r.varRot === 'object') ? r.varRot : {}
+  if (auto.edita && (!auto.pode || (auto.de && auto.de.id) !== deAntes || !autoTextoDe(auto.edita.id, auto.edita.campo))) auto.edita = null
+}
+// ── EDITAR A MENSAGEM (13/11/2026). Pedido do Bruno: "eu quero que tanto eu quanto os meus cobradores
+// tenham autonomia para poder editar essas mensagens e arrumar alguma coisazinha ou outra". O cobrador
+// salva a versao DELE (so vale no que sai pelos numeros dele); a direcao, vendo a aba de um cobrador,
+// escolhe "Salvar pra todos" (o texto da casa) ou so pra ele. Na caixa o texto aparece como e gravado,
+// com as palavras entre chaves; os botoes embaixo colocam cada uma no lugar do cursor.
+const autoTextoDe = (id, campo) => { const t = auto.tipos.find((x) => x.id === id); return (t && Array.isArray(t.textos) && t.textos.find((y) => y.campo === campo)) || null }
+const autoMudou = () => !!(auto.edita && String(auto.edita.valor) !== String(auto.edita.original))
+const autoRedesenha = () => { auto.redesenha = true; if (aba === 'auto') desenha(); else auto.redesenha = false }
+const autoArea = () => document.querySelector('#corpo [data-area]')
+function autoAltura(el) { if (!el) return; el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px' }
+const autoPreso = () => { rodape('Salve ou cancele a mensagem que você está editando.', null, true) }
+function abreAutoTexto(id, campo) {
+  if (auto.edita && autoMudou() && !(auto.edita.id === id && auto.edita.campo === campo)) { autoPreso(); return }
+  const x = autoTextoDe(id, campo)
+  if (!x || !auto.pode) return
+  auto.edita = { id, campo, valor: String(x.texto || ''), original: String(x.texto || ''), erro: '', salvando: '' }
+  autoRedesenha()
+  const area = autoArea()
+  if (area) { area.focus({ preventScroll: true }); const n = area.value.length; try { area.setSelectionRange(n, n) } catch (_) { /* sem cursor no fim, fica onde o navegador pos */ } }
+}
+function fechaAutoTexto() { if (auto.edita && auto.edita.salvando) return; auto.edita = null; autoRedesenha() }
+function poeAutoVar(v) {
+  const area = autoArea(), e = auto.edita
+  if (!area || !e || e.salvando) return
+  const a = area.selectionStart == null ? area.value.length : area.selectionStart
+  const b = area.selectionEnd == null ? a : area.selectionEnd
+  area.focus({ preventScroll: true })
+  area.setRangeText('{' + v + '}', a, b, 'end')
+  e.valor = area.value
+  autoAltura(area)
+}
+// `modo`: 'um' = a versao da pessoa · 'todos' = o texto da casa (so a direcao) · 'padrao' = apaga a
+// versao da pessoa e volta ao da casa.
+async function salvaAutoTexto(modo) {
+  const e = auto.edita
+  if (!e || e.salvando) return
+  const area = autoArea()
+  if (area) e.valor = area.value
+  if (modo !== 'padrao' && !String(e.valor).trim()) { e.erro = 'Escreva a mensagem. Pra ela não sair, desligue a automação.'; autoRedesenha(); return }
+  e.salvando = modo
+  e.erro = ''
+  autoRedesenha()
+  let r = null
+  try { r = await window.swp.autoTexto(e.campo, String(e.valor), { todos: modo === 'todos', padrao: modo === 'padrao' }) } catch (_) { r = null }
+  if (auto.edita !== e) return               // saiu do modo cobranca no meio
+  e.salvando = ''
+  auto.em = Date.now()
+  if (r && r.ok) {
+    auto.edita = null
+    recebeAuto(r)
+    rodape(modo === 'padrao' ? 'Voltou ao texto padrão' : modo === 'todos' ? 'Texto salvo pra todos' : 'Texto salvo', null, true)
+  } else e.erro = humano((r && (r.erro || r.error)) || 'Não deu pra salvar.')
+  autoRedesenha()
+}
+function desenhaAutoTexto(t, x, n) {
+  const e = auto.edita
+  const editando = !!(e && e.id === t.id && e.campo === x.campo)
+  const quem = (auto.dir && auto.de && auto.de.nome) ? auto.de.nome : ''
+  let h = '<div class="au-tx' + (editando ? ' ed' : '') + '"><div class="au-tx-topo">'
+    + (n > 1 ? '<span class="au-rot">' + esc(x.rot) + '</span>' : '')
+    + (x.proprio ? '<span class="au-meu">' + (quem ? 'Texto de ' + esc(quem) : 'Seu texto') + '</span>' : '')
+    + (auto.pode && x.campo && !editando ? '<button class="au-ed" data-tipo="' + esc(t.id) + '" data-ed="' + esc(x.campo) + '">' + IC_LAPIS + 'Editar</button>' : '')
+    + '</div>'
+  if (!editando) return h + '<div class="au-bolha">' + esc(autoExemplo(x.texto)) + '</div></div>'
+  const dis = e.salvando ? ' disabled' : ''
+  const gira = (m) => (e.salvando === m ? IC_GIRA : '')
+  const vars = Array.isArray(x.vars) ? x.vars : []
+  h += '<textarea class="au-area" data-area maxlength="2000" aria-label="' + esc(x.rot) + '"' + (e.salvando ? ' readonly' : '') + '>' + esc(e.valor) + '</textarea>'
+  if (vars.length) {
+    h += '<div class="au-vars"><span class="au-vars-rot">Colocar</span>'
+      + vars.map((v) => '<button class="au-var" data-var="' + esc(v) + '" title="{' + esc(v) + '}"' + dis + '>' + esc(auto.varRot[v] || '{' + v + '}') + '</button>').join('') + '</div>'
+  }
+  if (e.erro) h += '<div class="au-erro">' + esc(e.erro) + '</div>'
+  const cancela = '<button class="' + (quem ? 'au-lk' : 'bt sec') + '" data-cancela' + dis + '>Cancelar</button>'
+  const volta = x.proprio ? '<button class="au-lk" data-salva="padrao"' + dis + '>' + gira('padrao') + 'Voltar ao padrão</button>' : ''
+  if (quem) {
+    h += '<div class="au-acoes dois"><button class="bt pri" data-salva="todos"' + dis + '>' + gira('todos') + 'Salvar pra todos</button>'
+      + '<button class="bt sec" data-salva="um"' + dis + '>' + gira('um') + 'Só para ' + esc(quem) + '</button></div>'
+      + '<div class="au-pe">' + volta + cancela + '</div>'
+  } else {
+    h += '<div class="au-acoes"><button class="bt pri" data-salva="um"' + dis + '>' + gira('um') + 'Salvar</button>' + cancela + '</div>'
+      + (volta ? '<div class="au-pe">' + volta + '</div>' : '')
+  }
+  return h + '</div>'
 }
 async function puxaAuto(calado) {
   if (!window.swp.autoConfig || auto.carregando) return
@@ -2544,8 +2648,10 @@ async function trocaAuto(id) {
   try { r = await window.swp.autoLiga(id, novo) } catch (_) { r = null }
   auto.salvando = ''
   auto.em = Date.now()
-  if (r && r.ok) { recebeAuto(r); rodape(t.nome + (novo ? ': ligada' : ': desligada')) }
-  else { t.meu = !novo; rodape(humano((r && (r.erro || r.error)) || 'não deu pra salvar')) }
+  // SEGURA O RECADO (13/11/2026): o pulso do painel reescreve o rodape a cada 1,5 s, e a recusa da
+  // dash sumia antes de dar tempo de ler (o teste pegava isso uma vez em duas).
+  if (r && r.ok) { recebeAuto(r); rodape(t.nome + (novo ? ': ligada' : ': desligada'), null, true) }
+  else { t.meu = !novo; rodape(humano((r && (r.erro || r.error)) || 'não deu pra salvar'), null, true) }
   if (aba === 'auto') desenha()
 }
 function desenhaAuto() {
@@ -2566,9 +2672,7 @@ function desenhaAuto() {
       + '<div class="au-dica">' + esc(t.dica) + '</div>'
       + (t.direcao ? '' : '<div class="au-dir">Desligada pela direção</div>')
       + (txs.length ? '<button class="au-ver' + (auto.aberto === t.id ? ' on' : '') + '" data-ver="' + esc(t.id) + '">Ver mensagem' + IC_SETA + '</button>' : '')
-    if (auto.aberto === t.id && txs.length) {
-      h += '<div class="au-txt">' + txs.map((x) => (txs.length > 1 ? '<span class="au-rot">' + esc(x.rot) + '</span>' : '') + '<div class="au-bolha">' + esc(autoExemplo(x.texto)) + '</div>').join('') + '</div>'
-    }
+    if (auto.aberto === t.id && txs.length) h += '<div class="au-txt">' + txs.map((x) => desenhaAutoTexto(t, x, txs.length)).join('') + '</div>'
     h += '</div>'
   }
   if (auto.ultimos.length) {
@@ -2584,7 +2688,34 @@ function desenhaAuto() {
 }
 function ligaAuto(corpo) {
   for (const b of corpo.querySelectorAll('[data-au]')) b.onclick = () => trocaAuto(b.dataset.au)
-  for (const b of corpo.querySelectorAll('[data-ver]')) b.onclick = () => { auto.aberto = auto.aberto === b.dataset.ver ? '' : b.dataset.ver; desenha() }
+  for (const b of corpo.querySelectorAll('[data-ver]')) {
+    b.onclick = () => {
+      // fechar o cartao (ou abrir outro) com um texto mexido e nao salvo perderia o que ele escreveu
+      if (auto.edita && autoMudou()) { autoPreso(); return }
+      auto.edita = null
+      auto.aberto = auto.aberto === b.dataset.ver ? '' : b.dataset.ver
+      desenha()
+    }
+  }
+  for (const b of corpo.querySelectorAll('[data-ed]')) b.onclick = () => abreAutoTexto(b.dataset.tipo, b.dataset.ed)
+  for (const b of corpo.querySelectorAll('[data-salva]')) b.onclick = () => salvaAutoTexto(b.dataset.salva)
+  for (const b of corpo.querySelectorAll('[data-cancela]')) b.onclick = () => fechaAutoTexto()
+  for (const b of corpo.querySelectorAll('[data-var]')) {
+    b.onmousedown = (ev) => ev.preventDefault()      // o clique nao tira o cursor da caixa
+    b.onclick = () => poeAutoVar(b.dataset.var)
+  }
+  const area = corpo.querySelector('[data-area]')
+  if (area) {
+    autoAltura(area)
+    area.oninput = () => {
+      if (auto.edita) {
+        auto.edita.valor = area.value
+        if (auto.edita.erro) { auto.edita.erro = ''; const e = corpo.querySelector('.au-erro'); if (e) e.remove() }
+      }
+      autoAltura(area)
+    }
+    area.onkeydown = (ev) => { if (ev.key === 'Escape' && !autoMudou()) { ev.preventDefault(); fechaAutoTexto() } }
+  }
 }
 
 function desenhaCob() {
@@ -3374,7 +3505,7 @@ async function pulso() {
     if (f !== cob.fone) puxaCob(f, false)
     else if (f && aba === 'pedidos' && Date.now() - cob.em > 30000 && !digitandoNaFicha()) puxaCob(f, true)
     // a aba Automacoes aberta se atualiza de 30 em 30 s (o "hoje" e os ultimos envios andam sozinhos)
-    if (aba === 'auto' && Date.now() - auto.em > 30000 && !auto.carregando && !auto.salvando) puxaAuto(true)
+    if (aba === 'auto' && Date.now() - auto.em > 30000 && !auto.carregando && !auto.salvando && !auto.edita) puxaAuto(true)
   }
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }

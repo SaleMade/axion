@@ -549,8 +549,12 @@
      desligar". Cada mensagem automatica e um cartao: interruptor, o que ela faz, quantas sairam hoje
      e o texto que vai (em balao, como na conversa). */
   .aba[hidden] { display: none; }
-  .au { display: grid; gap: 8px; padding: 10px 8px 14px; }
-  .au-it { padding: 10px; border: 1px solid var(--borda); border-radius: 10px; background: var(--fraco); }
+  /* A COLUNA TEM A LARGURA DO PAINEL, NAO A DO MAIOR TEXTO (13/11/2026). Sem o minmax(0, 1fr) a
+     coluna da grade crescia ate caber a linha mais comprida dos "Ultimos envios" (nome de cliente
+     longo, numa linha so), e a aba inteira ficava 170px mais larga que o painel: os baloes passavam
+     da borda e aparecia a barra de rolar pro lado. Medido com os envios de verdade: 480px em 310. */
+  .au { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 10px 8px 14px; }
+  .au-it { min-width: 0; padding: 10px; border: 1px solid var(--borda); border-radius: 10px; background: var(--fraco); }
   .au-it.off { opacity: .72; }
   .au-topo { display: flex; align-items: center; gap: 9px; }
   .au-nome { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; line-height: 16px; }
@@ -567,10 +571,48 @@
   .au-ver { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; font-size: 11px; font-weight: 600; color: var(--azul); }
   .au-ver svg { width: 12px; height: 12px; transition: transform .15s; }
   .au-ver.on svg { transform: rotate(180deg); }
-  .au-txt { display: grid; gap: 6px; margin-top: 8px; padding: 8px; border-radius: 8px; background: var(--conversa); }
+  .au-txt { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 8px; padding: 8px; border-radius: 8px; background: var(--conversa); }
   .au-rot { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--apagado); }
-  .au-bolha { justify-self: end; max-width: 96%; padding: 6px 8px; border-radius: 8px 2px 8px 8px; background: var(--balao);
+  .au-bolha { justify-self: end; min-width: 0; max-width: 96%; padding: 6px 8px; border-radius: 8px 2px 8px 8px; background: var(--balao);
     font-size: 11.5px; line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* EDITAR A MENSAGEM (13/11/2026): cada texto ganhou o lapis; aberto, o balao vira a caixa de texto
+     (cresce com o texto, quebra a linha, rola por dentro depois do teto) com os botoes do que da pra
+     colocar. O selo azul diz que aquele texto e a versao da pessoa, nao o da casa. */
+  .au-tx { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .au-tx-topo { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+  .au-tx-topo .au-rot { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .au-meu { flex-shrink: 1; min-width: 0; padding: 1px 7px; border-radius: 9999px; background: rgba(83, 189, 235, .14); color: var(--azul);
+    font-size: 9.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .au-ed { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: auto; height: 22px; padding: 0 7px; border-radius: 6px;
+    font-size: 10.5px; font-weight: 600; color: var(--apagado); transition: background-color .15s, color .15s; }
+  .au-ed:hover { background: var(--hover); color: var(--texto); }
+  .au-ed:focus-visible, .au-var:focus-visible, .au-lk:focus-visible { outline: 2px solid var(--azul); outline-offset: 1px; }
+  .au-ed svg { width: 11px; height: 11px; }
+  .au-area { display: block; width: 100%; min-height: 62px; max-height: 300px; padding: 8px 9px; border: 1px solid rgba(0, 168, 132, .55); border-radius: 8px;
+    background: rgba(32, 44, 51, .55); color: var(--texto); font: inherit; font-size: 12px; line-height: 17px; resize: none; outline: none;
+    overflow-x: hidden; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .au-area { max-height: min(60vh, 520px); }     /* a mensagem mais comprida (o "Localizei") cabe inteira num painel de altura normal */
+  .au-area::-webkit-scrollbar { width: 6px; }
+  .au-area::-webkit-scrollbar-track { background: transparent; }
+  .au-area::-webkit-scrollbar-thumb { background: #6a7282; border-radius: 3px; }
+  .au-area:focus { box-shadow: 0 0 0 3px rgba(0, 168, 132, .15); }
+  .au-area[readonly] { opacity: .6; }
+  .au-vars { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .au-vars-rot { margin-right: 2px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--apagado); }
+  .au-var { max-width: 100%; height: 22px; padding: 0 8px; border-radius: 9999px; border: 1px dashed rgba(0, 168, 132, .5); color: var(--verde);
+    font-size: 10.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background-color .15s; }
+  .au-var:hover { background: rgba(0, 168, 132, .14); }
+  .au-var:disabled, .au-lk:disabled { opacity: .45; cursor: default; }
+  .au-erro { padding: 6px 8px; border-radius: 8px; background: rgba(240, 80, 106, .12); color: #ffb3bf; font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+  .au-acoes { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-top: 2px; }
+  .au-acoes.dois { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  /* o `.sec` (titulo de secao da lista) casa com o `.bt.sec` e traria caixa alta, largura cheia e margem */
+  .au-acoes .bt { min-width: 0; width: auto; height: 32px; margin: 0; padding: 0 10px; font-size: 12px; text-transform: none; letter-spacing: normal;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .au-pe { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 18px; }
+  .au-lk { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--apagado); }
+  .au-lk:hover { color: var(--texto); }
+  .au-lk svg { width: 11px; height: 11px; }
   .au-sec { padding: 8px 2px 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--apagado); }
   .au-ult { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; background: var(--fraco); font-size: 11px; line-height: 15px; }
   .au-ult .q { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

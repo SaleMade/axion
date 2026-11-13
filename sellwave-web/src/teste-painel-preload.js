@@ -9,13 +9,26 @@ let rascSeq = 0
 const reg = (nome, valor) => (...args) => { chamadas.push({ nome, args }); return Promise.resolve(valor) }
 // AS AUTOMACOES do painel do cobrador (11/11/2026): o que ESTA pessoa ligou, com estado.
 const AUTO_MEU = { rec: true, ret: true, pag: true }
+// O TEXTO DE CADA UM (13/11/2026): AUTO_CASA = o da casa, AUTO_TXT = a versao de quem esta no app.
+// AUTO_DIR = quem olha e a direcao, vendo a aba do Haynan; AUTO_VELHO = servidor que ainda nao sabe
+// editar; AUTO_LONGO = envios com nome comprido (o que alargava a aba e criava a rolagem pro lado).
+const AUTO_CASA = { saudacao: '{saudacao} {nome}', apresenta: 'Aqui quem fala é o Elias.', ret1: 'Oi {primeiro}, código {codigo}', pagou: 'Recebi, {primeiro}!' }
+const AUTO_TXT = {}
+let AUTO_DIR = false, AUTO_VELHO = false, AUTO_LONGO = false
+const autoTx = (campo, rot, vars) => (AUTO_VELHO ? { rot, texto: AUTO_CASA[campo] } : { campo, rot, texto: AUTO_TXT[campo] || AUTO_CASA[campo], proprio: !!AUTO_TXT[campo], vars })
 const autoResposta = () => ({ ok: true, numeros: 1,
+  ...(AUTO_VELHO ? {} : { edita: true, dir: AUTO_DIR, de: AUTO_DIR ? { id: 'hc', nome: 'Haynan' } : null,
+    varRot: { saudacao: 'Bom dia / Boa tarde', primeiro: 'Primeiro nome', nome: 'Nome completo', codigo: 'Código de rastreio', link: 'Link do rastreio', valor: 'Valor' } }),
   tipos: [
-    { id: 'rec', nome: 'Boas-vindas', dica: 'O cliente chamou e ninguém respondeu em 1 minuto.', direcao: true, meu: AUTO_MEU.rec, hoje: 2, textos: [{ rot: 'Saudação', texto: '{saudacao} {nome}' }, { rot: 'Apresentação', texto: 'Aqui quem fala é o Elias.' }] },
-    { id: 'ret', nome: 'Retirar nos Correios', dica: 'Um lembrete por dia, por até 5 dias.', direcao: true, meu: AUTO_MEU.ret, hoje: 0, textos: [{ rot: 'Retirada: chegou na agência', texto: 'Oi {primeiro}, código {codigo}' }] },
-    { id: 'pag', nome: 'Pagou', dica: 'O pagamento caiu: agradece.', direcao: false, meu: AUTO_MEU.pag, hoje: 0, textos: [{ rot: 'Pagou', texto: 'Recebi, {primeiro}!' }] },
+    { id: 'rec', nome: 'Boas-vindas', dica: 'O cliente chamou e ninguém respondeu em 1 minuto.', direcao: true, meu: AUTO_MEU.rec, hoje: 2, textos: [autoTx('saudacao', 'Saudação', ['saudacao', 'primeiro', 'nome']), autoTx('apresenta', 'Apresentação', ['primeiro', 'nome'])] },
+    { id: 'ret', nome: 'Retirar nos Correios', dica: 'Um lembrete por dia, por até 5 dias.', direcao: true, meu: AUTO_MEU.ret, hoje: 0, textos: [autoTx('ret1', 'Retirada: chegou na agência', ['saudacao', 'primeiro', 'codigo', 'link', 'valor'])] },
+    { id: 'pag', nome: 'Pagou', dica: 'O pagamento caiu: agradece.', direcao: false, meu: AUTO_MEU.pag, hoje: 0, textos: [autoTx('pagou', 'Pagou', ['saudacao', 'primeiro'])] },
   ],
-  ultimos: [{ id: 'rec', nome: 'Maria das Dores', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 120 }],
+  ultimos: [{ id: 'rec', nome: 'Maria das Dores', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 120 }]
+    .concat(AUTO_LONGO ? [
+      { id: 'ret', nome: 'Francisca Aparecida dos Santos Oliveira de Albuquerque', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 300 },
+      { id: 'pag', nome: 'Sebastiao Raimundo Nonato Cavalcante Vasconcelos Filho', status: 'pulado', motivo: 'o cobrador já falou depois', ts: Math.floor(Date.now() / 1000) - 90000 },
+    ] : []),
 })
 
 const ESTADO = {
@@ -162,12 +175,25 @@ contextBridge.exposeInMainWorld('swp', {
     AUTO_MEU[id] = !!ligado
     return Promise.resolve(autoResposta())
   },
+  // Editar o texto: como o servidor, recusa palavra entre chaves que nao conhece e guarda a versao
+  // da pessoa (ou troca o da casa, no "pra todos").
+  autoTexto: (campo, texto, opc) => {
+    const o = opc || {}
+    chamadas.push({ nome: 'autoTexto', args: [campo, texto, { todos: !!o.todos, padrao: !!o.padrao }] })
+    if (!o.padrao && /\{Nome\}/.test(String(texto))) return Promise.resolve({ ok: false, erro: 'Esta mensagem não sabe preencher {Nome}. Aqui dá pra usar: {saudacao} {primeiro} {nome}' })
+    if (o.padrao) delete AUTO_TXT[campo]
+    else if (o.todos) { AUTO_CASA[campo] = String(texto); delete AUTO_TXT[campo] }
+    else if (String(texto) === AUTO_CASA[campo]) delete AUTO_TXT[campo]
+    else AUTO_TXT[campo] = String(texto)
+    return new Promise((r) => setTimeout(() => r(autoResposta()), 120))
+  },
   abrirLink: reg('abrirLink', { ok: true }),
   copiar: reg('copiar', { ok: true }),
   aoMudarModo: () => {},
 })
 // O app vira o do cobrador (o main manda `cobranca` no estado da conversa).
 contextBridge.exposeInMainWorld('__poeCobranca', (v) => { ESTADO.cobranca = !!v })
+contextBridge.exposeInMainWorld('__poeAuto', (o) => { if ('dir' in o) AUTO_DIR = !!o.dir; if ('velho' in o) AUTO_VELHO = !!o.velho; if ('longo' in o) AUTO_LONGO = !!o.longo })
 // O contextBridge COPIA o valor na hora de expor: um array exposto direto nasce congelado e os
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.
 contextBridge.exposeInMainWorld('__ver', () => JSON.parse(JSON.stringify(chamadas)))

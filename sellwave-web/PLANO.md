@@ -458,6 +458,23 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   cliente, porque ocupado é a pessoa (ligação num número segura a automática do outro). Ligação feita pelo
   celular só é vista quando acaba. Não tem válvula de tempo: quem não para 90 s não libera. Testes:
   `src/teste-ocupado.js` (32, o agente numa página de verdade) e `src/teste-auto-cobranca.mjs` (106).
+- **13/11/2026 — EDITAR AS MENSAGENS NA ABA AUTOMAÇÕES, E A ABA CABE NO PAINEL (1.26.19).** Pedido do Bruno:
+  "eu quero que tanto eu quanto os meus cobradores tenham autonomia para poder editar essas mensagens" e
+  "as mensagens não cabem naquela área lateral direita, eu sempre tenho que usar a barrinha lá embaixo".
+  **A rolagem pro lado** era a grade da aba (`.au`) sem `minmax(0, 1fr)`: a linha dos "Últimos envios" com
+  nome de cliente comprido (uma linha só) alargava a coluna inteira, e tudo passava da borda (medido com os
+  envios de verdade: 480px num painel de 310). O teste antigo só tinha "Maria das Dores" e nunca viu; agora
+  tem nome comprido e mede cartão por cartão. **Editar:** cada texto aberto ganhou o lápis; o balão vira a
+  caixa com o texto como é gravado (palavras entre chaves) e os botões do que dá pra colocar. O cobrador
+  salva a versão DELE (`cob_auto_pessoa[uid].txt`, só vale no que sai pelos números dele; selo "Seu texto",
+  "Voltar ao padrão"). A direção só vê a aba no "ver como" de um cobrador, e ali escolhe "Salvar pra todos"
+  (troca o texto da casa e apaga a versão própria de todo mundo naquela mensagem) ou "Só para Fulano". Quem
+  confere o texto é o servidor (`_cobAutoConfere`: palavra entre chaves que a mensagem não sabe preencher
+  sairia crua pro cliente) e a frase dele aparece embaixo da caixa. Quem está escrevendo não é
+  interrompido pelo redesenho de fundo (`auto.redesenha`). `{saudacao}` e `{primeiro}` passaram a valer em
+  todas as mensagens. A dash (Cobrança > Cobradores > Textos) mostra quem tem texto próprio e devolve ao
+  da casa. Servidor antigo (sem `edita`) ou app antigo: a aba fica como era. Testes: `teste-painel` (os de
+  "editar", "direcao" e largura) e `backend/teste-cob-auto3.mjs` (51).
 
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 

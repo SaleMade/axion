@@ -3094,6 +3094,32 @@ ipcMain.handle('swp:auto-liga', async (_e, { id, ligado }) => {
     return d
   } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
 })
+// O TEXTO DE CADA AUTOMACAO (13/11/2026, pedido do Bruno: "eu quero que tanto eu quanto os meus
+// cobradores tenham autonomia para poder editar essas mensagens"). O cobrador grava a versao DELE (so
+// vale no que sai pelos numeros dele); a direcao, no "ver como", grava a do cobrador que esta vendo
+// (`de`) ou a da casa (`todos`). `padrao` apaga a versao da pessoa. Quem confere o texto (palavra
+// entre chaves que a mensagem nao sabe preencher) e o servidor, e a frase dele volta pra tela.
+ipcMain.handle('swp:auto-texto', async (_e, { campo, texto, todos, padrao }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const c = String(campo || '')
+  if (!/^[a-z0-9]{2,12}$/.test(c)) return { ok: false, erro: 'Mensagem inválida.' }
+  const t = String(texto == null ? '' : texto)
+  if (!padrao && t.length > 2000) return { ok: false, erro: 'A mensagem passou de 2.000 letras.' }
+  try {
+    const r = await fetch(baseCob() + '/api/swweb/auto/config', {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
+      body: JSON.stringify({ campo: c, ...(padrao ? { padrao: true } : { texto: t }), ...(todos && !padrao ? { todos: true } : {}), ...(comoId ? { de: comoId } : {}) }),
+      signal: AbortSignal.timeout(25000),
+    })
+    let d = {}
+    try { d = await r.json() } catch (_) { d = {} }
+    if (!r.ok || !d.ok) return { ok: false, erro: (d && d.error) || respostaRuim(r) }
+    anota('[auto] texto ' + c + (padrao ? ' de volta ao padrão' : todos ? ' trocado pra todos' : ' trocado') + ' pelo painel')
+    // o que ja esta na mao saiu com o texto antigo; a proxima pergunta ao servidor nao espera o minuto
+    autoProximaEm = 0
+    return d
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+})
 ipcMain.handle('swp:abrir-link', (_e, { url }) => abreLinkCob(url))
 ipcMain.handle('swp:copiar', (_e, { texto }) => {
   const t = String(texto || '')

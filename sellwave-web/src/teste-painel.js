@@ -1207,6 +1207,156 @@ app.whenReady().then(async () => {
   await espera(400)
   const au4 = await js('({ sw: document.querySelector("#corpo [data-au=pag]").getAttribute("aria-checked"), rod: document.getElementById("rod").textContent })')
   conta('automacoes: a dash recusou, o interruptor volta e o rodape diz por que', au4.sw === 'true' && /500/.test(au4.rod), JSON.stringify(au4))
+
+  // ══ A ABA CABE NO PAINEL (13/11/2026) ══ o Bruno: "as mensagens nao cabem naquela area lateral
+  // direita, eu sempre tenho que usar a barrinha la embaixo para scrollar horizontalmente". Era a
+  // linha dos ultimos envios com nome comprido alargando a coluna inteira; o teste antigo so tinha
+  // "Maria das Dores" e nunca viu. Mede com nome de cliente de verdade, cartao por cartao: a rolagem
+  // do corpo e a borda direita de cada caixa (o <b> do nome passa da borda de proposito, cortado pela
+  // linha com reticencias, entao nao entra na conta).
+  ponto = 'automacoes largura'
+  const recarregaAuto = async () => { await clica('.aba[data-aba=pedidos]'); await espera(120); await clica('#aba-auto'); await espera(450) }
+  const largura = () => js('(() => { const c = document.getElementById("corpo"); const lim = c.getBoundingClientRect().right; let pior = 0, quem = "";'
+    + ' for (const e of c.querySelectorAll(".au-nota, .au-it, .au-topo, .au-dica, .au-txt, .au-tx, .au-bolha, .au-ult, .au-ult .s, .au-ult .t")) { const b = e.getBoundingClientRect(); if (b.width && b.right - lim > pior) { pior = b.right - lim; quem = String(e.className || e.tagName) } }'
+    + ' return { sobra: c.scrollWidth - c.clientWidth, pior: Math.round(pior), quem } })()')
+  await js('window.__poeAuto({ longo: true })')
+  await recarregaAuto()
+  const lg0 = await js('[...document.querySelectorAll("#corpo .au-ult")].length')
+  const lg = []
+  for (const id of ['', 'rec', 'ret', 'pag']) {
+    if (id) { await clica('#corpo [data-ver=' + id + ']'); await espera(120) }
+    lg.push({ id, ...(await largura()) })
+    if (id) { await clica('#corpo [data-ver=' + id + ']'); await espera(80) }
+  }
+  conta('automacoes: com nome comprido nos ultimos envios, nada passa da largura do painel (fechada e com cada mensagem aberta)',
+    lg0 === 3 && lg.every((x) => x.sobra <= 0 && x.pior <= 0), JSON.stringify(lg))
+  const lgNome = await js('(() => { const q = document.querySelectorAll("#corpo .au-ult .q")[1]; return { corta: q.scrollWidth > q.clientWidth, estilo: getComputedStyle(q).textOverflow } })()')
+  conta('automacoes: o nome comprido e cortado com reticencias dentro da linha', lgNome.corta && lgNome.estilo === 'ellipsis', JSON.stringify(lgNome))
+
+  // ══ EDITAR A MENSAGEM (13/11/2026) ══ "eu quero que tanto eu quanto os meus cobradores tenham
+  // autonomia para poder editar essas mensagens". O cobrador salva a versao dele.
+  ponto = 'automacoes editar'
+  const textoCalls = () => js('(window.__ver()).filter(c => c.nome === "autoTexto").map(c => c.args)')
+  const escreve = (v) => js('(() => { const e = document.querySelector("#corpo [data-area]"); e.focus(); e.value = ' + JSON.stringify(v) + '; e.setSelectionRange(e.value.length, e.value.length); e.dispatchEvent(new Event("input")); })()')
+  await clica('#corpo [data-ver=rec]')
+  await espera(150)
+  const ed0 = await js('(() => ({ lapis: [...document.querySelectorAll("#corpo [data-ed]")].map(b => b.dataset.tipo + ":" + b.dataset.ed + ":" + b.textContent.trim()),'
+    + ' rot: [...document.querySelectorAll("#corpo .au-tx .au-rot")].map(e => e.textContent), bolhas: [...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent), caixa: !!document.querySelector("#corpo [data-area]") }))()')
+  conta('editar: cada texto da automacao aberta tem o seu Editar, com o balao de exemplo como antes',
+    ed0.lapis.join('|') === 'rec:saudacao:Editar|rec:apresenta:Editar' && ed0.rot.join('|') === 'Saudação|Apresentação' && ed0.bolhas.join('|') === 'Bom dia Maria da Silva|Aqui quem fala é o Elias.' && !ed0.caixa, JSON.stringify(ed0))
+  await clica('#corpo [data-ed=saudacao]')
+  await espera(150)
+  const ed1 = await js('(() => { const a = document.querySelector("#corpo [data-area]"); const c = document.getElementById("corpo"); return { valor: a && a.value, foco: document.activeElement === a,'
+    + ' vars: [...document.querySelectorAll("#corpo [data-var]")].map(b => b.dataset.var + "=" + b.textContent), bolhas: [...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent),'
+    + ' botoes: [...document.querySelectorAll("#corpo .au-acoes button, #corpo .au-pe button")].map(b => b.textContent.trim()), lapis: document.querySelectorAll("#corpo [data-ed]").length,'
+    + ' cabe: a.getBoundingClientRect().right <= c.getBoundingClientRect().right && c.scrollWidth <= c.clientWidth && a.scrollWidth <= a.clientWidth } })()')
+  conta('editar: o lapis troca o balao pela caixa com o texto como e gravado, ja com o cursor nela', ed1.valor === '{saudacao} {nome}' && ed1.foco && ed1.bolhas.join('|') === 'Aqui quem fala é o Elias.' && ed1.lapis === 1, JSON.stringify(ed1))
+  conta('editar: embaixo, o que da pra colocar (com nome de gente) e Salvar / Cancelar', ed1.vars.join('|') === 'saudacao=Bom dia / Boa tarde|primeiro=Primeiro nome|nome=Nome completo' && ed1.botoes.join('|') === 'Salvar|Cancelar', JSON.stringify([ed1.vars, ed1.botoes]))
+  conta('editar: a caixa cabe na coluna e nao rola pro lado', ed1.cabe, JSON.stringify(ed1))
+  await escreve('{saudacao}, ')
+  await clica('#corpo [data-var=primeiro]')
+  const ed2 = await js('(() => { const a = document.querySelector("#corpo [data-area]"); return { valor: a.value, foco: document.activeElement === a, cursor: a.selectionStart } })()')
+  conta('editar: o botao coloca a palavra onde esta o cursor e a caixa continua com o foco', ed2.valor === '{saudacao}, {primeiro}' && ed2.foco && ed2.cursor === ed2.valor.length, JSON.stringify(ed2))
+  // o redesenho de fundo (o pulso do painel) nao troca a caixa de quem esta escrevendo
+  await js('(() => { const a = document.querySelector("#corpo [data-area]"); a.__mesma = 1; a.setSelectionRange(3, 3); desenha() })()')
+  const ed3 = await js('(() => { const a = document.querySelector("#corpo [data-area]"); return { mesma: a.__mesma === 1, valor: a.value, foco: document.activeElement === a, cursor: a.selectionStart } })()')
+  conta('editar: o painel se redesenhando por baixo nao troca a caixa nem leva o cursor de quem esta escrevendo', ed3.mesma && ed3.valor === '{saudacao}, {primeiro}' && ed3.foco && ed3.cursor === 3, JSON.stringify(ed3))
+  // com texto mexido, abrir outro lapis ou fechar o cartao nao joga fora o que ele escreveu
+  await clica('#corpo [data-ed=apresenta]')
+  await espera(120)
+  const ed4 = await js('({ valor: document.querySelector("#corpo [data-area]").value, rod: document.getElementById("rod").textContent, caixas: document.querySelectorAll("#corpo [data-area]").length })')
+  await clica('#corpo [data-ver=rec]')
+  await espera(120)
+  const ed5 = await js('({ caixa: (document.querySelector("#corpo [data-area]") || {}).value, aberto: document.querySelectorAll("#corpo .au-txt").length })')
+  conta('editar: com texto mexido, o outro lapis e o "Ver mensagem" nao fecham a caixa e o rodape pede pra salvar ou cancelar',
+    ed4.valor === '{saudacao}, {primeiro}' && ed4.caixas === 1 && /Salve ou cancele/.test(ed4.rod) && ed5.caixa === '{saudacao}, {primeiro}' && ed5.aberto === 1, JSON.stringify([ed4, ed5]))
+  // o servidor recusa: a frase dele aparece e o texto fica na caixa
+  await escreve('Oi {Nome}')
+  await clica('#corpo [data-salva=um]')
+  await espera(350)
+  const ed6 = await js('({ erro: (document.querySelector("#corpo .au-erro") || {}).textContent, valor: (document.querySelector("#corpo [data-area]") || {}).value, travado: !!document.querySelector("#corpo [data-area][readonly]") })')
+  conta('editar: palavra entre chaves que a mensagem nao conhece, a tela mostra a frase do servidor e o texto continua na caixa', /não sabe preencher \{Nome\}/.test(ed6.erro || '') && ed6.valor === 'Oi {Nome}' && !ed6.travado, JSON.stringify(ed6))
+  await escreve('   ')
+  const antesSemTexto = (await textoCalls()).length
+  await clica('#corpo [data-salva=um]')
+  await espera(150)
+  const ed7 = await js('({ erro: (document.querySelector("#corpo .au-erro") || {}).textContent })')
+  conta('editar: texto vazio nem vai pro servidor (pra nao sair, desliga)', /desligue a automação/.test(ed7.erro || '') && (await textoCalls()).length === antesSemTexto, JSON.stringify(ed7))
+  await escreve('{saudacao}, {primeiro}!')
+  conta('editar: voltar a escrever apaga o aviso', await js('!document.querySelector("#corpo .au-erro")'))
+  await clica('#corpo [data-salva=um]')
+  await espera(40)
+  const ed8 = await js('({ travado: !!document.querySelector("#corpo [data-area][readonly]"), dis: [...document.querySelectorAll("#corpo .au-acoes button")].every(b => b.disabled) })')
+  conta('editar: enquanto salva, a caixa e os botoes ficam travados', ed8.travado && ed8.dis, JSON.stringify(ed8))
+  await espera(400)
+  const ed9 = await js('(() => ({ caixa: !!document.querySelector("#corpo [data-area]"), bolhas: [...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent), selo: [...document.querySelectorAll("#corpo .au-meu")].map(e => e.textContent), rod: document.getElementById("rod").textContent }))()')
+  const ch9 = (await textoCalls()).pop()
+  conta('editar: salvou, manda so o campo e o texto (a versao dele) e o balao volta com o texto novo e o selo "Seu texto"',
+    JSON.stringify(ch9) === JSON.stringify(['saudacao', '{saudacao}, {primeiro}!', { todos: false, padrao: false }]) && !ed9.caixa && ed9.bolhas.join('|') === 'Bom dia, Maria!|Aqui quem fala é o Elias.' && ed9.selo.join('|') === 'Seu texto' && /Texto salvo/.test(ed9.rod), JSON.stringify([ch9, ed9]))
+  // cancelar nao grava
+  await clica('#corpo [data-ed=apresenta]')
+  await espera(120)
+  await escreve('Texto que eu desisti')
+  const antesCanc = (await textoCalls()).length
+  await clica('#corpo [data-cancela]')
+  await espera(120)
+  const ed10 = await js('({ caixa: !!document.querySelector("#corpo [data-area]"), bolhas: [...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent) })')
+  conta('editar: Cancelar fecha sem gravar nada', !ed10.caixa && ed10.bolhas[1] === 'Aqui quem fala é o Elias.' && (await textoCalls()).length === antesCanc, JSON.stringify(ed10))
+  // voltar ao padrao so aparece no texto que e dele
+  await clica('#corpo [data-ed=apresenta]')
+  await espera(120)
+  const semVolta = await js('!document.querySelector("#corpo [data-salva=padrao]")')
+  await js('document.querySelector("#corpo [data-area]").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))')
+  await espera(120)
+  const escFechou = await js('!document.querySelector("#corpo [data-area]")')
+  await clica('#corpo [data-ed=saudacao]')
+  await espera(120)
+  const comVolta = await js('(document.querySelector("#corpo [data-salva=padrao]") || {}).textContent')
+  conta('editar: "Voltar ao padrão" so existe no texto que ele mudou, e o Esc fecha a caixa sem mudanca', semVolta && escFechou && comVolta === 'Voltar ao padrão', JSON.stringify([semVolta, escFechou, comVolta]))
+  await clica('#corpo [data-salva=padrao]')
+  await espera(450)
+  const ed11 = await js('(() => ({ bolhas: [...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent), selo: document.querySelectorAll("#corpo .au-meu").length, rod: document.getElementById("rod").textContent }))()')
+  const ch11 = (await textoCalls()).pop()
+  conta('editar: voltar ao padrao apaga a versao dele e o balao mostra o texto da casa', ch11[0] === 'saudacao' && ch11[2].padrao === true && ch11[2].todos === false && ed11.bolhas[0] === 'Bom dia Maria da Silva' && ed11.selo === 0 && /Voltou ao texto padrão/.test(ed11.rod), JSON.stringify([ch11, ed11]))
+  // automacao de um texto so: sem o rotulo repetindo o nome do cartao, com o lapis
+  await clica('#corpo [data-ver=ret]')
+  await espera(150)
+  const ed12 = await js('({ rot: document.querySelectorAll("#corpo .au-tx .au-rot").length, lapis: [...document.querySelectorAll("#corpo [data-ed]")].map(b => b.dataset.ed) })')
+  conta('editar: automacao de um texto so nao repete o nome no rotulo e tem o lapis', ed12.rot === 0 && ed12.lapis.join('|') === 'ret1', JSON.stringify(ed12))
+
+  // ══ A DIRECAO, VENDO A ABA DE UM COBRADOR ══ escolhe: pra todos (o texto da casa) ou so pra ele
+  ponto = 'automacoes editar direcao'
+  await js('window.__poeAuto({ dir: true })')
+  await recarregaAuto()
+  await clica('#corpo [data-ver=pag]')
+  await espera(150)
+  await clica('#corpo [data-ed=pagou]')
+  await espera(150)
+  const dr1 = await js('(() => { const c = document.getElementById("corpo"); return { botoes: [...document.querySelectorAll("#corpo .au-acoes button, #corpo .au-pe button")].map(b => b.textContent.trim()), cabe: c.scrollWidth <= c.clientWidth && [...document.querySelectorAll("#corpo .au-acoes button")].every(b => b.getBoundingClientRect().right <= c.getBoundingClientRect().right) } })()')
+  conta('direcao: a caixa oferece "Salvar pra todos" e "Só para Haynan", cabendo na coluna', dr1.botoes.join('|') === 'Salvar pra todos|Só para Haynan|Cancelar' && dr1.cabe, JSON.stringify(dr1))
+  await escreve('Valeu, {primeiro}!')
+  await clica('#corpo [data-salva=um]')
+  await espera(450)
+  const dr2 = await js('({ selo: [...document.querySelectorAll("#corpo .au-meu")].map(e => e.textContent), bolha: (document.querySelector("#corpo .au-bolha") || {}).textContent })')
+  const chD2 = (await textoCalls()).pop()
+  conta('direcao: "Só para Haynan" grava a versao dele e o selo diz de quem e o texto', chD2[0] === 'pagou' && chD2[2].todos === false && dr2.selo.join('|') === 'Texto de Haynan' && dr2.bolha === 'Valeu, Maria!', JSON.stringify([chD2, dr2]))
+  await clica('#corpo [data-ed=pagou]')
+  await espera(150)
+  await escreve('Pagamento recebido, {primeiro}. Obrigado!')
+  await clica('#corpo [data-salva=todos]')
+  await espera(450)
+  const dr3 = await js('({ selo: document.querySelectorAll("#corpo .au-meu").length, bolha: (document.querySelector("#corpo .au-bolha") || {}).textContent, rod: document.getElementById("rod").textContent })')
+  const chD3 = (await textoCalls()).pop()
+  conta('direcao: "Salvar pra todos" troca o texto da casa, o selo some e o rodape confirma', chD3[0] === 'pagou' && chD3[2].todos === true && chD3[2].padrao === false && dr3.selo === 0 && dr3.bolha === 'Pagamento recebido, Maria. Obrigado!' && /Texto salvo pra todos/.test(dr3.rod), JSON.stringify([chD3, dr3]))
+
+  // ══ SERVIDOR QUE AINDA NAO SABE EDITAR ══ a aba fica como era: so o balao
+  await js('window.__poeAuto({ dir: false, velho: true })')
+  await recarregaAuto()
+  await clica('#corpo [data-ver=rec]')
+  await espera(150)
+  const vl = await js('({ lapis: document.querySelectorAll("#corpo [data-ed]").length, bolhas: document.querySelectorAll("#corpo .au-bolha").length, rot: [...document.querySelectorAll("#corpo .au-tx .au-rot")].map(e => e.textContent) })')
+  conta('editar: com servidor antigo a aba fica como era, sem lapis', vl.lapis === 0 && vl.bolhas === 2 && vl.rot.join('|') === 'Saudação|Apresentação', JSON.stringify(vl))
+  await js('window.__poeAuto({ velho: false, longo: false })')
   await js('window.__poeCobranca(false)')
   await espera(1900)
   const au5 = await js('({ escondida: document.getElementById("aba-auto").hidden, aba: document.querySelector(".aba.on").dataset.aba, cartoes: document.querySelectorAll("#corpo .au-it").length })')

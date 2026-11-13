@@ -314,8 +314,8 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
 {
   const PU = leia('ui/painel-ui.js')
   const pedacos = ['const AUTO_EX = ', 'const autoExemplo = ', 'const AUTO_ST = '].map((ini) => linhaQueComeca(PU, ini))
-  const F = new Function('auto', 'esc', 'IC_SETA', 'window', [
-    ...pedacos, recorta(PU, 'const autoHora = (s) =>') + '', recorta(PU, 'function desenhaAuto()'), 'return { desenhaAuto, autoExemplo }',
+  const F = new Function('auto', 'esc', 'IC_SETA', 'window', 'IC_LAPIS', 'IC_GIRA', [
+    ...pedacos, recorta(PU, 'const autoHora = (s) =>') + '', recorta(PU, 'function desenhaAutoTexto(t, x, n)'), recorta(PU, 'function desenhaAuto()'), 'return { desenhaAuto, autoExemplo }',
   ].join('\n'))
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
   const auto = { em: 1, carregando: false, erro: '', salvando: '', aberto: 'ret', numeros: 1, ultimos: [{ id: 'sai', nome: 'Maria <b>', status: 'enviado', ts: 1794315600 }],
@@ -336,6 +336,29 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
   vale('app sem a ponte nova pede pra atualizar em vez de quebrar', /Atualize o app/.test(semApp), semApp)
   const vazio = F({ ...auto, tipos: [], em: 0 }, esc, '', { swp: { autoConfig: () => {} } }).desenhaAuto()
   vale('antes de a lista chegar mostra "Carregando"', /Carregando/.test(vazio), vazio)
+  // ── EDITAR O TEXTO (13/11/2026): o lapis so aparece com servidor e app que sabem editar
+  vale('sem o servidor dizer que da pra editar, a aba nao tem lapis (fica como era)', !/data-ed=/.test(h) && !/data-area/.test(h), '')
+  const TX = (campo, texto, proprio) => ({ campo, rot: 'Dia 1', texto, proprio: !!proprio, vars: ['primeiro', 'codigo'] })
+  const comEd = { ...auto, pode: true, dir: false, de: null, varRot: { primeiro: 'Primeiro nome' }, edita: null,
+    tipos: [{ id: 'ret', nome: 'Retirar nos Correios', dica: 'd2', direcao: true, meu: true, hoje: 0, textos: [TX('ret1', 'Oi {primeiro}', true), TX('ret2', 'Lembrete <2>')] }] }
+  let he = F(comEd, esc, '', { swp: { autoConfig: () => {} } }, '<i>lapis</i>', '<i>gira</i>').desenhaAuto()
+  vale('com editar ligado, cada texto tem o lapis com o campo e o selo no que e dele', (he.match(/data-ed="/g) || []).length === 2 && /data-tipo="ret" data-ed="ret1"/.test(he) && (he.match(/class="au-meu">Seu texto</g) || []).length === 1, '')
+  comEd.edita = { id: 'ret', campo: 'ret2', valor: 'Lembrete <2> & "aspas"', original: 'Lembrete <2>', erro: 'Aviso <x>', salvando: '' }
+  he = F(comEd, esc, '', { swp: { autoConfig: () => {} } }, '<i>lapis</i>', '<i>gira</i>').desenhaAuto()
+  vale('editando: a caixa leva o texto escapado, os botoes do que da pra colocar e o aviso', />Lembrete &lt;2&gt; &amp; &quot;aspas&quot;<\/textarea>/.test(he) && /data-var="primeiro"[^>]*>Primeiro nome</.test(he) && /data-var="codigo"[^>]*>\{codigo\}</.test(he) && /class="au-erro">Aviso &lt;x&gt;</.test(he), '')
+  vale('editando (cobrador): Salvar e Cancelar, sem "pra todos"; o outro texto continua com o lapis', /data-salva="um"[^>]*>Salvar</.test(he) && /data-cancela/.test(he) && !/data-salva="todos"/.test(he) && (he.match(/data-ed="/g) || []).length === 1, '')
+  comEd.dir = true; comEd.de = { id: 'c1', nome: 'Bryan <b>' }; comEd.edita.campo = 'ret1'; comEd.edita.salvando = 'todos'
+  he = F(comEd, esc, '', { swp: { autoConfig: () => {} } }, '<i>lapis</i>', '<i>gira</i>').desenhaAuto()
+  vale('editando (direcao vendo o cobrador): "Salvar pra todos" e "Só para <nome>", com o nome escapado', /data-salva="todos" disabled><i>gira<\/i>Salvar pra todos</.test(he) && /data-salva="um" disabled>Só para Bryan &lt;b&gt;</.test(he) && /class="au-meu">Texto de Bryan &lt;b&gt;</.test(he), '')
+  vale('enquanto salva, a caixa fica so de leitura e o "Voltar ao padrão" travado', /data-area[^>]* readonly>/.test(he) && /data-salva="padrao" disabled>Voltar ao padrão</.test(he), '')
+  {
+    const PR = leia('preload-painel.js')
+    vale('a ponte do painel manda o texto com o campo, pra todos ou de volta ao padrao', /autoTexto: \(campo, texto, opc\) => ipcRenderer\.invoke\('swp:auto-texto', \{ campo, texto, todos: !!\(opc && opc\.todos\), padrao: !!\(opc && opc\.padrao\) \}\)/.test(PR))
+    // (o `recorta` pararia na primeira chave, a dos parametros: aqui vale o trecho inteiro do handler)
+    const iH = MN.indexOf("ipcMain.handle('swp:auto-texto'")
+    const H = iH < 0 ? '' : MN.slice(iH, iH + 1600)
+    vale('o main grava o texto pela rota das automacoes, com o "ver como" e sem mandar "todos" junto com "padrao"', /\/api\/swweb\/auto\/config/.test(H) && /\.\.\.\(comoId \? \{ de: comoId \} : \{\}\)/.test(H) && /todos && !padrao/.test(H) && /autoProximaEm = 0/.test(H), H.slice(0, 80))
+  }
 }
 // ── o laco
 function montaLaco(op) {
