@@ -17174,13 +17174,13 @@ const COB_AUTO_TIPOS = [
   { id: 'pag', db: 'pagou', nome: 'Pagou', dica: 'O pagamento caiu: agradece.', campos: ['pagou'] },
 ];
 const COB_AUTO_CAMPOS = {
-  saudacao: { rot: 'Saudação', vars: '{saudacao} {nome}', linhas: 1 },
-  apresenta: { rot: 'Apresentação', vars: '{nome}', linhas: 2 },
-  localizei: { rot: 'Pedido localizado', vars: '{valor} {nome}', linhas: 7 },
-  postado: { rot: 'Código de rastreio', vars: '{codigo} {link} {nome}', linhas: 7 },
-  saiu: { rot: 'Saiu para entrega', vars: '{primeiro} {valor}', linhas: 5 },
-  entregue: { rot: 'Pedido entregue', vars: '{primeiro} {quando}', linhas: 2 },
-  ret1: { rot: 'Retirada: chegou na agência', vars: '{primeiro} {codigo} {link} {valor}', linhas: 8 },
+  saudacao: { rot: 'Saudação', vars: '{saudacao} {primeiro} {nome}', linhas: 1 },
+  apresenta: { rot: 'Apresentação', vars: '{primeiro} {nome}', linhas: 2 },
+  localizei: { rot: 'Pedido localizado', vars: '{primeiro} {valor}', linhas: 7 },
+  postado: { rot: 'Código de rastreio', vars: '{primeiro} {codigo} {link}', linhas: 7 },
+  saiu: { rot: 'Saiu para entrega', vars: '{saudacao} {primeiro} {valor}', linhas: 5 },
+  entregue: { rot: 'Pedido entregue', vars: '{saudacao} {primeiro} {quando}', linhas: 2 },
+  ret1: { rot: 'Retirada: chegou na agência', vars: '{saudacao} {primeiro} {codigo} {link} {valor}', linhas: 8 },
   ret2: { rot: 'Retirada: 2º lembrete', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 4 },
   ret3: { rot: 'Retirada: 3º lembrete', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 5 },
   ret4: { rot: 'Retirada: 4º lembrete', vars: '{saudacao} {primeiro} {codigo} {link}', linhas: 4 },
@@ -17188,8 +17188,58 @@ const COB_AUTO_CAMPOS = {
   naoachou: { rot: 'Entregador não achou ninguém', vars: '{saudacao} {primeiro} {endereco}', linhas: 5 },
   naopagou: { rot: 'Entregue e não pagou', vars: '{saudacao} {primeiro} {valor} {link_pag}', linhas: 7 },
   atrasou: { rot: 'Atrasou na transportadora', vars: '{saudacao} {primeiro} {link}', linhas: 6 },
-  pagou: { rot: 'Pagou', vars: '{primeiro}', linhas: 3 },
+  pagou: { rot: 'Pagou', vars: '{saudacao} {primeiro}', linhas: 3 },
 };
+// ══ CADA UM ARRUMA O TEXTO DELE (13/11/2026) ═════════════════════════════════════════════════════
+// Pedido do Bruno: "eu quero que tanto eu quanto os meus cobradores tenham autonomia para poder editar
+// essas mensagens e arrumar alguma coisazinha ou outra". O texto DA CASA continua no cob_auto (a
+// direcao edita na dash ou no app, "pra todos"). O cobrador que mexe num texto grava a versao DELE
+// em cob_auto_pessoa ({ uid: { txt: { campo: texto }, txt_em: { campo: ms } } }) e ela so vale no que
+// sai pelos numeros dele: um ajuste do Haynan nao muda o que sai no nome do Bryan. Texto igual ao
+// da casa nao e gravado (a melhoria da casa chega em quem nao mexeu). A direcao ve quem tem texto
+// proprio (dash e app) e devolve ao da casa quando quiser.
+//
+// O QUE CADA MENSAGEM SABE PREENCHER. Palavra entre chaves que a mensagem nao conhece sairia crua pro
+// cliente ("Oi {Nome}") ou derrubaria a mensagem inteira (o _COB_AUTO_SOBROU), entao quem salva pelo
+// app e conferido aqui (_cobAutoConfere) e ouve o que pode usar.
+const COB_AUTO_VARS = {
+  saudacao: 'Bom dia / Boa tarde', primeiro: 'Primeiro nome', nome: 'Nome completo', valor: 'Valor', codigo: 'Código de rastreio',
+  link: 'Link do rastreio', link_pag: 'Link de pagamento', endereco: 'Endereço', quando: 'Hoje ou ontem',
+};
+const _COB_AUTO_VARS_DE = {
+  saudacao: ['saudacao', 'primeiro', 'nome'], apresenta: ['saudacao', 'primeiro', 'nome'],
+  localizei: ['saudacao', 'primeiro', 'nome', 'valor'], postado: ['saudacao', 'primeiro', 'nome', 'valor', 'codigo', 'link'],
+};
+const _COB_AUTO_VARS_MAIS = { entregue: ['quando'], naoachou: ['endereco'], naopagou: ['link_pag'] };
+const _cobAutoVarsDe = (campo) => _COB_AUTO_VARS_DE[campo] || ['saudacao', 'primeiro', 'nome', 'valor', 'codigo', 'link', ...(_COB_AUTO_VARS_MAIS[campo] || [])];
+// '' = pode salvar; senao, a frase que a tela mostra.
+function _cobAutoConfere(campo, texto) {
+  const t = String(texto == null ? '' : texto);
+  if (!t.trim()) return 'Escreva a mensagem. Pra ela não sair, desligue a automação.';
+  if (t.length > 2000) return 'A mensagem passou de 2.000 letras.';
+  const pode = _cobAutoVarsDe(campo);
+  const lista = pode.map((k) => '{' + k + '}').join(' ');
+  for (const m of (t.match(/\{[^{}\n]{0,40}\}/g) || [])) {
+    if (!pode.includes(m.slice(1, -1))) return 'Esta mensagem não sabe preencher ' + m + '. Aqui dá pra usar: ' + lista;
+  }
+  if (/[{}]/.test(t.replace(/\{[a-z_]+\}/g, ''))) return 'Sobrou uma chave { ou } solta. As palavras entre chaves ficam inteiras, assim: ' + lista;
+  return '';
+}
+// O texto proprio de UMA pessoa num campo ('' = usa o da casa).
+function _cobAutoProprio(pess, uid, campo) {
+  const p = pess && pess[String(uid)];
+  const v = p && p.txt && typeof p.txt === 'object' ? p.txt[campo] : null;
+  return (typeof v === 'string' && v.trim()) ? v : '';
+}
+// Os textos que valem pro dono do numero: os da casa com os dele por cima.
+function _cobAutoTxtDe(cfg, pess, at) {
+  const p = pess && pess[String(at)];
+  const t = p && p.txt && typeof p.txt === 'object' ? p.txt : null;
+  if (!t) return cfg.txt;
+  const out = { ...cfg.txt };
+  for (const k of Object.keys(COB_AUTO_TXT)) { if (typeof t[k] === 'string' && t[k].trim()) out[k] = t[k]; }
+  return out;
+}
 const COB_AUTO_IDS = COB_AUTO_TIPOS.map((t) => t.id);
 const COB_AUTO_DBS = new Set(COB_AUTO_TIPOS.map((t) => t.db));
 const COB_AUTO_PESSOA_KEY = 'cob_auto_pessoa';
@@ -17305,18 +17355,6 @@ const _cobAutoBRL = (v) => {
   const [i, d] = n.toFixed(2).split('.');
   return i.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + d;
 };
-function _cobAutoTexto(tpl, vars) {
-  let s = String(tpl || '');
-  for (const [k, v] of Object.entries(vars || {})) s = s.split('{' + k + '}').join(String(v == null ? '' : v));
-  return s.trim();
-}
-// "{saudacao} {nome}" sem nome vira so "Boa tarde"; "Ola, {nome}! Tudo bem?" vira "Ola! Tudo bem?".
-function _cobAutoSaudacao(tpl, ms, nome) {
-  let s = String(tpl || '').split('{saudacao}').join(_cobAutoSaud(ms));
-  if (nome) s = s.split('{nome}').join(nome);
-  else s = s.replace(/[ \t]*,?[ \t]*\{nome\}/g, '');
-  return s.replace(/[ \t]{2,}/g, ' ').trim();
-}
 // O telefone nas duas formas (com e sem o nono digito), como o wa_messages pode ter gravado.
 function _cobAutoVariantes(fone) {
   const d = String(fone || '').replace(/\D/g, '');
@@ -17354,22 +17392,25 @@ function _cobAutoAndou(l) {
   }
   return t;
 }
-// Os textos da recepcao de UM cliente. `l` = o pedido dele (ou null), `nomeWa` = o nome do WhatsApp.
-function _cobAutoRecepcao(cfg, l, nomeWa, agoraMs, semCodigo) {
+// Os textos da recepcao de UM cliente. `txt` = os textos que valem pro dono do numero (_cobAutoTxtDe),
+// `l` = o pedido dele (ou null), `nomeWa` = o nome do WhatsApp. Desde 13/11/2026 os quatro textos
+// antigos passam pelo mesmo _cobAutoMonta dos novos: {saudacao} e {primeiro} valem em todos.
+function _cobAutoRecepcao(txt, l, nomeWa, agoraMs, semCodigo) {
   const nome = _cobAutoNome(l && l.nome) || _cobAutoNome(nomeWa);
-  const textos = [_cobAutoSaudacao(cfg.txt.saudacao, agoraMs, nome), _cobAutoTexto(cfg.txt.apresenta, { nome })];
+  const quem = { nome, primeiro: _cobAutoPrimeiro(nome) };
+  const textos = [_cobAutoMonta(txt.saudacao, quem, agoraMs), _cobAutoMonta(txt.apresenta, quem, agoraMs)];
   let codigo = '';
   if (l && !String(l.afl || '')) {
     const col = _cobColId(l.col);
     if (_COB_AUTO_ANTES.has(col)) {
       const v = _cobValorCobrar(l);
       if (String(l.mod || '').toLowerCase() !== 'antecipado' && !_cobPago(l) && v > 0) {
-        textos.push(_cobAutoTexto(cfg.txt.localizei, { valor: _cobAutoBRL(v), nome }));
+        textos.push(_cobAutoMonta(txt.localizei, { ...quem, valor: _cobAutoBRL(v) }, agoraMs));
       }
       const tr = String(l.track || '').trim();
       if (!semCodigo && _COB_AUTO_A_CAMINHO.has(col) && tr.length >= 6) {
-        const t = _cobAutoTexto(cfg.txt.postado, { codigo: tr, link: _cobRastreio(l), nome, valor: _cobAutoBRL(v) });
-        if (t && !_COB_AUTO_SOBROU.test(t)) { textos.push(t); codigo = tr; }
+        const t = _cobAutoMonta(txt.postado, { ...quem, codigo: tr, link: _cobRastreio(l), valor: _cobAutoBRL(v) }, agoraMs);
+        if (t) { textos.push(t); codigo = tr; }
       }
     }
   }
@@ -17407,6 +17448,8 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
   const out = [];
   if (!_cobAutoAlgum(cfg)) return out;
   const pess = opts.pess || {};
+  // O TEXTO PROPRIO DE CADA COBRADOR vale ate na previa da dash (que nao olha quem desligou o que).
+  const pessTxt = opts.pessTxt || pess;
   // APP ANTIGO (ate 1.26.16) so conhece recepcao e codigo, so texto: os tipos novos nao vao pra ele.
   const novo = !!(opts.novo || opts.previa);
   const agoraS = Math.floor(agoraMs / 1000);
@@ -17486,7 +17529,7 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
       const jaSaiu = !!(l && !String(l.afl || '') && _COB_AUTO_A_CAMINHO.has(_cobColId(l.col)) && tr.length >= 6);
       const comR = jaSaiu && _cobAutoVale(cfg, pess, 'recr', at);
       if (!comR && !_cobAutoVale(cfg, pess, 'rec', at)) continue;
-      const b = _cobAutoRecepcao(cfg, l, o.nomeWa, agoraMs, (jaSaiu && !comR) || !!(rowPos && !_cobAutoDeNovo(rowPos, agoraS)));
+      const b = _cobAutoRecepcao(_cobAutoTxtDe(cfg, pessTxt, at), l, o.nomeWa, agoraMs, (jaSaiu && !comR) || !!(rowPos && !_cobAutoDeNovo(rowPos, agoraS)));
       if (b.textos.length < 2) continue;
       const chaves = ['rec:' + k];
       if (b.codigo) chaves.push('pos:' + String(l.id) + ':' + b.codigo);
@@ -17591,8 +17634,9 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
             if (row && !_cobAutoDeNovo(row, agoraS)) continue;
             const u = ult.get(c.k);
             const nome = _cobAutoNome(c.l.nome);
-            const t = _cobAutoTexto(cfg.txt.postado, { codigo: c.tr, link: _cobRastreio(c.l), nome, valor: _cobAutoBRL(_cobValorCobrar(c.l)) });
-            if (!t || _COB_AUTO_SOBROU.test(t)) continue;
+            const t = _cobAutoMonta(_cobAutoTxtDe(cfg, pessTxt, nums.get(u.n8).at).postado,
+              { nome, primeiro: _cobAutoPrimeiro(nome), codigo: c.tr, link: _cobRastreio(c.l), valor: _cobAutoBRL(_cobValorCobrar(c.l)) }, agoraMs);
+            if (!t) continue;
             out.push({
               k: key, tipo: 'postado', nk: nums.get(u.n8).nk, fone: u.fone, nome, pedido: String(c.l.id), codigo: c.tr,
               desde: 0, textos: [t], chaves: [key], ord: 1e12 + c.andou,
@@ -17700,7 +17744,7 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
             const ck = _cobCheckout(l, data);
             vars.link_pag = !ck ? '' : opts.previa ? 'sellwave.com.br/checkout/(link do pedido)' : await _botIaLinkCurto(env, ck, id, 'auto');
           }
-          const t = _cobAutoMonta(cfg.txt[campo], vars, agoraMs);
+          const t = _cobAutoMonta(_cobAutoTxtDe(cfg, pessTxt, nums.get(c.u.n8).at)[campo], vars, agoraMs);
           if (!t) continue;
           const partes = [{ tipo: 'texto', texto: t }];
           if (c.aid === 'ent' && String(l.entrega_url || '')) {
@@ -17771,6 +17815,18 @@ async function _cobAutoItens(env, data, cfg, n8sAlvo, agoraMs, opts) {
   return (opts.previa ? lista : lista.slice(0, COB_AUTO_POR_VEZ)).map(({ ord, ...x }) => x);
 }
 
+// Os textos que cada cobrador mudou no app: [{ uid, nome, campo, texto, em }], na ordem do catalogo.
+function _cobAutoProprios(pess, nomes) {
+  const out = [];
+  for (const uid of Object.keys(pess || {})) {
+    for (const campo of Object.keys(COB_AUTO_TXT)) {
+      const texto = _cobAutoProprio(pess, uid, campo);
+      if (texto) out.push({ uid, nome: (nomes && nomes[uid]) || '', campo, texto, em: Number(((pess[uid] || {}).txt_em || {})[campo]) || 0 });
+    }
+  }
+  return out;
+}
+
 // GET/POST /api/cob/auto — A TELA DA DASH (Cobranca > Cobradores): liga e desliga cada mensagem,
 // edita os textos, mostra o que saiu hoje e o que esta esperando o numero abrir. So a direcao da casa.
 async function handleCobAuto(req, env) {
@@ -17779,6 +17835,21 @@ async function handleCobAuto(req, env) {
   if (!isDirector(u) || _mundoDeQuem(u)) return err('Só a direção mexe nas mensagens automáticas', 403);
   if (req.method === 'POST') {
     const b = await req.json().catch(() => ({}));
+    // {limpa: {uid, campo}} — a direcao devolve ao texto da casa a mensagem que um cobrador mudou no app.
+    if (b && b.limpa && typeof b.limpa === 'object') {
+      const quem = String(b.limpa.uid || ''), campo = String(b.limpa.campo || '');
+      const pess = await _cobAutoPessoas(env);
+      const m = (pess[quem] && typeof pess[quem] === 'object') ? { ...pess[quem] } : null;
+      if (m) {
+        for (const k of ['txt', 'txt_em']) {
+          if (m[k] && typeof m[k] === 'object') { const x = { ...m[k] }; delete x[campo]; if (Object.keys(x).length) m[k] = x; else delete m[k]; }
+        }
+        if (Object.keys(m).length) pess[quem] = m; else delete pess[quem];
+        await _writeConfig(env, COB_AUTO_PESSOA_KEY, JSON.stringify(pess));
+        console.log('COB_AUTO_TEXTO uid=' + quem + ' campo=' + campo + ' padrao por=' + String(u.id) + ' (dash)');
+      }
+      return json({ ok: true, cfg: await _cobAutoCfg(env), padrao: COB_AUTO_TXT, tipos: COB_AUTO_TIPOS, campos: COB_AUTO_CAMPOS, proprios: _cobAutoProprios(pess, await _cobNomes(env)) });
+    }
     const atual = await _cobAutoCfg(env);
     const t = (b && b.txt && typeof b.txt === 'object') ? b.txt : null;
     const txt = {};
@@ -17830,20 +17901,22 @@ async function handleCobAuto(req, env) {
     const nomes = await _cobNomes(env);
     const tudo = { ...cfg };
     for (const id of COB_AUTO_IDS) tudo[id] = true;
-    const itens = await _cobAutoItens(env, data, tudo, [...nums.keys()], agoraMs, { previa: true });
+    const itens = await _cobAutoItens(env, data, tudo, [...nums.keys()], agoraMs, { previa: true, pessTxt: await _cobAutoPessoas(env) });
     fila = itens.slice(0, 120).map((x) => {
       const dono = [...nums.values()].find((v) => v.nk === x.nk);
       return { tipo: x.tipo, nome: x.nome, nk: x.nk, cobrador: dono ? (nomes[dono.at] || '') : '', codigo: x.codigo || '', textos: x.textos, foto: (x.partes || []).some((p) => p.tipo === 'midia') };
     });
   } catch (e) { console.log('COB_AUTO_PREVIA_ERRO ' + String((e && e.message) || e).slice(0, 160)); }
   // QUEM DESLIGOU O QUE no app (so nome e as desligadas), pra direcao saber por que nao saiu.
-  let pessoas = [];
+  // E QUEM TEM TEXTO PROPRIO (13/11/2026): o cobrador edita o dele no app, a direcao le aqui.
+  let pessoas = [], proprios = [];
   try {
     const pess = await _cobAutoPessoas(env);
     const nomes = await _cobNomes(env);
     pessoas = Object.keys(pess).map((uid) => ({ nome: nomes[uid] || '', off: COB_AUTO_IDS.filter((id) => pess[uid] && pess[uid][id] === false) })).filter((p) => p.nome && p.off.length);
-  } catch (_) { pessoas = []; }
-  return json({ ok: true, cfg, padrao: COB_AUTO_TXT, tipos: COB_AUTO_TIPOS, campos: COB_AUTO_CAMPOS, hoje, ultimos, fila, pessoas });
+    proprios = _cobAutoProprios(pess, nomes);
+  } catch (_) { pessoas = []; proprios = []; }
+  return json({ ok: true, cfg, padrao: COB_AUTO_TXT, tipos: COB_AUTO_TIPOS, campos: COB_AUTO_CAMPOS, hoje, ultimos, fila, pessoas, proprios });
 }
 
 // ── O QUE O VENDEDOR CRIA NO PAINEL DO SELLWAVE WEB (05/11/2026, pedido do Bruno) ────────────────
@@ -18708,25 +18781,67 @@ async function handleSwWeb(req, env, path) {
   // textos; mais os ultimos envios dela. Com ?como= a direcao ve a do cobrador (so leitura no GET).
   // POST {id, ligado, de?} — o cobrador liga ou desliga a DELE. A direcao pode mandar `de` (o
   // cobrador que ela esta vendo no "ver como"); mais ninguem mexe na de outra pessoa.
+  // POST {campo, texto, de?} — O TEXTO DELE (13/11/2026): vale so no que sai pelos numeros dele.
+  //   {campo, padrao: true} devolve ao da casa. {campo, texto, todos: true}, so a direcao: troca o
+  //   texto DA CASA e apaga a versao propria de todo mundo naquele campo (ela disse "pra todos").
   if (path === '/api/swweb/auto/config' && (req.method === 'GET' || req.method === 'POST')) {
     if (mundo || !(isDirector(u) || _ehCobrador(u))) return err('Só o cobrador da casa tem automações', 403);
     const pess = await _cobAutoPessoas(env);
     let uid = String(u.id);
     if (req.method === 'POST') {
       let b; try { b = await req.json(); } catch (_) { return err('Body inválido'); }
+      const campo = (b && b.campo != null) ? String(b.campo) : '';
       const id = String((b && b.id) || '');
-      if (!COB_AUTO_IDS.includes(id)) return err('Automação desconhecida', 400);
+      if (campo ? !Object.prototype.hasOwnProperty.call(COB_AUTO_TXT, campo) : !COB_AUTO_IDS.includes(id)) return err(campo ? 'Mensagem desconhecida' : 'Automação desconhecida', 400);
       const de = String((b && b.de) || '');
       if (de && de !== uid) {
         if (!isDirector(u)) return err('Cada um mexe só nas suas', 403);
         if (!(await _cobradoresDaCasa(env)).some((c) => String(c.id) === de)) return err('Cobrador não encontrado', 404);
         uid = de;
       }
-      const meu = { ...((pess[uid] && typeof pess[uid] === 'object') ? pess[uid] : {}) };
-      if (b && b.ligado) delete meu[id]; else meu[id] = false;
-      if (Object.keys(meu).length) pess[uid] = meu; else delete pess[uid];
-      await _writeConfig(env, COB_AUTO_PESSOA_KEY, JSON.stringify(pess));
-      console.log('COB_AUTO_PESSOA uid=' + uid + ' ' + id + '=' + (b && b.ligado ? 'on' : 'off') + ' por=' + String(u.id));
+      if (campo) {
+        const volta = !!(b && b.padrao === true);
+        const texto = volta ? '' : String(b.texto == null ? '' : b.texto).replace(/\r\n/g, '\n').trim();
+        if (!volta) { const ruim = _cobAutoConfere(campo, texto); if (ruim) return err(ruim, 400); }
+        // A DIRECAO SEM "ver como" nao tem numero de cobranca: o que ela salva e o texto da casa.
+        if (b.todos === true && !isDirector(u)) return err('Só a direção troca o texto de todos', 403);
+        const todos = !volta && isDirector(u) && (b.todos === true || uid === String(u.id));
+        const tira = (quem) => {
+          const m = (pess[quem] && typeof pess[quem] === 'object') ? { ...pess[quem] } : null;
+          if (!m) return;
+          for (const k of ['txt', 'txt_em']) {
+            if (m[k] && typeof m[k] === 'object') { const x = { ...m[k] }; delete x[campo]; if (Object.keys(x).length) m[k] = x; else delete m[k]; }
+          }
+          if (Object.keys(m).length) pess[quem] = m; else delete pess[quem];
+        };
+        if (todos) {
+          // so o campo e quem mexeu: as chaves ligado/desligado (e o `recr` que segue o `rec`) ficam como estao
+          let cru = null;
+          try { const v = await _readConfig(env, COB_AUTO_KEY); cru = v ? JSON.parse(v) : null; } catch (_) { cru = null; }
+          cru = (cru && typeof cru === 'object') ? cru : {};
+          const tx = (cru.txt && typeof cru.txt === 'object') ? { ...cru.txt } : {};
+          if (texto !== COB_AUTO_TXT[campo]) tx[campo] = texto; else delete tx[campo];
+          await _writeConfig(env, COB_AUTO_KEY, JSON.stringify({ ...cru, txt: tx, por: String(u.name || u.id), em: Date.now() }));
+          for (const quem of Object.keys(pess)) tira(quem);
+        } else {
+          const casa = (await _cobAutoCfg(env)).txt[campo];
+          if (volta || texto === casa) tira(uid);
+          else {
+            const m = (pess[uid] && typeof pess[uid] === 'object') ? { ...pess[uid] } : {};
+            m.txt = { ...((m.txt && typeof m.txt === 'object') ? m.txt : {}), [campo]: texto };
+            m.txt_em = { ...((m.txt_em && typeof m.txt_em === 'object') ? m.txt_em : {}), [campo]: Date.now() };
+            pess[uid] = m;
+          }
+        }
+        await _writeConfig(env, COB_AUTO_PESSOA_KEY, JSON.stringify(pess));
+        console.log('COB_AUTO_TEXTO uid=' + (todos ? 'todos' : uid) + ' campo=' + campo + ' ' + (volta ? 'padrao' : texto.length + ' letras') + ' por=' + String(u.id));
+      } else {
+        const meu = { ...((pess[uid] && typeof pess[uid] === 'object') ? pess[uid] : {}) };
+        if (b && b.ligado) delete meu[id]; else meu[id] = false;
+        if (Object.keys(meu).length) pess[uid] = meu; else delete pess[uid];
+        await _writeConfig(env, COB_AUTO_PESSOA_KEY, JSON.stringify(pess));
+        console.log('COB_AUTO_PESSOA uid=' + uid + ' ' + id + '=' + (b && b.ligado ? 'on' : 'off') + ' por=' + String(u.id));
+      }
     }
     const cfg = await _cobAutoCfg(env);
     const data = await _getDashData(env);
@@ -18751,11 +18866,24 @@ async function handleSwWeb(req, env, path) {
       } catch (_) { /* sem historico a aba mostra so os interruptores */ }
     }
     const meu = (pess[uid] && typeof pess[uid] === 'object') ? pess[uid] : {};
+    // `texto` = o que VALE pra esta pessoa (app antigo mostra ele e pronto); `proprio` = e a versao
+    // dela; `vars` = o que a tela oferece pra colocar. `dir` = quem olha e a direcao (o "ver como" dela
+    // chega aqui como o cobrador, com `_comoDe`): a tela ganha o "Salvar pra todos".
+    const ehDir = isDirector(u) || !!u._comoDe;
     const tipos = COB_AUTO_TIPOS.map((t) => ({
       id: t.id, nome: t.nome, dica: t.dica, direcao: !!cfg[t.id], meu: meu[t.id] !== false, hoje: porDb[t.db] || 0,
-      textos: t.campos.map((c) => ({ rot: (COB_AUTO_CAMPOS[c] || {}).rot || c, texto: cfg.txt[c] || '' })),
+      textos: t.campos.map((c) => {
+        const dele = _cobAutoProprio(pess, uid, c);
+        return {
+          campo: c, rot: (COB_AUTO_CAMPOS[c] || {}).rot || c, texto: dele || cfg.txt[c] || '', proprio: !!dele,
+          vars: String((COB_AUTO_CAMPOS[c] || {}).vars || '').replace(/[{}]/g, '').split(' ').filter(Boolean),
+        };
+      }),
     }));
-    return json({ ok: true, tipos, ultimos, numeros: meusNks.length });
+    return json({
+      ok: true, tipos, ultimos, numeros: meusNks.length, edita: true, dir: ehDir, varRot: COB_AUTO_VARS,
+      de: (u._comoDe || (isDirector(u) && uid !== String(u.id))) ? { id: uid, nome: _cobAutoPrimeiro((await _cobNomes(env))[uid] || '') } : null,
+    });
   }
   // POST /api/swweb/auto/pega {k, chaves, nk, tipo, fone, pedido, nome} — A TRAVA: so um app manda
   // cada mensagem, uma vez. A chave nasce 'pego'; so volta a ser oferecida se o app contar que FALHOU
