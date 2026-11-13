@@ -1803,7 +1803,107 @@ async function _cronPaylogAbertos(env) {
         if (gravados) console.log('PAYLOG varredura ' + (mundo || 'casa') + ': ' + gravados + ' pedido(s) atualizados');
       } catch (e) { console.log('PAYLOG varredura ' + (mundo || 'casa') + ' erro: ' + String((e && e.message) || e)); }
     }
+    try { await _plVigiaNaoLiberados(env); } catch (e) { console.log('PAYLOG nao liberados erro: ' + String((e && e.message) || e)); }
   } catch (e) { console.log('PAYLOG varredura erro: ' + String((e && e.message) || e)); }
+}
+
+// ── PEDIDO QUE A PAYLOG NAO LIBEROU (13/11/2026) ─────────────────────────────────────────────
+// Todo pedido do AfterPayLog nasce "Cadastrado" e e aprovado sozinho em uns 5 minutos; so depois
+// disso ele ganha frete e passa pra parte da PayLog que despacha. Quando a cotacao de frete falha
+// ("indisponibilidade temporaria da logistica"), a aprovacao automatica nunca roda e o pedido fica
+// parado em Cadastrado esperando alguem clicar em "Aprovar e Enviar para Logistica" no painel. Nao
+// chega evento nenhum, e na dash o card fica em A Enviar igual a qualquer outro. Assim ficaram 14
+// pedidos do Ceara de 18/10 a 13/11, achados so quando um cliente reclamou que nada chegava.
+//
+// A VIGIA: junto da varredura dos abertos (meia em meia hora), pega os pedidos da PayLog que a dash
+// conhece e que ainda nao tem envio, pergunta o status de cada um e guarda em `pl_nao_lib` os que
+// continuam em Cadastrado 1 hora depois de criados. A direcao recebe UM aviso quando entra pedido
+// novo na lista (push_avisos reserva por pedido; a reserva expira em 4 dias, e quem continua parado
+// avisa de novo). O GET /api/paylog/nao-liberados entrega a lista pras Aceitacoes.
+// Consulta pedido a pedido de proposito: a varredura dos abertos para em 500 pedidos (10 paginas) e
+// em 13/11 os 30 dias ja somavam 489, entao o parado mais velho seria o primeiro a cair fora dela.
+const _PL_NAO_LIB_ESPERA_S = 3600;
+async function _plVigiaNaoLiberados(env, opts) {
+  if (!_ehDashDaCasa(env)) return { ok: false, erro: 'so na dash da casa' };
+  if (!(await _plMundoPronto(env, '')).ok) return { ok: false, erro: 'a casa nao tem PayLog configurada' };
+  const agoraS = Math.floor(Date.now() / 1000);
+  const rs = await env.DB.prepare("SELECT order_id FROM five_orders WHERE order_id LIKE 'PL-%'"
+    + " AND COALESCE(shipping_status, '') = '' AND COALESCE(shipping_code, '') = ''"
+    + " AND upper(COALESCE(charge_status, '')) NOT IN ('CANCELED', 'REFUNDED')"
+    + ' AND created_at > ? ORDER BY created_at DESC LIMIT 60').bind(agoraS - 60 * 86400).all();
+  const codigos = ((rs && rs.results) || []).map((x) => String(x.order_id || '').slice(3)).filter((c) => /^ORD[A-Z0-9]+$/i.test(c));
+  const itens = [];
+  const nomes = {};
+  for (const code of codigos) {
+    const r = await _plApi(env, '/api/v1/orders?per_page=5&search=' + encodeURIComponent(code), '');
+    // Uma consulta falhou: a lista velha fica como esta. Lista pela metade apagaria aviso de verdade.
+    if (!r || !r.ok) return { ok: false, erro: String((r && r.erro) || 'falhou'), normal: !!(r && r.normal) };
+    const o = (((r.dados && r.dados.data) || []).find((x) => x && String(x.code) === code)) || null;
+    if (!o) continue;
+    const st = String((o.platform_status && o.platform_status.value) || '').toLowerCase();
+    const criadoMs = Date.parse(String(o.created_at || ''));
+    if (st !== 'cadastrado' || !(criadoMs > 0) || agoraS - criadoMs / 1000 < _PL_NAO_LIB_ESPERA_S) continue;
+    itens.push({ code, criado: String(o.created_at) });
+    nomes[code] = String((o.client && o.client.name) || '').trim().split(/\s+/).slice(0, 2).join(' ');
+  }
+  itens.sort((a, b) => Date.parse(a.criado) - Date.parse(b.criado));
+  await _writeConfig(env, 'pl_nao_lib', JSON.stringify({ ts: agoraS, itens }));
+  if (itens.length) console.log('PAYLOG nao liberados: ' + itens.length + ' (' + itens.map((x) => x.code).join(', ') + ')');
+  if (!(opts && opts.semAviso) && itens.length) await _plAvisaNaoLiberados(env, itens, nomes, agoraS);
+  return { ok: true, itens, conferidos: codigos.length };
+}
+async function _plAvisaNaoLiberados(env, itens, nomes, agoraS) {
+  try {
+    await _ensurePushTables(env);
+    const novos = [];
+    for (const it of itens) {
+      const res = await env.DB.prepare('INSERT OR IGNORE INTO push_avisos (chave, ts) VALUES (?, ?)')
+        .bind('plnaolib:' + it.code, agoraS).run().catch(() => null);
+      if (res && res.meta && res.meta.changes > 0) novos.push(it);
+    }
+    if (!novos.length) return;
+    if (!(await _wpChaves(env))) return;
+    const apoio = await _wpApoio(env, null);
+    const um = novos.length === 1;
+    const aviso = {
+      title: um ? 'PayLog não liberou um pedido' : 'PayLog não liberou ' + novos.length + ' pedidos',
+      body: (um ? (nomes[novos[0].code] || 'Cliente') + ' está parado em Cadastrado.' : 'Estão parados em Cadastrado.')
+        + ' Abra na AfterPayLog e clique em Aprovar e Enviar para Logística.',
+      tag: 'pl-nao-lib', url: '/pressels/aceitacoes', aviso: true,
+    };
+    for (const id of apoio.diretoresDaCasa) await _wpParaPessoa(env, id, aviso, 'pl-nao-lib');
+  } catch (e) {
+    console.error('[push] aviso de pedido nao liberado falhou: ' + String((e && e.message) || e));
+  }
+}
+
+// GET /api/paylog/nao-liberados - a lista da vigia (ver _plVigiaNaoLiberados), so codigos e data.
+// Quem foi aprovado depois da ultima vigia sai na hora: o webhook 'aprovado' grava o last_status do
+// five_orders. `?atualizar=1` (so diretor) roda a vigia agora, sem aviso no celular.
+async function handlePaylogNaoLiberados(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  // a lista e da PayLog da casa: o afiliado tem a dele
+  if (u.afiliado_id || String(u.role || '').toLowerCase() === 'afiliado') return json({ ok: true, ts: 0, itens: [] });
+  if (new URL(req.url).searchParams.get('atualizar') === '1' && isDirector(u)) {
+    const r = await _plVigiaNaoLiberados(env, { semAviso: true });
+    if (!r.ok) return json({ ok: false, erro: r.erro });
+  }
+  let salvo = null;
+  try { salvo = JSON.parse((await _readConfig(env, 'pl_nao_lib')) || 'null'); } catch (_) { salvo = null; }
+  let itens = (salvo && Array.isArray(salvo.itens)) ? salvo.itens.filter((x) => x && x.code) : [];
+  if (itens.length) {
+    const rr = await env.DB.prepare('SELECT order_id FROM five_orders WHERE order_id IN (SELECT value FROM json_each(?))'
+      + " AND COALESCE(shipping_status, '') = '' AND COALESCE(shipping_code, '') = ''"
+      + " AND upper(COALESCE(charge_status, '')) NOT IN ('CANCELED', 'REFUNDED')"
+      + " AND (last_status IS NULL OR last_status LIKE '%adastrado%')")
+      .bind(JSON.stringify(itens.map((x) => 'PL-' + x.code))).all().catch(() => null);
+    if (rr && rr.results) {
+      const ainda = new Set(rr.results.map((x) => String(x.order_id)));
+      itens = itens.filter((x) => ainda.has('PL-' + x.code));
+    }
+  }
+  return json({ ok: true, ts: (salvo && salvo.ts) || 0, itens });
 }
 
 // GET /api/paylog/sync — so diretor. `?dry=1` mostra o que ENTRARIA sem gravar nada, que e como
@@ -38977,6 +39077,7 @@ export default {
       // com {mundo, de, ate, per_page} e caia em 404 'Rota nao encontrada' - a rota so aceitava GET.
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/paylog/sync') return handlePaylogSync(req, env);
       if (req.method === 'GET' && path === '/api/paylog/mundos') return handlePaylogMundos(req, env);
+      if (req.method === 'GET' && path === '/api/paylog/nao-liberados') return handlePaylogNaoLiberados(req, env);
       if (req.method === 'POST' && path === '/api/paylog/fotos') return handlePaylogFotos(req, env, ctx);
       // PAYLOG 2.0 (plataforma 'PayLog normal'): porta PROPRIA, so captura. Fica ANTES do
       // /paylog de proposito, pra ninguem confundir as duas portas no futuro.
