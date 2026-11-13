@@ -261,5 +261,43 @@ vale('salvar os textos pela dash continua como era e nao apaga o proprio de ning
 const maria3 = dePed(await itens(), '2001', 'saiu');
 vale('sem texto proprio, o Bryan volta a mandar o da casa', !!maria3 && maria3.textos[0] === 'Novo texto da casa, Maria.', maria3 && maria3.textos[0]);
 
+// ══ A VISAO DA CASA (13/11/2026, rodada 2) ══ o Bruno: "para mim, como diretor, esta quase impossivel"
+// chegar na aba pelo "ver como". A direcao SEM "ver como" ve a operacao inteira e mexe no que e da casa.
+_log('\nA DIRECAO SEM "VER COMO" VE A CASA\n');
+const poe = sq.prepare("INSERT INTO swweb_auto (k, tipo, nk, fone, pedido, nome, status, n, pego_ts, feito_ts) VALUES (?, ?, ?, '5531900000000', '1', ?, 'enviado', 1, ?, ?)");
+poe.run('sai:casa1', 'saiu', NK_BRY, 'Cliente do Bryan', S() - 300, S() - 300);
+poe.run('sai:casa2', 'saiu', NK_HAY, 'Cliente do Haynan', S() - 200, S() - 200);
+poe.run('pag:casa3', 'pagou', NK_HAY, 'Outro do Haynan', S() - 100, S() - 100);
+await salva('bry', { id: 'ret', ligado: false });
+c = await cfgDe('dir');
+const tp = (d, id) => (d.tipos || []).find((t) => t.id === id) || {};
+const casaTxt = (await chama(TK.dir, '/api/cob/auto')).d.cfg.txt;
+vale('a aba da direcao e a da casa: sem "de", com a lista dos cobradores pro seletor', c.casa === true && c.dir === true && c.de === null && JSON.stringify(c.cobradores) === JSON.stringify([{ id: 'bry', nome: 'Bryan' }, { id: 'hay', nome: 'Haynan' }]), JSON.stringify([c.casa, c.de, c.cobradores]));
+vale('o interruptor e o da operacao (as dez ligadas) e nunca "desligada pela direcao"', c.tipos.length === 10 && c.tipos.every((t) => t.meu === true && t.direcao === true), c.tipos.filter((t) => !t.meu).map((t) => t.id).join(','));
+vale('conta o que saiu hoje por TODOS os numeros de cobrador', tp(c, 'sai').hoje === 2 && tp(c, 'pag').hoje === 1 && c.numeros === 2, JSON.stringify([tp(c, 'sai').hoje, tp(c, 'pag').hoje, c.numeros]));
+vale('os ultimos envios sao de todos, com o nome de quem mandou', c.ultimos.length === 3 && c.ultimos.map((x) => x.quem + ':' + x.id).join('|') === 'Haynan:pag|Haynan:sai|Bryan:sai', JSON.stringify(c.ultimos.map((x) => [x.quem, x.id])));
+vale('diz quem desligou a dele e quem usa outro texto', tp(c, 'ret').desligou.join(',') === 'Bryan' && tp(c, 'sai').desligou.length === 0
+  && txDe(c, 'postado').outros.join(',') === 'Bryan' && txDe(c, 'pagou').outros.length === 0, JSON.stringify([tp(c, 'ret').desligou, txDe(c, 'postado').outros]));
+vale('e o texto que aparece e o DA CASA, mesmo onde um cobrador mudou o dele', txDe(c, 'postado').proprio === false && txDe(c, 'postado').texto === casaTxt.postado && txDe(c, 'saiu').texto === 'Novo texto da casa, {primeiro}.', txDe(c, 'postado').texto.slice(0, 40));
+await salva('bry', { id: 'ret', ligado: true });
+r = await salva('dir', { id: 'atr', ligado: false });
+vale('a direcao desliga uma automacao PRA OPERACAO (o mesmo cob_auto da dash), sem criar nada no nome dela', r.st === 200 && r.d.casa === true && tp(r.d, 'atr').meu === false && cru('cob_auto').atr === false && cru('cob_auto').por === 'Diretor' && !cru('cob_auto_pessoa').dir, JSON.stringify([tp(r.d, 'atr').meu, cru('cob_auto').atr]));
+vale('so aquela chave mudou (as outras nove e os textos da casa continuam)', Object.keys(TODAS).filter((k) => k !== 'atr').every((k) => cru('cob_auto')[k] === true) && cru('cob_auto').txt.saiu === 'Novo texto da casa, {primeiro}.', JSON.stringify(Object.keys(TODAS).filter((k) => cru('cob_auto')[k] !== true)));
+vale('a dash enxerga a mesma coisa', (await chama(TK.dir, '/api/cob/auto')).d.cfg.atr === false);
+c = await cfgDe('bry');
+vale('e o cobrador ve "desligada pela direcao"', tp(c, 'atr').direcao === false && tp(c, 'atr').meu === true, JSON.stringify([tp(c, 'atr').direcao, tp(c, 'atr').meu]));
+r = await salva('dir', { id: 'atr', ligado: true });
+vale('ligar de novo volta pra operacao', r.st === 200 && tp(r.d, 'atr').meu === true && cru('cob_auto').atr === true);
+c = await cfgDe('bry');
+vale('o cobrador continua com a aba dele: sem casa e sem a lista de cobradores', c.casa === false && c.cobradores === undefined && c.dir === false && tp(c, 'sai').hoje === 1 && c.ultimos.length === 1 && c.ultimos[0].quem === undefined, JSON.stringify([c.casa, c.cobradores, tp(c, 'sai').hoje, c.ultimos.length]));
+c = await cfgDe('dir', 'hay');
+vale('a direcao escolhendo um cobrador ve a dele, e continua com a lista pro seletor', c.casa === false && c.dir === true && c.de.id === 'hay' && c.cobradores.length === 2 && tp(c, 'sai').hoje === 1 && tp(c, 'pag').hoje === 1 && c.ultimos.length === 2, JSON.stringify([c.casa, c.de, tp(c, 'sai').hoje]));
+r = await salva('dir', { id: 'sai', ligado: false, de: 'hay' });
+vale('com `de`, o interruptor e o DO COBRADOR (a casa nao muda) e a aba que volta e a dele', r.st === 200 && r.d.casa === false && r.d.de.id === 'hay' && tp(r.d, 'sai').meu === false && cru('cob_auto').sai === true && cru('cob_auto_pessoa').hay.sai === false, JSON.stringify([r.d.casa, tp(r.d, 'sai').meu, cru('cob_auto').sai]));
+await salva('dir', { id: 'sai', ligado: true, de: 'hay' });
+r = await salva('bry', { id: 'sai', ligado: false });
+vale('o cobrador desligando continua mexendo so na dele', r.st === 200 && cru('cob_auto').sai === true && cru('cob_auto_pessoa').bry.sai === false);
+await salva('bry', { id: 'sai', ligado: true });
+
 _log('\n' + ok + ' certos, ' + falhas.length + ' errados');
 if (falhas.length) { _log('FALHARAM:\n - ' + falhas.join('\n - ')); process.exit(1); }

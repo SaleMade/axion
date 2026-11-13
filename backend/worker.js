@@ -19023,6 +19023,8 @@ async function handleSwWeb(req, env, path) {
   // POST {campo, texto, de?} — O TEXTO DELE (13/11/2026): vale so no que sai pelos numeros dele.
   //   {campo, padrao: true} devolve ao da casa. {campo, texto, todos: true}, so a direcao: troca o
   //   texto DA CASA e apaga a versao propria de todo mundo naquele campo (ela disse "pra todos").
+  // A DIRECAO SEM "ver como" E SEM `de` E A CASA (13/11/2026, rodada 2): o GET devolve a operacao
+  //   inteira (`casa: true`) e o POST {id, ligado} liga e desliga PRA OPERACAO, como a dash.
   if (path === '/api/swweb/auto/config' && (req.method === 'GET' || req.method === 'POST')) {
     if (mundo || !(isDirector(u) || _ehCobrador(u))) return err('Só o cobrador da casa tem automações', 403);
     const pess = await _cobAutoPessoas(env);
@@ -19074,6 +19076,14 @@ async function handleSwWeb(req, env, path) {
         }
         await _writeConfig(env, COB_AUTO_PESSOA_KEY, JSON.stringify(pess));
         console.log('COB_AUTO_TEXTO uid=' + (todos ? 'todos' : uid) + ' campo=' + campo + ' ' + (volta ? 'padrao' : texto.length + ' letras') + ' por=' + String(u.id));
+      } else if (isDirector(u) && uid === String(u.id)) {
+        // O INTERRUPTOR DA CASA: so a chave que ela mexeu (as outras, e o `recr` que segue o `rec`
+        // enquanto ninguem mexe nele, ficam como estao). E o mesmo cob_auto que a dash grava.
+        let cru = null;
+        try { const v = await _readConfig(env, COB_AUTO_KEY); cru = v ? JSON.parse(v) : null; } catch (_) { cru = null; }
+        cru = (cru && typeof cru === 'object') ? cru : {};
+        await _writeConfig(env, COB_AUTO_KEY, JSON.stringify({ ...cru, [id]: !!(b && b.ligado), por: String(u.name || u.id), em: Date.now() }));
+        console.log('COB_AUTO_CASA ' + id + '=' + (b && b.ligado ? 'on' : 'off') + ' por=' + String(u.id));
       } else {
         const meu = { ...((pess[uid] && typeof pess[uid] === 'object') ? pess[uid] : {}) };
         if (b && b.ligado) delete meu[id]; else meu[id] = false;
@@ -19084,7 +19094,18 @@ async function handleSwWeb(req, env, path) {
     }
     const cfg = await _cobAutoCfg(env);
     const data = await _getDashData(env);
-    const meusNks = (Array.isArray(data && data.chips) ? data.chips : []).filter((c) => c && c.num && !String(c.afl || '') && String(c.at || '') === uid)
+    // A VISAO DA CASA (13/11/2026, rodada 2; o Bruno: "para mim, como diretor, esta quase impossivel"
+    // chegar na aba pelo "ver como"). A direcao nao tem numero de cobranca: sem "ver como", a aba dela
+    // mostra a OPERACAO: o liga/desliga da casa, o texto da casa, o que saiu por TODOS os numeros de
+    // cobrador (com o nome de quem mandou) e quem esta diferente (`desligou` a dele, `outros` = usa
+    // outro texto). `cobradores` e a lista pro seletor da propria aba (Todos / cada cobrador).
+    const casa = isDirector(u) && !u._comoDe && uid === String(u.id);
+    const ehDir = isDirector(u) || !!u._comoDe;
+    const nomes = ehDir ? await _cobNomes(env) : {};
+    const cobs = ehDir ? (await _cobradoresDaCasa(env)).map((c) => ({ id: String(c.id), nome: _cobAutoPrimeiro(nomes[String(c.id)] || '') || String(c.id) })) : [];
+    const donoNk = new Map();
+    if (casa) { for (const v of (await _cobAutoNumeros(env, data)).values()) donoNk.set(v.nk, v.at); }
+    const meusNks = casa ? [...donoNk.keys()] : (Array.isArray(data && data.chips) ? data.chips : []).filter((c) => c && c.num && !String(c.afl || '') && String(c.at || '') === uid)
       .map((c) => _waNumKey(c.num)).filter((k) => k && k.length === 10);
     await _cobAutoTabela(env);
     const d0 = new Date(Date.now() - _COB_BRT);
@@ -19096,11 +19117,14 @@ async function handleSwWeb(req, env, path) {
         const r = await env.DB.prepare("SELECT tipo, COUNT(*) n FROM swweb_auto WHERE status = 'enviado' AND COALESCE(feito_ts, pego_ts) >= ? AND nk IN (SELECT value FROM json_each(?)) GROUP BY tipo")
           .bind(iniDiaS, JSON.stringify(meusNks)).all();
         for (const x of ((r && r.results) || [])) porDb[String(x.tipo)] = Number(x.n) || 0;
-        const r2 = await env.DB.prepare('SELECT tipo, nome, status, motivo, COALESCE(feito_ts, pego_ts) ts FROM swweb_auto WHERE nk IN (SELECT value FROM json_each(?)) ORDER BY COALESCE(feito_ts, pego_ts) DESC LIMIT 15')
+        const r2 = await env.DB.prepare('SELECT tipo, nk, nome, status, motivo, COALESCE(feito_ts, pego_ts) ts FROM swweb_auto WHERE nk IN (SELECT value FROM json_each(?)) ORDER BY COALESCE(feito_ts, pego_ts) DESC LIMIT ' + (casa ? 25 : 15))
           .bind(JSON.stringify(meusNks)).all();
         ultimos = ((r2 && r2.results) || []).map((x) => {
           const t = COB_AUTO_TIPOS.find((c) => c.db === x.tipo);
-          return { id: t ? t.id : '', nome: String(x.nome || ''), status: String(x.status || ''), motivo: String(x.motivo || ''), ts: Number(x.ts) || 0 };
+          return {
+            id: t ? t.id : '', nome: String(x.nome || ''), status: String(x.status || ''), motivo: String(x.motivo || ''), ts: Number(x.ts) || 0,
+            ...(casa ? { quem: _cobAutoPrimeiro(nomes[donoNk.get(String(x.nk))] || '') } : {}),
+          };
         });
       } catch (_) { /* sem historico a aba mostra so os interruptores */ }
     }
@@ -19108,20 +19132,24 @@ async function handleSwWeb(req, env, path) {
     // `texto` = o que VALE pra esta pessoa (app antigo mostra ele e pronto); `proprio` = e a versao
     // dela; `vars` = o que a tela oferece pra colocar. `dir` = quem olha e a direcao (o "ver como" dela
     // chega aqui como o cobrador, com `_comoDe`): a tela ganha o "Salvar pra todos".
-    const ehDir = isDirector(u) || !!u._comoDe;
+    // NA CASA o interruptor e o da operacao (`meu` = ligada pra todos; nao existe "desligada pela direcao").
+    const quais = (f) => cobs.filter((c) => f(c.id)).map((c) => c.nome);
     const tipos = COB_AUTO_TIPOS.map((t) => ({
-      id: t.id, nome: t.nome, dica: t.dica, direcao: !!cfg[t.id], meu: meu[t.id] !== false, hoje: porDb[t.db] || 0,
+      id: t.id, nome: t.nome, dica: t.dica, direcao: casa ? true : !!cfg[t.id], meu: casa ? !!cfg[t.id] : meu[t.id] !== false, hoje: porDb[t.db] || 0,
+      ...(casa ? { desligou: quais((id) => !!(pess[id] && pess[id][t.id] === false)) } : {}),
       textos: t.campos.map((c) => {
-        const dele = _cobAutoProprio(pess, uid, c);
+        const dele = casa ? '' : _cobAutoProprio(pess, uid, c);
         return {
           campo: c, rot: (COB_AUTO_CAMPOS[c] || {}).rot || c, texto: dele || cfg.txt[c] || '', proprio: !!dele,
           vars: String((COB_AUTO_CAMPOS[c] || {}).vars || '').replace(/[{}]/g, '').split(' ').filter(Boolean),
+          ...(casa ? { outros: quais((id) => !!_cobAutoProprio(pess, id, c)) } : {}),
         };
       }),
     }));
     return json({
-      ok: true, tipos, ultimos, numeros: meusNks.length, edita: true, dir: ehDir, varRot: COB_AUTO_VARS,
-      de: (u._comoDe || (isDirector(u) && uid !== String(u.id))) ? { id: uid, nome: _cobAutoPrimeiro((await _cobNomes(env))[uid] || '') } : null,
+      ok: true, tipos, ultimos, numeros: meusNks.length, edita: true, dir: ehDir, varRot: COB_AUTO_VARS, casa,
+      ...(ehDir ? { cobradores: cobs } : {}),
+      de: (u._comoDe || (isDirector(u) && uid !== String(u.id))) ? { id: uid, nome: _cobAutoPrimeiro(nomes[uid] || '') } : null,
     });
   }
   // POST /api/swweb/auto/pega {k, chaves, nk, tipo, fone, pedido, nome} — A TRAVA: so um app manda
