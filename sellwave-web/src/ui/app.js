@@ -675,7 +675,8 @@ function telaLogin(erro) {
 }
 
 function telaVazia() {
-  window.sw.esconder()
+  // `painel: true` (13/11/2026): esta tela convive com o painel, que a direcao ve sem numero aberto.
+  window.sw.esconder({ painel: true })
   ativo = ''
   palco.innerHTML = ''
     + '<div class="vazio"><div class="icone">'
@@ -710,7 +711,7 @@ function humano(txt) {
 function telaErro(nk, erro) {
   falhou.set(nk, erro)
   carregando.delete(nk)
-  window.sw.esconder()
+  window.sw.esconder({ painel: true })
   ativo = ''
   palco.innerHTML = ''
     + '<div class="cartao"><h2>Não abriu</h2>'
@@ -847,7 +848,7 @@ function telaAbrir(nk) {
   // FECHANDO LA: a releitura de 20 s redesenha esta tela (o aluguel ja sumiu e ela mostraria "Abrir
   // WhatsApp"); o vendedor abriria antes do app de la soltar. Enquanto conta, a tela e a da contagem.
   if (forcados.has(nk) && Date.now() - forcados.get(nk) < ESPERA_FORCAR_MS) {
-    window.sw.esconder()
+    window.sw.esconder({ painel: true })
     ativo = nk
     telaForcando(nk, n)
     desenhaLista()
@@ -855,7 +856,7 @@ function telaAbrir(nk) {
   }
   travaDesenhada = [n.uso ? (n.uso.meu ? 'meu' : 'de:' + (n.uso.nome || '?')) : 'livre',
     (n.conn && n.conn.st) || '-', (estado.destacados || []).includes(nk) ? 'dst' : ''].join('|')
-  window.sw.esconder()
+  window.sw.esconder({ painel: true })
   ativo = nk
   const ocupado = n.uso && !n.uso.meu ? n.uso : null
   const destacado = (estado.destacados || []).includes(nk)
@@ -1379,6 +1380,9 @@ function fechaModal() {
   if (sairRelogio) { clearTimeout(sairRelogio); sairRelogio = null }
   modal.classList.remove('on')
   if (ativo) window.sw.mostrar(ativo)
+  // o modal cobria a janela inteira e pediu pro painel sair; fechou, ele pode voltar (so volta de
+  // verdade pra direcao sem numero aberto: com numero na tela o `mostrar` ja trouxe)
+  try { window.sw.soltaPainel() } catch (_) { /* preload antigo */ }
 }
 function abreModal() {
   window.sw.esconder()
@@ -1409,6 +1413,8 @@ async function recarregaEstado() {
   barraFina = !!estado.barraEncolhida
   document.body.classList.toggle('fina', barraFina)
   document.body.classList.toggle('sem-painel', estado.painelLigado === false)
+  // O PAINEL NA TELA SEM NUMERO ABERTO (so a direcao): a tela do meio recua pra nao ficar embaixo dele.
+  document.body.classList.toggle('painel-solto', !!(estado.crm && estado.crm.solto))
   $('versao').title = 'SellWave Web v' + estado.versao
     + (estado.agenteDeOnde === 'servidor' ? ' · motor de conversa atualizado' : '')
   if (estado.atualizacao) atualizacao = estado.atualizacao
@@ -1651,6 +1657,8 @@ modal.onclick = fechaPorFora
 document.onkeydown = (e) => { if (e.key === 'Escape') fechaModal() }
 
 window.sw.ao('sw:status', (d) => { const p = $('passo'); if (p && d) p.textContent = d.texto })
+// a geometria mudou (o main avisa): o painel apareceu ou sumiu sem numero aberto
+window.sw.ao('sw:area', (g) => { document.body.classList.toggle('painel-solto', !!(g && g.solto)) })
 // POR ONDE O NUMERO SAIU. O main ja mandava e ninguem escutava: a informacao mais util do preflight
 // (IP, pais e cidade do proxy daquele chip) morria no caminho.
 window.sw.ao('sw:saida', (d) => {

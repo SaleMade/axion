@@ -12,7 +12,9 @@ contextBridge.exposeInMainWorld('sw', {
   numeros: () => chamar('sw:numeros'),
   abrir: (numero) => chamar('sw:abrir', { numero }),
   mostrar: (nk) => chamar('sw:mostrar', { nk }),
-  esconder: () => chamar('sw:esconder'),
+  // `{ painel: true }` = a tela que vem agora convive com o painel (a direcao ve ele sem numero aberto)
+  esconder: (o) => chamar('sw:esconder', o),
+  soltaPainel: () => chamar('sw:solta-painel'),
   fechar: (nk) => chamar('sw:fechar', { nk }),
   // O numero em JANELA PROPRIA (17/10/2026): destacar tira da janela principal, devolver traz.
   destacar: (numero, nk) => chamar('sw:destacar', { numero, nk }),

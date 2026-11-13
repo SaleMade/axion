@@ -475,6 +475,32 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   todas as mensagens. A dash (Cobrança > Cobradores > Textos) mostra quem tem texto próprio e devolve ao
   da casa. Servidor antigo (sem `edita`) ou app antigo: a aba fica como era. Testes: `teste-painel` (os de
   "editar", "direcao" e largura) e `backend/teste-cob-auto3.mjs` (51).
+- **13/11/2026 — A DIREÇÃO CHEGA NAS AUTOMAÇÕES SEM "VER COMO" E SEM ABRIR NÚMERO (1.26.20).** O Bruno, horas
+  depois da 1.26.19: "para mim, como diretor, está quase impossível (...) tenho que ver como um dos meus
+  cobradores, trocar para a visualização, clicar em um dos números. Aí sim eu vou ter ali a área de
+  automações (...) eu gostaria que essa área lateral ficasse disponível mesmo sem nenhum número
+  selecionado". Três peças:
+  **(1) O painel sem número aberto, só pra direção.** `temPainel()` = número na tela OU
+  `painelSemNumero()` (`direcaoReal` + `painelSolto` + token). `direcaoReal` é quem ENTROU no app (o
+  `config.direcao` vem falso no "ver como"). `painelSolto` é a casca dizendo que a tela dela convive com
+  o painel: `window.sw.esconder({ painel: true })` na tela vazia, no cartão de abrir, na contagem e no
+  erro; modal, trava e a tela de entrar chamam sem o `painel` e ele sai da frente (o painel é uma view POR
+  CIMA da casca: taparia 316 px do modal); `fechaModal` chama `soltaPainel`. A casca recua a tela do meio
+  (`body.painel-solto main`, avisada pelo `sw:area` com `solto`). O painel recebe `semNumero` e
+  `direcao` em todo estado: mostra "Nenhum número aberto", pontinho cinza, sem fechar nem recarregar.
+  Vendedor e cobrador não mudam: sem número aberto, sem painel.
+  **(2) A aba Automações pra direção, fora da versão de cobrador** (`souDir`): é a aba da CASA. O
+  servidor, pra direção sem `como` e sem `de`, devolve `casa: true`: o interruptor é o da operação
+  (`cob_auto`, o mesmo da dash), o texto é o da casa, "hoje" e os últimos envios somam todos os números
+  de cobrador (com quem mandou), `desligou` e `outros` dizem quem está diferente. Editar ali é "Salvar
+  pra todos".
+  **(3) O seletor na própria aba** (`auto.quem`, `escolheAutoQuem`): Todos ou um cobrador, sem passar
+  pelos Ajustes. O main traduz em `autoAlvo(quem)`: 'casa' = sem alvo; id = `&como=` na leitura e `de`
+  na gravação; sem escolha vale o "ver como" de um cobrador. Só a direção escolhe.
+  Os "Últimos envios" viraram duas linhas (cliente em cima, mensagem e quem mandou embaixo): numa só,
+  nome comprido escondia qual mensagem foi. Testes: autoteste com 6 conferências novas da geometria de
+  verdade (vendedor, direção, modal abre e fecha, sem conta, o painel lendo o estado), `teste-painel`
+  (459: "direcao:", "sem numero"), `teste-auto-cobranca` (129) e `backend/teste-cob-auto3.mjs` (66).
 
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 

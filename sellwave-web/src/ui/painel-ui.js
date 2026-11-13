@@ -39,7 +39,12 @@ let cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos:
 // pelo mesmo motivo: o desenha() le.
 // `edita` = o texto aberto pra editar ({ id, campo, valor, original, erro, salvando }); `pode` = o
 // servidor e o app sabem editar; `dir`/`de` = quem olha e a direcao, vendo a aba de um cobrador.
-let auto = { em: 0, carregando: false, erro: '', tipos: [], ultimos: [], numeros: 0, salvando: '', aberto: '', edita: null, pode: false, dir: false, de: null, varRot: {}, redesenha: false }
+// `quem` = de quem a direcao escolheu ver, na propria aba ('' = o padrao do app, 'casa', ou o id de um
+// cobrador); `casa` = a resposta e a da operacao inteira; `cobradores` = a lista do seletor.
+let auto = { em: 0, carregando: false, erro: '', tipos: [], ultimos: [], numeros: 0, salvando: '', aberto: '', edita: null, pode: false, dir: false, de: null, varRot: {}, redesenha: false, quem: '', casa: false, cobradores: [] }
+// QUEM ESTA NO APP E DA DIRECAO (13/11/2026): vem em todo estado da conversa. Com ela a aba Automacoes
+// aparece fora da versao de cobrador, e o painel fica na tela mesmo sem numero aberto.
+let souDir = false
 let soFavs = false        // o mesmo filtro do inbox: estrela ao lado dos chips
 let filtro = ''
 let tipoFiltro = ''          // '' = todos
@@ -2401,12 +2406,14 @@ async function atualizaLead() {
     // GRUPO NAO E "NENHUMA CONVERSA". Com o grupo da equipe aberto, o painel escrevia "Abra uma
     // conversa" com uma conversa na tela e todo botao cinza: a leitura natural e que o painel
     // quebrou, nao que existe uma regra. A regra continua: disparo nao vai pra grupo.
-    const chave = estadoWa.grupo ? 'grupo' : ''
+    const chave = estadoWa.semNumero ? 'semnumero' : estadoWa.grupo ? 'grupo' : ''
     if (ultimoFone !== chave) {
       ultimoFone = chave
-      $('lead').innerHTML = estadoWa.grupo
-        ? '<div class="nm">Conversa de grupo</div><div class="ln">o painel não dispara em grupo</div>'
-        : '<div class="nm">Abra uma conversa</div><div class="ln">o painel segue quem está na tela</div>'
+      $('lead').innerHTML = estadoWa.semNumero
+        ? '<div class="nm">Nenhum número aberto</div><div class="ln">escolha um na lista pra atender</div>'
+        : estadoWa.grupo
+          ? '<div class="nm">Conversa de grupo</div><div class="ln">o painel não dispara em grupo</div>'
+          : '<div class="nm">Abra uma conversa</div><div class="ln">o painel segue quem está na tela</div>'
     }
     return
   }
@@ -2469,10 +2476,10 @@ function aplicaModo(v) {
   const selo = $('selo-pedidos')
   if (selo && cobModo) selo.hidden = true
   // A ABA AUTOMACOES so existe na versao de cobrador; saindo do modo com ela aberta, volta pros itens.
-  const abaAuto = $('aba-auto')
-  if (abaAuto) abaAuto.hidden = !cobModo
-  const saiuDaAuto = !cobModo && aba === 'auto'
+  mostraAbaAuto()
+  const saiuDaAuto = !cobModo && !souDir && aba === 'auto'
   auto.edita = null
+  auto.quem = ''              // o "ver como" mudou: a aba volta pro padrao (o cobrador visto, ou a casa)
   cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: cob.prontos || [], em: 0 }
   // O ROTEIRO E OUTRO (de venda pra cobranca, ou de volta): rele na hora em vez de esperar o vazio.
   roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
@@ -2480,10 +2487,13 @@ function aplicaModo(v) {
   fechaEditor(); organiza = false
   pegaRoteiro()
   // Entrando no modo, a ficha e o que ele mais usa durante a conversa: abre nela, venha de que aba vier.
-  if (cobModo) vaiPara('pedidos')
+  // A DIRECAO QUE ESTAVA NA ABA AUTOMACOES fica nela (entrou ou saiu do "ver como"): so rele de quem e.
+  if (souDir && aba === 'auto') { desenha(); puxaAuto() }
+  else if (cobModo) vaiPara('pedidos')
   else if (saiuDaAuto) vaiPara('itens')
   else desenha()
 }
+function mostraAbaAuto() { const a = $('aba-auto'); if (a) a.hidden = !(cobModo || souDir) }
 try { if (window.swp.aoMudarModo) window.swp.aoMudarModo((v) => { if (v !== cobModo) aplicaModo(v); else pegaRoteiro() }) } catch (_) { /* painel velho sem o evento: o pulso pega */ }
 // `semGuarda` (05/11/2026): a releitura pedida pela PROPRIA ficha depois de gravar redesenha sempre,
 // como o quadro faz; so a releitura de fundo (30 s, troca de conversa) respeita o que ele esta fazendo.
@@ -2538,6 +2548,8 @@ function recebeAuto(r) {
   auto.dir = !!r.dir
   auto.de = (r.de && typeof r.de === 'object') ? { id: String(r.de.id || ''), nome: String(r.de.nome || '') } : null
   auto.varRot = (r.varRot && typeof r.varRot === 'object') ? r.varRot : {}
+  auto.casa = !!r.casa
+  auto.cobradores = (Array.isArray(r.cobradores) ? r.cobradores : []).filter((c) => c && c.id).map((c) => ({ id: String(c.id), nome: String(c.nome || c.id) }))
   if (auto.edita && (!auto.pode || (auto.de && auto.de.id) !== deAntes || !autoTextoDe(auto.edita.id, auto.edita.campo))) auto.edita = null
 }
 // ── EDITAR A MENSAGEM (13/11/2026). Pedido do Bruno: "eu quero que tanto eu quanto os meus cobradores
@@ -2583,7 +2595,7 @@ async function salvaAutoTexto(modo) {
   e.erro = ''
   autoRedesenha()
   let r = null
-  try { r = await window.swp.autoTexto(e.campo, String(e.valor), { todos: modo === 'todos', padrao: modo === 'padrao' }) } catch (_) { r = null }
+  try { r = await window.swp.autoTexto(e.campo, String(e.valor), { todos: modo === 'todos', padrao: modo === 'padrao', quem: auto.quem }) } catch (_) { r = null }
   if (auto.edita !== e) return               // saiu do modo cobranca no meio
   e.salvando = ''
   auto.em = Date.now()
@@ -2601,6 +2613,8 @@ function desenhaAutoTexto(t, x, n) {
   let h = '<div class="au-tx' + (editando ? ' ed' : '') + '"><div class="au-tx-topo">'
     + (n > 1 ? '<span class="au-rot">' + esc(x.rot) + '</span>' : '')
     + (x.proprio ? '<span class="au-meu">' + (quem ? 'Texto de ' + esc(quem) : 'Seu texto') + '</span>' : '')
+    // NA CASA o texto e o de todos; quem mudou o dele aparece aqui (e "Salvar pra todos" apaga o dele)
+    + (auto.casa && Array.isArray(x.outros) && x.outros.length ? '<span class="au-meu" title="' + esc(x.outros.join(', ')) + '">' + esc(x.outros.join(', ')) + (x.outros.length > 1 ? ' usam' : ' usa') + ' outro texto</span>' : '')
     + (auto.pode && x.campo && !editando ? '<button class="au-ed" data-tipo="' + esc(t.id) + '" data-ed="' + esc(x.campo) + '">' + IC_LAPIS + 'Editar</button>' : '')
     + '</div>'
   if (!editando) return h + '<div class="au-bolha">' + esc(autoExemplo(x.texto)) + '</div></div>'
@@ -2619,6 +2633,8 @@ function desenhaAutoTexto(t, x, n) {
     h += '<div class="au-acoes dois"><button class="bt pri" data-salva="todos"' + dis + '>' + gira('todos') + 'Salvar pra todos</button>'
       + '<button class="bt sec" data-salva="um"' + dis + '>' + gira('um') + 'Só para ' + esc(quem) + '</button></div>'
       + '<div class="au-pe">' + volta + cancela + '</div>'
+  } else if (auto.casa) {
+    h += '<div class="au-acoes"><button class="bt pri" data-salva="todos"' + dis + '>' + gira('todos') + 'Salvar pra todos</button>' + cancela + '</div>'
   } else {
     h += '<div class="au-acoes"><button class="bt pri" data-salva="um"' + dis + '>' + gira('um') + 'Salvar</button>' + cancela + '</div>'
       + (volta ? '<div class="au-pe">' + volta + '</div>' : '')
@@ -2630,12 +2646,27 @@ async function puxaAuto(calado) {
   auto.carregando = true
   if (!calado && aba === 'auto') desenha()
   let r = null
-  try { r = await window.swp.autoConfig() } catch (_) { r = null }
+  const de = auto.quem
+  try { r = await window.swp.autoConfig(de) } catch (_) { r = null }
   auto.carregando = false
+  // A DIRECAO TROCOU DE PESSOA NO MEIO: esta resposta e de quem ela ja nao esta vendo. Rele.
+  if (de !== auto.quem) { puxaAuto(calado); return }
   auto.em = Date.now()
   if (r && r.ok) recebeAuto(r)
   else auto.erro = humano((r && (r.erro || r.error)) || 'não deu pra falar com a dash')
   if (aba === 'auto') desenha()
+}
+// A DIRECAO ESCOLHE DE QUEM E A ABA (13/11/2026, rodada 2): "Todos" = a operacao inteira, ou um
+// cobrador. Era pelo "ver como" dos Ajustes, e o Bruno: "olha que dificuldade".
+function escolheAutoQuem(q) {
+  if (auto.edita && autoMudou()) { autoPreso(); return }
+  if (auto.salvando || (auto.edita && auto.edita.salvando)) return
+  auto.quem = String(q || '')
+  auto.edita = null
+  auto.aberto = ''
+  auto.tipos = []; auto.ultimos = []; auto.erro = ''; auto.em = 0     // a lista de antes era de outra pessoa
+  autoRedesenha()
+  puxaAuto()
 }
 async function trocaAuto(id) {
   const t = auto.tipos.find((x) => x.id === id)
@@ -2645,24 +2676,34 @@ async function trocaAuto(id) {
   auto.salvando = id
   desenha()
   let r = null
-  try { r = await window.swp.autoLiga(id, novo) } catch (_) { r = null }
+  try { r = await window.swp.autoLiga(id, novo, auto.quem) } catch (_) { r = null }
   auto.salvando = ''
   auto.em = Date.now()
   // SEGURA O RECADO (13/11/2026): o pulso do painel reescreve o rodape a cada 1,5 s, e a recusa da
   // dash sumia antes de dar tempo de ler (o teste pegava isso uma vez em duas).
-  if (r && r.ok) { recebeAuto(r); rodape(t.nome + (novo ? ': ligada' : ': desligada'), null, true) }
+  if (r && r.ok) { recebeAuto(r); rodape(t.nome + (novo ? ': ligada' : ': desligada') + (auto.casa ? ' pra todos' : ''), null, true) }
   else { t.meu = !novo; rodape(humano((r && (r.erro || r.error)) || 'não deu pra salvar'), null, true) }
   if (aba === 'auto') desenha()
 }
 function desenhaAuto() {
   const vazio = (x) => '<div class="vazio">' + esc(x) + '</div>'
   if (!window.swp.autoConfig) return vazio('Atualize o app pra ver as automações.')
-  if (!auto.tipos.length) return vazio(auto.carregando || !auto.em ? 'Carregando' : (auto.erro || 'Nenhuma automação por aqui.'))
-  let h = '<div class="au">'
+  // O SELETOR DA DIRECAO (13/11/2026, rodada 2): Todos = a operacao inteira; ou um cobrador. Fica na
+  // tela enquanto a lista da pessoa escolhida carrega, pra ela poder trocar de novo.
+  const sel = auto.quem || (auto.casa ? 'casa' : (auto.de && auto.de.id) || '')
+  const quemBt = (id, nome) => '<button class="au-q' + (sel === id ? ' on' : '') + '" data-quem="' + esc(id) + '" aria-pressed="' + (sel === id ? 'true' : 'false') + '">' + esc(nome) + '</button>'
+  const seletor = (auto.dir && auto.cobradores.length) ? '<div class="au-quem">' + quemBt('casa', 'Todos') + auto.cobradores.map((c) => quemBt(c.id, c.nome)).join('') + '</div>' : ''
+  if (!auto.tipos.length) return (seletor ? '<div class="au">' + seletor + '</div>' : '') + vazio(auto.carregando || !auto.em ? 'Carregando' : (auto.erro || 'Nenhuma automação por aqui.'))
+  let h = '<div class="au">' + seletor
+  const nomeDe = (auto.dir && auto.de && auto.de.nome) ? auto.de.nome : ''
   // 12/11/2026: o envio espera o cobrador ficar livre (cobradorOcupado no main). Dito aqui pra ele nao
   // achar que travou quando a mensagem demora a sair no meio do atendimento.
-  h += '<div class="au-nota">As mensagens saem quando você está livre: fora de ligação e sem responder ninguém há 1 minuto e meio.</div>'
-  if (!auto.numeros) h += '<div class="au-aviso">Nenhum número de cobrança no seu nome. As mensagens saem pelo número do cobrador aberto neste computador.</div>'
+  h += '<div class="au-nota">As mensagens saem quando ' + (auto.dir ? 'o cobrador' : 'você') + ' está livre: fora de ligação e sem responder ninguém há 1 minuto e meio.</div>'
+  if (!auto.numeros) {
+    h += '<div class="au-aviso">' + (auto.casa ? 'Nenhum cobrador tem número de cobrança. Ponha um no nome dele, na Contingência.'
+      : nomeDe ? 'Nenhum número de cobrança no nome de ' + esc(nomeDe) + '.'
+        : 'Nenhum número de cobrança no seu nome. As mensagens saem pelo número do cobrador aberto neste computador.') + '</div>'
+  }
   for (const t of auto.tipos) {
     const txs = Array.isArray(t.textos) ? t.textos : []
     h += '<div class="au-it' + (t.direcao && t.meu ? '' : ' off') + '">'
@@ -2671,6 +2712,7 @@ function desenhaAuto() {
       + (t.hoje ? '<span class="au-hoje">' + Number(t.hoje) + ' hoje</span>' : '') + '</div>'
       + '<div class="au-dica">' + esc(t.dica) + '</div>'
       + (t.direcao ? '' : '<div class="au-dir">Desligada pela direção</div>')
+      + (auto.casa && Array.isArray(t.desligou) && t.desligou.length ? '<div class="au-dir">' + esc(t.desligou.join(', ')) + (t.desligou.length > 1 ? ' desligaram' : ' desligou') + ' no app</div>' : '')
       + (txs.length ? '<button class="au-ver' + (auto.aberto === t.id ? ' on' : '') + '" data-ver="' + esc(t.id) + '">Ver mensagem' + IC_SETA + '</button>' : '')
     if (auto.aberto === t.id && txs.length) h += '<div class="au-txt">' + txs.map((x) => desenhaAutoTexto(t, x, txs.length)).join('') + '</div>'
     h += '</div>'
@@ -2680,13 +2722,15 @@ function desenhaAuto() {
     for (const u of auto.ultimos) {
       const t = auto.tipos.find((x) => x.id === u.id)
       const st = AUTO_ST[u.status] || ['', '']
-      h += '<div class="au-ult" title="' + esc(u.motivo || '') + '"><span class="q"><b>' + esc(u.nome || 'Cliente') + '</b> · ' + esc(t ? t.nome : 'Mensagem') + '</span>'
+      // DUAS LINHAS (13/11/2026): numa so, nome de cliente comprido escondia qual mensagem foi e quem mandou
+      h += '<div class="au-ult" title="' + esc(u.motivo || '') + '"><span class="q"><b>' + esc(u.nome || 'Cliente') + '</b><i>' + esc(t ? t.nome : 'Mensagem') + (u.quem ? ' · ' + esc(u.quem) : '') + '</i></span>'
         + (st[0] ? '<span class="s ' + st[1] + '">' + st[0] + '</span>' : '') + '<span class="t">' + autoHora(u.ts) + '</span></div>'
     }
   }
   return h + '</div>'
 }
 function ligaAuto(corpo) {
+  for (const b of corpo.querySelectorAll('[data-quem]')) b.onclick = () => { if (b.dataset.quem !== (auto.quem || (auto.casa ? 'casa' : (auto.de && auto.de.id) || ''))) escolheAutoQuem(b.dataset.quem) }
   for (const b of corpo.querySelectorAll('[data-au]')) b.onclick = () => trocaAuto(b.dataset.au)
   for (const b of corpo.querySelectorAll('[data-ver]')) {
     b.onclick = () => {
@@ -3456,8 +3500,15 @@ async function pulso() {
   if (e) estadoWa = e
   // O pontinho verde so acende com o WhatsApp PAREADO. Antes acendia na tela do QR, porque so
   // olhava se a biblioteca tinha carregado.
-  $('pt').className = 'pt' + (estadoWa.autenticado ? '' : ' off')
+  // SEM NUMERO ABERTO (o painel da direcao): o pontinho fica cinza e os botoes do numero somem.
+  $('pt').className = 'pt' + (estadoWa.semNumero ? ' nada' : estadoWa.autenticado ? '' : ' off')
   $('meu').textContent = estadoWa.eu ? formata(estadoWa.eu) : ''
+  document.body.classList.toggle('sem-numero', !!estadoWa.semNumero)
+  if (!!estadoWa.direcao !== souDir) {
+    souDir = !!estadoWa.direcao
+    mostraAbaAuto()
+    if (!souDir && !cobModo && aba === 'auto') vaiPara('itens')
+  }
   marcaLida()
 
   // NÚMERO TROCADO: o QR deste slot foi lido por outro aparelho. Grita, porque dali pra frente a
@@ -3471,7 +3522,7 @@ async function pulso() {
   // OCUPADO E DO NUMERO DA TELA, nao do app: com um consumidor por numero, o painel pode estar
   // livre aqui e disparando em dois outros numeros ao mesmo tempo.
   // (O editor aberto tambem segura o rodape: e ali que ele diz "salvando..." e o erro de salvar.)
-  if (!ocupadoAqui() && !(editor && editor.salvando)) rodape(estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
+  if (!ocupadoAqui() && !(editor && editor.salvando)) rodape(estadoWa.semNumero ? 'nenhum número aberto' : estadoWa.autenticado ? 'pronto' : (estadoWa.motor ? 'leia o QR no celular' : 'carregando o WhatsApp'))
   // FUNIL NOUTRO NUMERO. Sem esta linha, trocar de numero no meio do funil deixava todos os botoes
   // cinzas sem nenhuma explicacao: o vendedor le como painel travado.
   const noutros = rodandoAgora().filter((j) => j.nk && estadoWa.nk && j.nk !== estadoWa.nk)
@@ -3504,9 +3555,9 @@ async function pulso() {
     const f = String(estadoWa.phone || '').replace(/\D/g, '')
     if (f !== cob.fone) puxaCob(f, false)
     else if (f && aba === 'pedidos' && Date.now() - cob.em > 30000 && !digitandoNaFicha()) puxaCob(f, true)
-    // a aba Automacoes aberta se atualiza de 30 em 30 s (o "hoje" e os ultimos envios andam sozinhos)
-    if (aba === 'auto' && Date.now() - auto.em > 30000 && !auto.carregando && !auto.salvando && !auto.edita) puxaAuto(true)
   }
+  // a aba Automacoes aberta se atualiza de 30 em 30 s (o "hoje" e os ultimos envios andam sozinhos)
+  if ((cobModo || souDir) && aba === 'auto' && Date.now() - auto.em > 30000 && !auto.carregando && !auto.salvando && !auto.edita) puxaAuto(true)
   // Roteiro vazio: tenta de novo de vez em quando (o login pode ter acontecido depois do boot).
   if (roteiroVazio() && Date.now() - ultimaTentativa > 15000) { ultimaTentativa = Date.now(); pegaRoteiro() }
   // E DE MINUTO EM MINUTO MESMO CHEIO (05/11/2026): o item que um colega criou "pra todos", ou o que

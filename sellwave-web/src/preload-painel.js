@@ -67,11 +67,12 @@ contextBridge.exposeInMainWorld('swp', {
   cobCurto: (url, id) => ipcRenderer.invoke('swp:cob-curto', { url, id }),
   // A ABA AUTOMACOES do cobrador (11/11/2026): a lista com o que esta ligado e o que saiu hoje, e o
   // interruptor de cada uma (so a dele).
-  autoConfig: () => ipcRenderer.invoke('swp:auto-config'),
-  autoLiga: (id, ligado) => ipcRenderer.invoke('swp:auto-liga', { id, ligado: !!ligado }),
+  // `quem` (13/11/2026): a direcao escolhe na aba de quem ela esta vendo ('casa' ou o id do cobrador).
+  autoConfig: (quem) => ipcRenderer.invoke('swp:auto-config', { quem: quem || '' }),
+  autoLiga: (id, ligado, quem) => ipcRenderer.invoke('swp:auto-liga', { id, ligado: !!ligado, quem: quem || '' }),
   // O TEXTO DE CADA MENSAGEM (13/11/2026): o cobrador salva a versao dele; a direcao, vendo a aba de
   // um cobrador, salva so pra ele ou `todos`; `padrao` devolve ao texto da casa.
-  autoTexto: (campo, texto, opc) => ipcRenderer.invoke('swp:auto-texto', { campo, texto, todos: !!(opc && opc.todos), padrao: !!(opc && opc.padrao) }),
+  autoTexto: (campo, texto, opc) => ipcRenderer.invoke('swp:auto-texto', { campo, texto, todos: !!(opc && opc.todos), padrao: !!(opc && opc.padrao), quem: (opc && opc.quem) || '' }),
   abrirLink: (url) => ipcRenderer.invoke('swp:abrir-link', { url }),
   copiar: (texto) => ipcRenderer.invoke('swp:copiar', { texto }),
   // Mudou o modo (entrou o cobrador, ou a direcao entrou no preview dele): o painel rele o roteiro.

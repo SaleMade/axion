@@ -172,6 +172,22 @@ async function rodar(ctx) {
   conta('a logo da SellWave carregou na barra', ctx.temBarra === true, ctx.textoBarra || '')
   conta('a janelinha de Ajustes abre', ctx.modal === 'abriu', ctx.modal || '')
 
+  // 6b) O PAINEL SEM NUMERO ABERTO (13/11/2026). Pedido do Bruno: a direcao ve o painel (e a aba
+  //     Automacoes) sem ter que abrir numero. So a direcao, e so nas telas que convivem com ele: a
+  //     janelinha de Ajustes cobre a janela inteira e o painel, que e uma view por cima, sai da frente.
+  if (ctx.painelSemNumero) {
+    const r = await ctx.painelSemNumero()
+    const j = r.erro || ''
+    const d = (x) => JSON.stringify(x || null)
+    conta('vendedor sem numero aberto continua sem painel', !!r.vendedor && r.vendedor.tem === false && r.vendedor.reserva === 22 && r.vendedor.classe === false && r.vendedor.visivel !== true, j || d(r.vendedor))
+    conta('direcao sem numero aberto: o painel aparece na direita e a tela do meio recua', !!r.direcao && r.direcao.tem === true && r.direcao.reserva === 316 && r.direcao.visivel !== false
+      && r.direcao.painelX === r.direcao.largura - 316 && r.direcao.classe === true && r.direcao.recuo === '348px', j || d(r.direcao))
+    conta('com a janelinha de Ajustes aberta o painel sai da frente', !!r.modal && r.modal.tem === false && r.modal.visivel !== true && r.modal.classe === false, j || d(r.modal))
+    conta('fechou a janelinha, o painel volta', !!r.fechou && r.fechou.tem === true && r.fechou.visivel !== false && r.fechou.classe === true, j || d(r.fechou))
+    conta('o painel sem numero diz que nao ha numero aberto e mostra a aba Automacoes pra direcao', !!r.painel && /Nenhum número aberto/.test(r.painel.lead) && r.painel.rod === 'nenhum número aberto' && r.painel.auto === true && r.painel.fechar === 'none', j || d(r.painel))
+    conta('sem conta nao ha painel', !!r.semConta && r.semConta.tem === false && r.semConta.classe === false, j || d(r.semConta))
+  }
+
   // 7) O TESTE QUE IMPORTA: o WhatsApp Web abre de verdade e mostra o QR?
   //    Fica atras de SW_SMOKE_WA=1 porque precisa de internet e sai SEM proxy (so pra provar que o
   //    User-Agent passa no portao). Nao use isso como teste de rotina em maquina de vendedor.

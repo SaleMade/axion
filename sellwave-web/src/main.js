@@ -620,7 +620,21 @@ const janelaDe = (nk) => { const d = destacados.get(nk); return d ? d.win : jane
 // O painel pode ser escondido: em tela pequena ele e a barra comiam 584 px e sobrava pouco pro
 // WhatsApp, que corta a tela de entrar da Meta.
 let painelLigado = true
-function temPainel() { return painelLigado && !!ativoAgora && abertos.has(ativoAgora) }
+// O PAINEL SEM NUMERO ABERTO, SO PRA DIRECAO (13/11/2026). Pedido do Bruno: "para mim, como diretor,
+// esta quase impossivel (...) tenho que ver como um dos meus cobradores, trocar para a visualizacao,
+// clicar em um dos numeros. Ai sim eu vou ter ali a area de automacoes (...) eu gostaria que essa area
+// lateral ficasse disponivel mesmo sem nenhum numero selecionado". Duas pecas:
+//  `direcaoReal` = quem ENTROU no app e da direcao. O `config.direcao` nao serve: no "ver como" a dash
+//    responde como a pessoa e ele vem falso.
+//  `painelSolto` = a casca esta numa tela que convive com o painel (escolha um numero, o cartao de
+//    abrir, o erro). Modal, trava e a tela de entrar cobrem a janela inteira e o painel, que e uma view
+//    POR CIMA da casca, taparia um pedaco deles: nesses a casca chama o esconder sem pedir o painel.
+// Vendedor e cobrador continuam como sempre: sem numero aberto, sem painel.
+let direcaoReal = false
+let painelSolto = false
+const numeroNaTela = () => !!ativoAgora && abertos.has(ativoAgora)
+const painelSemNumero = () => painelSolto && direcaoReal && !!config.token && !numeroNaTela()
+function temPainel() { return painelLigado && (numeroNaTela() || painelSemNumero()) }
 
 // A largura da barra AGORA, que depende de ela estar encolhida ou nao. A janela DESTACADA nao tem
 // barra: la o WhatsApp comeca na borda.
@@ -709,7 +723,9 @@ function reposicionaPrincipal() {
 let areaAvisada = ''
 function avisaArea() {
   const a = areaConteudo(null, true)
-  const g = { x: a.x, width: a.width, faixa: ALTURA_FAIXA_CRM, aberto: crmAberto }
+  // `solto` = o painel esta na tela SEM numero aberto: a casca recua a tela do meio pra ela nao ficar
+  // centrada embaixo dele.
+  const g = { x: a.x, width: a.width, faixa: ALTURA_FAIXA_CRM, aberto: crmAberto, solto: painelLigado && painelSemNumero() }
   const j = JSON.stringify(g)
   if (j === areaAvisada) return
   areaAvisada = j
@@ -3075,15 +3091,30 @@ ipcMain.handle('swp:cob-curto', (_e, { url, id }) => curtoCob(url, id))
 // A ABA AUTOMACOES do painel do cobrador (11/11/2026): o que cada mensagem automatica faz, se esta
 // ligada pra ESTA pessoa e o que saiu hoje. Ligar e desligar grava so a dela (a direcao, no "ver
 // como", grava a do cobrador que esta vendo: `de`). Quem decide o que sai continua sendo o servidor.
-ipcMain.handle('swp:auto-config', () => lerCob('/api/swweb/auto/config?v=1' + comoE()))
-ipcMain.handle('swp:auto-liga', async (_e, { id, ligado }) => {
+//
+// DE QUEM E A ABA (13/11/2026, rodada 2). O cobrador ve a dele. A direcao escolhe NA PROPRIA ABA, sem
+// passar pelo "ver como" dos Ajustes: `quem` = 'casa' (a operacao inteira: o liga/desliga e o texto da
+// casa, os envios de todos) ou o id de um cobrador. Sem escolha vale o "ver como" de um cobrador, se
+// ela estiver nele, e fora dele a casa. Pro servidor, direcao sem `como` e sem `de` E a casa.
+// So a direcao escolhe: o `quem` de qualquer outra pessoa e ignorado aqui (e o servidor recusaria).
+function autoAlvo(quem) {
+  const q = String(quem || '')
+  if (direcaoReal && q === 'casa') return ''
+  if (direcaoReal && /^[A-Za-z0-9_-]{3,60}$/.test(q)) return q
+  return modoCobranca() ? comoId : ''
+}
+ipcMain.handle('swp:auto-config', (_e, o) => {
+  const alvo = autoAlvo(o && o.quem)
+  return lerCob('/api/swweb/auto/config?v=1' + (alvo ? '&como=' + encodeURIComponent(alvo) : ''))
+})
+ipcMain.handle('swp:auto-liga', async (_e, { id, ligado, quem }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
   const aid = String(id || '')
   if (!/^[a-z]{2,6}$/.test(aid)) return { ok: false, erro: 'Automação inválida.' }
   try {
     const r = await fetch(baseCob() + '/api/swweb/auto/config', {
       method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
-      body: JSON.stringify({ id: aid, ligado: !!ligado, ...(comoId ? { de: comoId } : {}) }), signal: AbortSignal.timeout(25000),
+      body: JSON.stringify({ id: aid, ligado: !!ligado, ...(autoAlvo(quem) ? { de: autoAlvo(quem) } : {}) }), signal: AbortSignal.timeout(25000),
     })
     let d = {}
     try { d = await r.json() } catch (_) { d = {} }
@@ -3099,7 +3130,7 @@ ipcMain.handle('swp:auto-liga', async (_e, { id, ligado }) => {
 // vale no que sai pelos numeros dele); a direcao, no "ver como", grava a do cobrador que esta vendo
 // (`de`) ou a da casa (`todos`). `padrao` apaga a versao da pessoa. Quem confere o texto (palavra
 // entre chaves que a mensagem nao sabe preencher) e o servidor, e a frase dele volta pra tela.
-ipcMain.handle('swp:auto-texto', async (_e, { campo, texto, todos, padrao }) => {
+ipcMain.handle('swp:auto-texto', async (_e, { campo, texto, todos, padrao, quem }) => {
   if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
   const c = String(campo || '')
   if (!/^[a-z0-9]{2,12}$/.test(c)) return { ok: false, erro: 'Mensagem inválida.' }
@@ -3108,7 +3139,7 @@ ipcMain.handle('swp:auto-texto', async (_e, { campo, texto, todos, padrao }) => 
   try {
     const r = await fetch(baseCob() + '/api/swweb/auto/config', {
       method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
-      body: JSON.stringify({ campo: c, ...(padrao ? { padrao: true } : { texto: t }), ...(todos && !padrao ? { todos: true } : {}), ...(comoId ? { de: comoId } : {}) }),
+      body: JSON.stringify({ campo: c, ...(padrao ? { padrao: true } : { texto: t }), ...(todos && !padrao ? { todos: true } : {}), ...(autoAlvo(quem) ? { de: autoAlvo(quem) } : {}) }),
       signal: AbortSignal.timeout(25000),
     })
     let d = {}
@@ -3421,6 +3452,12 @@ async function buscaNumeros() {
     const lista = Array.isArray(d && d.numeros) ? d.numeros : []
     config.numeros = lista
     config.direcao = !!(d && d.direcao)
+    // QUEM ENTROU E DA DIRECAO? So a leitura REAL diz (no "ver como" a resposta e a da pessoa vista).
+    // Mudou (entrou a direcao, ou saiu): o painel sem numero aparece ou some.
+    if (!comoId && direcaoReal !== !!(d && d.direcao)) {
+      direcaoReal = !!(d && d.direcao)
+      setImmediate(() => { try { reposiciona() } catch (_) { /* a janela pode nem existir ainda */ } })
+    }
     // O MODO SAI DO CARGO (31/10/2026). Mudou (entrou o cobrador, ou a direcao entrou/saiu do preview
     // de um): o roteiro do painel e outro, entao ele e relido na hora e as duas telas sao avisadas.
     const cargoAntes = cargoAtual
@@ -3496,7 +3533,7 @@ ipcMain.handle('sw:estado', () => ({
   equipe: config.equipe || [],
   fotos: Object.fromEntries(fotosCache),
   // onde a casca desenha o CRM (o mesmo que o aviso sw:area manda quando muda) e o que a colheita conferiu
-  crm: (() => { const a = areaConteudo(null, true); return { x: a.x, width: a.width, faixa: ALTURA_FAIXA_CRM, aberto: crmAberto } })(),
+  crm: (() => { const a = areaConteudo(null, true); return { x: a.x, width: a.width, faixa: ALTURA_FAIXA_CRM, aberto: crmAberto, solto: painelLigado && painelSemNumero() } })(),
   marcacao: estadoMarcacao(),
   // SO O ENDERECO, NUNCA A CREDENCIAL. `config.proxies` guarda usuario e senha decifrados (o
   // lerConfig abre o DPAPI), e a casca so usa host, porta e "tem proxy?" - conferido: app.js le
@@ -3508,6 +3545,7 @@ ipcMain.handle('sw:estado', () => ({
   }])),
   maxAbertos: Number(config.maxAbertos) || 6,
   direcao: !!config.direcao,
+  direcaoReal: direcaoReal,
   // Em preview, `direcao` ja vem false do servidor (ele responde como a pessoa), entao a tela
   // esconde proxy e trava sozinha. `comoId` existe so pra marcar a tela: preview sem aviso e o
   // jeito mais rapido de alguem achar que perdeu permissao.
@@ -3589,6 +3627,8 @@ ipcMain.handle('sw:sair', async () => {
   config.nome = ''
   cargoAtual = ''
   cobradoresConhecidos = []
+  direcaoReal = false
+  painelSolto = false
   gravarConfig()
   return { ok: true }
 })
@@ -3717,7 +3757,10 @@ ipcMain.handle('sw:devolver', (_e, { nk }) => {
   if (d && d.win && !d.win.isDestroyed()) { d.win.close(); return { ok: true } }   // o close chama devolve
   return devolve(String(nk || ''))
 })
-ipcMain.handle('sw:esconder', () => { escondeTodos(); return { ok: true } })
+// `painel: true` = a tela que a casca vai desenhar convive com o painel (ver painelSolto, la em cima).
+ipcMain.handle('sw:esconder', (_e, o) => { painelSolto = !!(o && o.painel); escondeTodos(); return { ok: true } })
+// O MODAL FECHOU: o painel pode voltar. Nao mexe em view nenhuma (o `sw:mostrar` cuida do numero).
+ipcMain.handle('sw:solta-painel', () => { painelSolto = true; reposiciona(); return { ok: true } })
 // QUEM FECHOU: A PESSOA OU O WHATSAPP? (18/10/2026, a distincao e do Bruno)
 //
 // "quando voce detectar que alguem fechou o WhatsApp ou clicou em fechar na janela, voce sabe que
@@ -3947,10 +3990,14 @@ ipcMain.handle('swp:estado-wa', async (ev) => {
   const wc = sa && sa.view && !sa.view.webContents.isDestroyed() ? sa.view.webContents : null
   // `cobranca` vai em toda resposta: e por ela que o painel troca o cadastro de pedido pela ficha de
   // cobranca e rele o roteiro (31/10/2026, versao de cobrador).
-  if (!wc) return { ...ESTADO_VAZIO, cobranca: modoCobranca() }
+  // `direcao` tambem (13/11/2026): com ela a aba Automacoes aparece fora da versao de cobrador.
+  // `semNumero` = este painel esta na tela sem numero aberto (so acontece com a direcao): ele diz isso
+  // em vez de "carregando o WhatsApp".
+  const vazio = () => ({ ...ESTADO_VAZIO, cobranca: modoCobranca(), direcao: direcaoReal, semNumero: !sa })
+  if (!wc) return vazio()
   let e
   try { e = await wc.executeJavaScript('window.__swEstado ? window.__swEstado() : null') } catch (_) { e = null }
-  if (!e) return { ...ESTADO_VAZIO, cobranca: modoCobranca() }
+  if (!e) return vazio()
   // O NUMERO PAREADO E O MESMO DO SLOT? (16/10/2026, revisao adversarial.)
   // Se o vendedor ler o QR do slot (15) 97407-6200 com OUTRO aparelho, a barra continua dizendo
   // (15), o proxy usado continua sendo o do (15) e a captura sai carimbada com o numero de verdade.
@@ -3963,6 +4010,7 @@ ipcMain.handle('swp:estado-wa', async (ev) => {
   if (e.trocado) console.error('[slot] ' + esperado + ' esta pareado com ' + real)
   e.nk = nkAtual
   e.cobranca = modoCobranca()
+  e.direcao = direcaoReal
   return e
 })
 
@@ -5402,6 +5450,45 @@ app.whenReady().then(() => {
       return out
     }
     const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '', modal: '', aplicaProxy, testaSaida, particaoDe, injeta }
+    // O PAINEL SEM NUMERO ABERTO (13/11/2026): a geometria de verdade, com a casca de verdade. Finge
+    // so quem entrou (vendedor, depois direcao) e pede pra casca desenhar as telas dela; quem decide se
+    // o painel aparece e o codigo do app. Devolve tudo como estava.
+    ctx.painelSemNumero = async () => {
+      const js = (c) => casca.webContents.executeJavaScript(c, true)
+      const ve = async () => {
+        await new Promise((r) => setTimeout(r, 300))
+        const b = janela.getContentBounds(), a = areaConteudo(null, true)
+        let visivel = null
+        try { visivel = painel.getVisible() } catch (_) { visivel = null }
+        return { tem: temPainel(), reserva: b.width - (a.x + a.width), visivel, painelX: painel.getBounds().x, largura: b.width,
+          classe: await js('document.body.classList.contains("painel-solto")'), recuo: await js('getComputedStyle(document.getElementById("palco")).paddingRight') }
+      }
+      const guarda = { token: config.token, dir: direcaoReal, solto: painelSolto }
+      const out = {}
+      try {
+        config.token = 'autoteste'
+        direcaoReal = false
+        await js('telaVazia()'); out.vendedor = await ve()
+        direcaoReal = true; reposiciona(); out.direcao = await ve()
+        // o painel de verdade, lendo o estado de verdade: depois de um pulso (1,5 s) ele sabe que nao ha
+        // numero aberto e que quem esta no app e a direcao
+        await new Promise((r) => setTimeout(r, 2300))
+        out.painel = await painel.webContents.executeJavaScript('({ lead: document.getElementById("lead").textContent, rod: document.getElementById("rod").textContent, auto: !document.getElementById("aba-auto").hidden, fechar: getComputedStyle(document.getElementById("fechar")).display })', true)
+        if (process.env.SW_SMOKE_FOTOS) {
+          for (const [nome, v] of [['casca-direcao', casca], ['painel-direcao', painel]]) {
+            try { fs.writeFileSync(path.join(process.env.SW_SMOKE_FOTOS, nome + '.png'), (await v.webContents.capturePage()).toPNG()) } catch (_) { /* foto e conforto */ }
+          }
+        }
+        await js('document.getElementById("ajustes").click()'); out.modal = await ve()
+        await js('document.onkeydown({ key: "Escape" })'); out.fechou = await ve()
+        config.token = ''; reposiciona(); out.semConta = await ve()
+      } catch (e) { out.erro = String((e && e.message) || e).slice(0, 160) } finally {
+        config.token = guarda.token; direcaoReal = guarda.dir; painelSolto = guarda.solto
+        try { await js('telaLogin()') } catch (_) { /* a casca volta pra tela de entrar na proxima leitura */ }
+        reposiciona()
+      }
+      return out
+    }
     casca.webContents.once('did-finish-load', async () => {
       ctx.cascaOk = true
       try {

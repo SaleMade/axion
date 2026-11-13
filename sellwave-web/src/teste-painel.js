@@ -1189,7 +1189,7 @@ app.whenReady().then(async () => {
   conta('automacoes: abre a aba, sem a busca dos itens, e pede a lista', au1.aba === 'auto' && au1.cabeca === 'none' && au1.pediu >= 1, JSON.stringify(au1))
   conta('automacoes: um cartao por automacao, com o interruptor de cada uma', au1.itens.join('|') === 'Boas-vindas:true:on|Retirar nos Correios:true:on|Pagou:true:off', au1.itens.join('|'))
   conta('automacoes: mostra o que saiu hoje e o que a direcao desligou', au1.hoje.join('|') === '2 hoje' && au1.dir.join('|') === 'Desligada pela direção', JSON.stringify([au1.hoje, au1.dir]))
-  conta('automacoes: lista os ultimos envios com o cliente, a automacao e a situacao', au1.ult.length === 1 && /Maria das Dores · Boas-vindas/.test(au1.ult[0]) && /Enviada/.test(au1.ult[0]), JSON.stringify(au1.ult))
+  conta('automacoes: lista os ultimos envios com o cliente, a automacao e a situacao', au1.ult.length === 1 && /Maria das DoresBoas-vindas/.test(au1.ult[0]) && /Enviada/.test(au1.ult[0]), JSON.stringify(au1.ult))
   await clica('#corpo [data-ver=ret]')
   await espera(150)
   const au2 = await js('[...document.querySelectorAll("#corpo .au-bolha")].map(e => e.textContent)')
@@ -1230,8 +1230,8 @@ app.whenReady().then(async () => {
   }
   conta('automacoes: com nome comprido nos ultimos envios, nada passa da largura do painel (fechada e com cada mensagem aberta)',
     lg0 === 3 && lg.every((x) => x.sobra <= 0 && x.pior <= 0), JSON.stringify(lg))
-  const lgNome = await js('(() => { const q = document.querySelectorAll("#corpo .au-ult .q")[1]; return { corta: q.scrollWidth > q.clientWidth, estilo: getComputedStyle(q).textOverflow } })()')
-  conta('automacoes: o nome comprido e cortado com reticencias dentro da linha', lgNome.corta && lgNome.estilo === 'ellipsis', JSON.stringify(lgNome))
+  const lgNome = await js('(() => { const q = document.querySelectorAll("#corpo .au-ult .q b")[1]; return { corta: q.scrollWidth > q.clientWidth, estilo: getComputedStyle(q).textOverflow, embaixo: document.querySelectorAll("#corpo .au-ult .q i")[1].textContent } })()')
+  conta('automacoes: o nome comprido e cortado com reticencias, e a mensagem que saiu fica inteira na linha de baixo', lgNome.corta && lgNome.estilo === 'ellipsis' && lgNome.embaixo === 'Retirar nos Correios', JSON.stringify(lgNome))
 
   // ══ EDITAR A MENSAGEM (13/11/2026) ══ "eu quero que tanto eu quanto os meus cobradores tenham
   // autonomia para poder editar essas mensagens". O cobrador salva a versao dele.
@@ -1363,6 +1363,108 @@ app.whenReady().then(async () => {
   conta('automacoes: saindo do modo cobranca a aba some e o painel volta pros itens', au5.escondida && au5.aba === 'itens' && au5.cartoes === 0, JSON.stringify(au5))
   const pc4 = await js('(document.querySelector(".aba[data-aba=pedidos] .aba-rot") || {}).textContent')
   conta('fora do modo cobranca a aba volta a ser Pedidos', pc4 === 'Pedidos', pc4)
+
+  // ══ A DIRECAO CHEGA NA ABA SEM "VER COMO" E SEM NUMERO (13/11/2026, rodada 2) ══ o Bruno: "para
+  // mim, como diretor, esta quase impossivel (...) tenho que ver como um dos meus cobradores, clicar em
+  // um dos numeros. Ai sim eu vou ter ali a area de automacoes". Fora da versao de cobrador, a aba da
+  // direcao e a da CASA, com o seletor Todos / cobrador na propria aba.
+  ponto = 'automacoes direcao casa'
+  await js('window.__poeDirecao(true)')
+  await espera(1900)
+  const dc0 = await js('({ visivel: !document.getElementById("aba-auto").hidden && getComputedStyle(document.getElementById("aba-auto")).display !== "none", pedidos: document.querySelector(".aba[data-aba=pedidos] .aba-rot").textContent })')
+  conta('direcao: a aba Automacoes aparece fora da versao de cobrador (e a aba do lado continua Pedidos)', dc0.visivel && dc0.pedidos === 'Pedidos', JSON.stringify(dc0))
+  await clica('#aba-auto')
+  await espera(450)
+  const casaVe = () => js('(() => ({ quem: [...document.querySelectorAll("#corpo [data-quem]")].map(b => b.textContent + ":" + b.getAttribute("aria-pressed")),'
+    + ' itens: [...document.querySelectorAll("#corpo .au-it")].map(e => e.querySelector(".au-nome").textContent + ":" + e.querySelector(".au-sw").getAttribute("aria-checked") + ":" + (e.classList.contains("off") ? "off" : "on")),'
+    + ' hoje: [...document.querySelectorAll("#corpo .au-hoje")].map(e => e.textContent), avisos: [...document.querySelectorAll("#corpo .au-dir")].map(e => e.textContent),'
+    + ' nota: (document.querySelector("#corpo .au-nota") || {}).textContent, ult: [...document.querySelectorAll("#corpo .au-ult .q")].map(e => e.querySelector("b").textContent + " > " + e.querySelector("i").textContent),'
+    + ' pediu: (window.__ver()).filter(c => c.nome === "autoConfig").map(c => c.quem).slice(-1)[0], sobra: document.getElementById("corpo").scrollWidth - document.getElementById("corpo").clientWidth }))()')
+  const dc1 = await casaVe()
+  conta('direcao: a aba abre na CASA, com o seletor (Todos marcado) e um botao por cobrador', dc1.quem.join('|') === 'Todos:true|Haynan:false|Bryan:false' && dc1.pediu === '', JSON.stringify(dc1))
+  conta('direcao: o interruptor e o da operacao (Pagou desligada pra todos) e ninguem aparece como "desligada pela direcao"',
+    dc1.itens.join('|') === 'Boas-vindas:true:on|Retirar nos Correios:true:on|Pagou:false:off' && !dc1.avisos.some((a) => /pela direção/.test(a)), JSON.stringify([dc1.itens, dc1.avisos]))
+  conta('direcao: diz quem desligou a dele, soma o que saiu por todos e a frase fala do cobrador', dc1.avisos.join('|') === 'Bryan desligou no app' && dc1.hoje.join('|') === '5 hoje|1 hoje' && /quando o cobrador está livre/.test(dc1.nota), JSON.stringify([dc1.avisos, dc1.hoje, dc1.nota]))
+  conta('direcao: os ultimos envios sao de todos, com quem mandou, e nada passa da largura', dc1.ult.join('|') === 'Maria das Dores > Boas-vindas · Haynan|Jose Carlos > Pagou · Bryan' && dc1.sobra <= 0, JSON.stringify([dc1.ult, dc1.sobra]))
+  // o interruptor da casa
+  await clica('#corpo [data-au=pag]')
+  await espera(400)
+  const dc2 = await js('(() => ({ sw: document.querySelector("#corpo [data-au=pag]").getAttribute("aria-checked"), ch: (window.__ver()).filter(c => c.nome === "autoLiga").map(c => c.args.join(":") + "@" + c.quem).pop(), rod: document.getElementById("rod").textContent }))()')
+  conta('direcao: ligar na casa liga PRA TODOS (sem nome de cobrador no pedido) e o rodape diz', dc2.sw === 'true' && dc2.ch === 'pag:true@' && /Pagou: ligada pra todos/.test(dc2.rod), JSON.stringify(dc2))
+  // o texto da casa: quem usa outro texto aparece, e o botao e "Salvar pra todos"
+  await clica('#corpo [data-ver=pag]')
+  await espera(150)
+  const dc3 = await js('({ selo: [...document.querySelectorAll("#corpo .au-meu")].map(e => e.textContent), bolha: (document.querySelector("#corpo .au-bolha") || {}).textContent })')
+  conta('direcao: na casa o texto e o de todos, e a tela diz quem usa outro', dc3.selo.join('|') === 'Bryan usa outro texto' && dc3.bolha === 'Pagamento recebido, Maria. Obrigado!', JSON.stringify(dc3))
+  await clica('#corpo [data-ed=pagou]')
+  await espera(150)
+  const dc4 = await js('[...document.querySelectorAll("#corpo .au-acoes button, #corpo .au-pe button")].map(b => b.textContent.trim())')
+  conta('direcao: editando na casa, o botao e "Salvar pra todos" e Cancelar', dc4.join('|') === 'Salvar pra todos|Cancelar', JSON.stringify(dc4))
+  await escreve('Recebemos, {primeiro}!')
+  await clica('#corpo [data-salva=todos]')
+  await espera(450)
+  const dc5 = await js('(() => ({ selo: document.querySelectorAll("#corpo .au-meu").length, bolha: (document.querySelector("#corpo .au-bolha") || {}).textContent, rod: document.getElementById("rod").textContent, ch: (window.__ver()).filter(c => c.nome === "autoTexto").map(c => [c.args[0], c.args[1], c.args[2].todos, c.quem].join("|")).pop() }))()')
+  conta('direcao: salvou pra todos, o texto da casa muda e o texto proprio do cobrador sai', dc5.ch === 'pagou|Recebemos, {primeiro}!|true|' && dc5.selo === 0 && dc5.bolha === 'Recebemos, Maria!' && /Texto salvo pra todos/.test(dc5.rod), JSON.stringify(dc5))
+  // escolhe um cobrador na propria aba, sem "ver como"
+  await clica('#corpo [data-quem=bc]')
+  await espera(40)
+  const dc6a = await js('({ quem: [...document.querySelectorAll("#corpo [data-quem]")].map(b => b.textContent + ":" + b.getAttribute("aria-pressed")), carregando: /Carregando/.test(document.getElementById("corpo").textContent) })')
+  await espera(450)
+  const dc6 = await casaVe()
+  conta('direcao: clicou no cobrador, o seletor marca ele na hora (com "Carregando") e pede a aba DELE', dc6a.quem.join('|') === 'Todos:false|Haynan:false|Bryan:true' && dc6a.carregando && dc6.pediu === 'bc', JSON.stringify([dc6a, dc6.pediu]))
+  conta('direcao: a aba do cobrador mostra o interruptor dele (Retirar desligada por ele) e so os envios dele', dc6.itens.join('|') === 'Boas-vindas:true:on|Retirar nos Correios:false:off|Pagou:true:on' && dc6.ult.join('|') === 'Jose Carlos > Pagou' && dc6.avisos.length === 0, JSON.stringify(dc6))
+  await clica('#corpo [data-au=ret]')
+  await espera(400)
+  const dc7 = await js('(window.__ver()).filter(c => c.nome === "autoLiga").map(c => c.args.join(":") + "@" + c.quem).pop()')
+  conta('direcao: o interruptor na aba do cobrador mexe so no dele', dc7 === 'ret:true@bc', dc7)
+  await clica('#corpo [data-ver=ret]')
+  await espera(150)
+  await clica('#corpo [data-ed=ret1]')
+  await espera(150)
+  const dc8 = await js('[...document.querySelectorAll("#corpo .au-acoes button, #corpo .au-pe button")].map(b => b.textContent.trim())')
+  conta('direcao: editando na aba do cobrador, escolhe "Salvar pra todos" ou "Só para Bryan"', dc8.join('|') === 'Salvar pra todos|Só para Bryan|Cancelar', JSON.stringify(dc8))
+  await escreve('Oi {primeiro}, passa na agência hoje?')
+  // texto mexido: trocar de pessoa nao joga fora o que ela escreveu
+  await clica('#corpo [data-quem=hc]')
+  await espera(200)
+  const dc9 = await js('({ caixa: (document.querySelector("#corpo [data-area]") || {}).value, rod: document.getElementById("rod").textContent, quem: [...document.querySelectorAll("#corpo [data-quem]")].find(b => b.getAttribute("aria-pressed") === "true").textContent })')
+  conta('direcao: com texto mexido, trocar de pessoa no seletor nao fecha a caixa', dc9.caixa === 'Oi {primeiro}, passa na agência hoje?' && /Salve ou cancele/.test(dc9.rod) && dc9.quem === 'Bryan', JSON.stringify(dc9))
+  await clica('#corpo [data-salva=um]')
+  await espera(450)
+  const dc10 = await js('(() => ({ selo: [...document.querySelectorAll("#corpo .au-meu")].map(e => e.textContent), ch: (window.__ver()).filter(c => c.nome === "autoTexto").map(c => [c.args[0], c.args[2].todos, c.quem].join("|")).pop() }))()')
+  conta('direcao: "Só para Bryan" grava a versao dele, com o nome dele no pedido', dc10.ch === 'ret1|false|bc' && dc10.selo.join('|') === 'Texto de Bryan', JSON.stringify(dc10))
+  await clica('#corpo [data-quem=casa]')
+  await espera(500)
+  const dc11 = await casaVe()
+  conta('direcao: voltando pra Todos, a casa aparece de novo', dc11.quem.join('|') === 'Todos:true|Haynan:false|Bryan:false' && dc11.pediu === 'casa' && dc11.itens.join('|') === 'Boas-vindas:true:on|Retirar nos Correios:true:on|Pagou:true:on', JSON.stringify(dc11))
+
+  // ══ O PAINEL SEM NUMERO ABERTO ══ so a direcao ve: ele diz que nao tem numero, em vez de "carregando"
+  ponto = 'painel sem numero'
+  // (o "Texto salvo" de agora ha pouco fica 10 s seguro no rodape; solta pra ver o recado do estado)
+  await js('avisoAte = 0; window.__poeSemNumero(true)')
+  await espera(1900)
+  const sn = await js('(() => ({ lead: document.getElementById("lead").textContent, rod: document.getElementById("rod").textContent, pt: document.getElementById("pt").className,'
+    + ' fechar: getComputedStyle(document.getElementById("fechar")).display, recarregar: getComputedStyle(document.getElementById("recarregar")).display, esconder: getComputedStyle(document.getElementById("esconder")).display,'
+    + ' aba: document.querySelector(".aba.on").dataset.aba, cartoes: document.querySelectorAll("#corpo .au-it").length, auto: !document.getElementById("aba-auto").hidden }))()')
+  conta('sem numero: o painel diz "Nenhum número aberto" (no topo e no rodape) e o pontinho fica neutro', /Nenhum número aberto/.test(sn.lead) && sn.rod === 'nenhum número aberto' && /nada/.test(sn.pt), JSON.stringify(sn))
+  conta('sem numero: fechar e recarregar somem (nao ha numero), esconder o painel continua', sn.fechar === 'none' && sn.recarregar === 'none' && sn.esconder !== 'none', JSON.stringify(sn))
+  conta('sem numero: a aba Automacoes continua aberta e cheia', sn.aba === 'auto' && sn.cartoes === 3 && sn.auto, JSON.stringify(sn))
+  await js('window.__poeSemNumero(false)')
+  await espera(1900)
+  const sn2 = await js('({ fechar: getComputedStyle(document.getElementById("fechar")).display, rod: document.getElementById("rod").textContent, pt: document.getElementById("pt").className })')
+  conta('abriu um numero: os botoes do numero voltam', sn2.fechar !== 'none' && !/nada/.test(sn2.pt), JSON.stringify(sn2))
+  // a direcao entra no "ver como" de um cobrador com a aba aberta: fica nela, agora na aba dele
+  await js('window.__poeAuto({ dir: true }); window.__poeCobranca(true)')
+  await espera(1900)
+  const vc = await js('({ aba: document.querySelector(".aba.on").dataset.aba, cartoes: document.querySelectorAll("#corpo .au-it").length })')
+  conta('direcao: entrando no "ver como" de um cobrador com a aba aberta, continua na aba (nao e jogada pra ficha)', vc.aba === 'auto' && vc.cartoes === 3, JSON.stringify(vc))
+  await js('window.__poeAuto({ dir: false }); window.__poeCobranca(false)')
+  await espera(1900)
+  // deixou de ser direcao (saiu da conta, entrou um vendedor): a aba some e o painel volta pros itens
+  await js('window.__poeDirecao(false)')
+  await espera(1900)
+  const dcF = await js('({ escondida: document.getElementById("aba-auto").hidden, aba: document.querySelector(".aba.on").dataset.aba })')
+  conta('quem nao e direcao nem cobrador nao ve a aba (e o painel volta pros itens)', dcF.escondida && dcF.aba === 'itens', JSON.stringify(dcF))
   await js('(() => { const b = document.querySelector(".aba[data-aba=itens]"); if (b) b.click() })()')
   await espera(200)
 

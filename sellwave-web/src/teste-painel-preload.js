@@ -15,6 +15,34 @@ const AUTO_MEU = { rec: true, ret: true, pag: true }
 const AUTO_CASA = { saudacao: '{saudacao} {nome}', apresenta: 'Aqui quem fala é o Elias.', ret1: 'Oi {primeiro}, código {codigo}', pagou: 'Recebi, {primeiro}!' }
 const AUTO_TXT = {}
 let AUTO_DIR = false, AUTO_VELHO = false, AUTO_LONGO = false
+// A DIRECAO SEM "VER COMO" (13/11/2026, rodada 2): a aba e da CASA. AUTO_LIGA_CASA = o interruptor da
+// operacao; AUTO_COBS = os cobradores do seletor; AUTO_QUEM = de quem foi a ultima leitura.
+const AUTO_LIGA_CASA = { rec: true, ret: true, pag: false }
+const AUTO_COBS = [{ id: 'hc', nome: 'Haynan' }, { id: 'bc', nome: 'Bryan' }]
+const AUTO_TXT_DE = { hc: {}, bc: { pagou: 'Valeu demais, {primeiro}!' } }
+const AUTO_OFF_DE = { hc: {}, bc: { ret: true } }
+let AUTO_QUEM = ''
+const autoTxCasa = (campo, rot, vars) => ({ campo, rot, texto: AUTO_CASA[campo], proprio: false, vars, outros: AUTO_COBS.filter((c) => AUTO_TXT_DE[c.id][campo]).map((c) => c.nome) })
+const autoTxDe = (q) => (campo, rot, vars) => ({ campo, rot, texto: AUTO_TXT_DE[q][campo] || AUTO_CASA[campo], proprio: !!AUTO_TXT_DE[q][campo], vars })
+const autoTipos = (tx, liga) => [
+  { id: 'rec', nome: 'Boas-vindas', dica: 'O cliente chamou e ninguém respondeu em 1 minuto.', hoje: 5, ...liga('rec'), textos: [tx('saudacao', 'Saudação', ['saudacao', 'primeiro', 'nome']), tx('apresenta', 'Apresentação', ['primeiro', 'nome'])] },
+  { id: 'ret', nome: 'Retirar nos Correios', dica: 'Um lembrete por dia, por até 5 dias.', hoje: 0, ...liga('ret'), textos: [tx('ret1', 'Retirada: chegou na agência', ['saudacao', 'primeiro', 'codigo', 'link', 'valor'])] },
+  { id: 'pag', nome: 'Pagou', dica: 'O pagamento caiu: agradece.', hoje: 1, ...liga('pag'), textos: [tx('pagou', 'Pagou', ['saudacao', 'primeiro'])] },
+]
+const autoVarRot = { saudacao: 'Bom dia / Boa tarde', primeiro: 'Primeiro nome', nome: 'Nome completo', codigo: 'Código de rastreio', link: 'Link do rastreio', valor: 'Valor' }
+// o que o servidor responde pra direcao: a casa, ou a aba de um cobrador (com a lista pro seletor)
+const autoRespostaDir = (q) => {
+  const c = AUTO_COBS.find((x) => x.id === q)
+  if (!c) {
+    return { ok: true, numeros: 3, edita: true, dir: true, de: null, casa: true, cobradores: AUTO_COBS, varRot: autoVarRot,
+      tipos: autoTipos(autoTxCasa, (id) => ({ direcao: true, meu: !!AUTO_LIGA_CASA[id], desligou: AUTO_COBS.filter((x) => AUTO_OFF_DE[x.id][id]).map((x) => x.nome) })),
+      ultimos: [{ id: 'rec', nome: 'Maria das Dores', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 120, quem: 'Haynan' },
+        { id: 'pag', nome: 'Jose Carlos', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 300, quem: 'Bryan' }] }
+  }
+  return { ok: true, numeros: 1, edita: true, dir: true, de: c, casa: false, cobradores: AUTO_COBS, varRot: autoVarRot,
+    tipos: autoTipos(autoTxDe(c.id), (id) => ({ direcao: !!AUTO_LIGA_CASA[id], meu: !AUTO_OFF_DE[c.id][id] })),
+    ultimos: [{ id: 'pag', nome: 'Jose Carlos', status: 'enviado', motivo: '', ts: Math.floor(Date.now() / 1000) - 300 }] }
+}
 const autoTx = (campo, rot, vars) => (AUTO_VELHO ? { rot, texto: AUTO_CASA[campo] } : { campo, rot, texto: AUTO_TXT[campo] || AUTO_CASA[campo], proprio: !!AUTO_TXT[campo], vars })
 const autoResposta = () => ({ ok: true, numeros: 1,
   ...(AUTO_VELHO ? {} : { edita: true, dir: AUTO_DIR, de: AUTO_DIR ? { id: 'hc', nome: 'Haynan' } : null,
@@ -168,9 +196,20 @@ contextBridge.exposeInMainWorld('swp', {
   cobCurto: reg('cobCurto', { ok: true, url: 'https://sw.li/abc' }),
   // A ABA AUTOMACOES (11/11/2026): tres de exemplo, com estado (o que ele desliga volta desligado) e
   // uma recusa pra provar que o interruptor volta sozinho.
-  autoConfig: () => { chamadas.push({ nome: 'autoConfig', args: [] }); return Promise.resolve(autoResposta()) },
-  autoLiga: (id, ligado) => {
-    chamadas.push({ nome: 'autoLiga', args: [id, ligado] })
+  // `quem` = de quem a direcao escolheu ver ('casa' ou o id do cobrador); fica fora do `args` pras
+  // conferencias antigas continuarem lendo so o que mandavam antes.
+  autoConfig: (quem) => {
+    chamadas.push({ nome: 'autoConfig', args: [], quem: quem || '' })
+    if (ESTADO.direcao && !ESTADO.cobranca) { AUTO_QUEM = quem === 'casa' ? '' : (quem || ''); return new Promise((r) => setTimeout(() => r(autoRespostaDir(AUTO_QUEM)), 60)) }
+    return Promise.resolve(autoResposta())
+  },
+  autoLiga: (id, ligado, quem) => {
+    chamadas.push({ nome: 'autoLiga', args: [id, ligado], quem: quem || '' })
+    if (ESTADO.direcao && !ESTADO.cobranca) {
+      const q = quem === 'casa' ? '' : (quem || '')
+      if (AUTO_COBS.some((c) => c.id === q)) { if (ligado) delete AUTO_OFF_DE[q][id]; else AUTO_OFF_DE[q][id] = true } else AUTO_LIGA_CASA[id] = !!ligado
+      return Promise.resolve(autoRespostaDir(q))
+    }
     if (id === 'pag') return Promise.resolve({ ok: false, erro: 'A dash respondeu 500.' })
     AUTO_MEU[id] = !!ligado
     return Promise.resolve(autoResposta())
@@ -179,8 +218,15 @@ contextBridge.exposeInMainWorld('swp', {
   // da pessoa (ou troca o da casa, no "pra todos").
   autoTexto: (campo, texto, opc) => {
     const o = opc || {}
-    chamadas.push({ nome: 'autoTexto', args: [campo, texto, { todos: !!o.todos, padrao: !!o.padrao }] })
+    chamadas.push({ nome: 'autoTexto', args: [campo, texto, { todos: !!o.todos, padrao: !!o.padrao }], quem: o.quem || '' })
     if (!o.padrao && /\{Nome\}/.test(String(texto))) return Promise.resolve({ ok: false, erro: 'Esta mensagem não sabe preencher {Nome}. Aqui dá pra usar: {saudacao} {primeiro} {nome}' })
+    if (ESTADO.direcao && !ESTADO.cobranca) {
+      const q = o.quem === 'casa' ? '' : (o.quem || '')
+      const c = AUTO_COBS.find((x) => x.id === q)
+      if (c && !o.todos) { if (o.padrao) delete AUTO_TXT_DE[q][campo]; else AUTO_TXT_DE[q][campo] = String(texto) }
+      else { AUTO_CASA[campo] = String(texto); for (const x of AUTO_COBS) delete AUTO_TXT_DE[x.id][campo] }
+      return new Promise((r) => setTimeout(() => r(autoRespostaDir(q)), 120))
+    }
     if (o.padrao) delete AUTO_TXT[campo]
     else if (o.todos) { AUTO_CASA[campo] = String(texto); delete AUTO_TXT[campo] }
     else if (String(texto) === AUTO_CASA[campo]) delete AUTO_TXT[campo]
@@ -193,6 +239,13 @@ contextBridge.exposeInMainWorld('swp', {
 })
 // O app vira o do cobrador (o main manda `cobranca` no estado da conversa).
 contextBridge.exposeInMainWorld('__poeCobranca', (v) => { ESTADO.cobranca = !!v })
+// A direcao no app (a aba Automacoes aparece fora da versao de cobrador) e o painel sem numero aberto.
+contextBridge.exposeInMainWorld('__poeDirecao', (v) => { ESTADO.direcao = !!v })
+contextBridge.exposeInMainWorld('__poeSemNumero', (v) => {
+  if (v) { ESTADO.__antes = ESTADO.__antes || { motor: ESTADO.motor, autenticado: ESTADO.autenticado, envia: ESTADO.envia, chatId: ESTADO.chatId, phone: ESTADO.phone, nome: ESTADO.nome, eu: ESTADO.eu }
+    Object.assign(ESTADO, { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', semNumero: true }) }
+  else if (ESTADO.__antes) { Object.assign(ESTADO, ESTADO.__antes, { semNumero: false }); delete ESTADO.__antes }
+})
 contextBridge.exposeInMainWorld('__poeAuto', (o) => { if ('dir' in o) AUTO_DIR = !!o.dir; if ('velho' in o) AUTO_VELHO = !!o.velho; if ('longo' in o) AUTO_LONGO = !!o.longo })
 // O contextBridge COPIA o valor na hora de expor: um array exposto direto nasce congelado e os
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.

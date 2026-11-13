@@ -306,9 +306,9 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
 }
 {
   const PR = leia('preload-painel.js'), PU = leia('ui/painel-ui.js'), PH = leia('ui/painel.html')
-  vale('a ponte do painel tem a lista e o interruptor das automacoes', /autoConfig: \(\) => ipcRenderer\.invoke\('swp:auto-config'\)/.test(PR) && /autoLiga: \(id, ligado\) => ipcRenderer\.invoke\('swp:auto-liga', \{ id, ligado: !!ligado \}\)/.test(PR))
-  vale('o main le e grava pela rota das automacoes (com o "ver como")', /ipcMain\.handle\('swp:auto-config', \(\) => lerCob\('\/api\/swweb\/auto\/config\?v=1' \+ comoE\(\)\)\)/.test(MN) && /ipcMain\.handle\('swp:auto-liga'/.test(MN) && /\.\.\.\(comoId \? \{ de: comoId \} : \{\}\)/.test(MN))
-  vale('a aba Automacoes nasce escondida e so aparece na versao de cobrador', /data-aba="auto" id="aba-auto" hidden/.test(PH) && /abaAuto\.hidden = !cobModo/.test(PU) && /\.aba\[hidden\] \{ display: none; \}/.test(PH))
+  vale('a ponte do painel tem a lista e o interruptor das automacoes, com de quem e a aba', /autoConfig: \(quem\) => ipcRenderer\.invoke\('swp:auto-config', \{ quem: quem \|\| '' \}\)/.test(PR) && /autoLiga: \(id, ligado, quem\) => ipcRenderer\.invoke\('swp:auto-liga', \{ id, ligado: !!ligado, quem: quem \|\| '' \}\)/.test(PR))
+  vale('o main le e grava pela rota das automacoes, pra quem a aba esta mostrando', /ipcMain\.handle\('swp:auto-config', \(_e, o\) => \{/.test(MN) && /lerCob\('\/api\/swweb\/auto\/config\?v=1' \+ \(alvo \? '&como=' \+ encodeURIComponent\(alvo\) : ''\)\)/.test(MN) && /ipcMain\.handle\('swp:auto-liga'/.test(MN) && /\.\.\.\(autoAlvo\(quem\) \? \{ de: autoAlvo\(quem\) \} : \{\}\)/.test(MN))
+  vale('a aba Automacoes nasce escondida e so aparece pro cobrador e pra direcao', /data-aba="auto" id="aba-auto" hidden/.test(PH) && /a\.hidden = !\(cobModo \|\| souDir\)/.test(PU) && /\.aba\[hidden\] \{ display: none; \}/.test(PH))
 }
 // ── a aba Automacoes desenhada de verdade (o codigo do painel, com um documento de mentira)
 {
@@ -318,7 +318,7 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
     ...pedacos, recorta(PU, 'const autoHora = (s) =>') + '', recorta(PU, 'function desenhaAutoTexto(t, x, n)'), recorta(PU, 'function desenhaAuto()'), 'return { desenhaAuto, autoExemplo }',
   ].join('\n'))
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
-  const auto = { em: 1, carregando: false, erro: '', salvando: '', aberto: 'ret', numeros: 1, ultimos: [{ id: 'sai', nome: 'Maria <b>', status: 'enviado', ts: 1794315600 }],
+  const auto = { quem: '', casa: false, cobradores: [], dir: false, de: null, em: 1, carregando: false, erro: '', salvando: '', aberto: 'ret', numeros: 1, ultimos: [{ id: 'sai', nome: 'Maria <b>', status: 'enviado', ts: 1794315600 }],
     tipos: [
       { id: 'rec', nome: 'Boas-vindas', dica: 'd1', direcao: true, meu: true, hoje: 3, textos: [{ rot: 'Saudação', texto: '{saudacao} {nome}' }] },
       { id: 'ret', nome: 'Retirar nos Correios', dica: 'd2', direcao: true, meu: false, hoje: 0, textos: [{ rot: 'Dia 1', texto: 'Oi {primeiro}, código {codigo}' }, { rot: 'Dia 2', texto: 'R$ {valor} {novidade}' }] },
@@ -353,11 +353,44 @@ const REC = { k: 'rec:2492940773', tipo: 'recepcao', nk: '1127335679', fone: '55
   vale('enquanto salva, a caixa fica so de leitura e o "Voltar ao padrão" travado', /data-area[^>]* readonly>/.test(he) && /data-salva="padrao" disabled>Voltar ao padrão</.test(he), '')
   {
     const PR = leia('preload-painel.js')
-    vale('a ponte do painel manda o texto com o campo, pra todos ou de volta ao padrao', /autoTexto: \(campo, texto, opc\) => ipcRenderer\.invoke\('swp:auto-texto', \{ campo, texto, todos: !!\(opc && opc\.todos\), padrao: !!\(opc && opc\.padrao\) \}\)/.test(PR))
+    vale('a ponte do painel manda o texto com o campo, pra todos ou de volta ao padrao', /autoTexto: \(campo, texto, opc\) => ipcRenderer\.invoke\('swp:auto-texto', \{ campo, texto, todos: !!\(opc && opc\.todos\), padrao: !!\(opc && opc\.padrao\), quem: \(opc && opc\.quem\) \|\| '' \}\)/.test(PR))
     // (o `recorta` pararia na primeira chave, a dos parametros: aqui vale o trecho inteiro do handler)
     const iH = MN.indexOf("ipcMain.handle('swp:auto-texto'")
     const H = iH < 0 ? '' : MN.slice(iH, iH + 1600)
-    vale('o main grava o texto pela rota das automacoes, com o "ver como" e sem mandar "todos" junto com "padrao"', /\/api\/swweb\/auto\/config/.test(H) && /\.\.\.\(comoId \? \{ de: comoId \} : \{\}\)/.test(H) && /todos && !padrao/.test(H) && /autoProximaEm = 0/.test(H), H.slice(0, 80))
+    vale('o main grava o texto pela rota das automacoes, com o "ver como" e sem mandar "todos" junto com "padrao"', /\/api\/swweb\/auto\/config/.test(H) && /\.\.\.\(autoAlvo\(quem\) \? \{ de: autoAlvo\(quem\) \} : \{\}\)/.test(H) && /todos && !padrao/.test(H) && /autoProximaEm = 0/.test(H), H.slice(0, 80))
+  // ── A DIRECAO SEM "VER COMO" (13/11/2026, rodada 2): a aba e da CASA, com o seletor de cobrador ──
+  {
+    // de quem e a aba, pelo codigo do main: so a direcao escolhe; o cobrador e sempre ele mesmo
+    const alvoDe = (dir, cob, como, quem) => new Function('direcaoReal', 'modoCobranca', 'comoId', recorta(MN, 'function autoAlvo(quem)') + '\nreturn autoAlvo')(dir, () => cob, como)(quem)
+    vale('a direcao sem "ver como": sem escolha e com "casa", a aba e da casa (nenhum alvo)', alvoDe(true, false, '', '') === '' && alvoDe(true, false, '', 'casa') === '' && alvoDe(true, true, 'c9', 'casa') === '', '')
+    vale('a direcao escolhe um cobrador na aba: o alvo e ele, com ou sem "ver como"', alvoDe(true, false, '', 'cobrador_x1') === 'cobrador_x1' && alvoDe(true, true, 'c9', 'cobrador_x1') === 'cobrador_x1', '')
+    vale('a direcao no "ver como" de um cobrador, sem escolher: o alvo e o cobrador visto', alvoDe(true, true, 'cobrador_c9', '') === 'cobrador_c9' && alvoDe(true, false, 'vendedor_v1', '') === '', '')
+    vale('o cobrador nao escolhe ninguem: o `quem` que vier e ignorado', alvoDe(false, true, '', 'cobrador_x1') === '' && alvoDe(false, true, '', 'casa') === '', '')
+    vale('alvo com letra estranha nao vira endereco', alvoDe(true, false, '', 'a b&como=x') === '' && alvoDe(true, false, '', '../x') === '', '')
+    const casa = { ...auto, pode: true, dir: true, de: null, casa: true, quem: '', aberto: 'ret', numeros: 4, varRot: {}, edita: null,
+      cobradores: [{ id: 'c1', nome: 'Bryan' }, { id: 'c2', nome: 'Hay <b>' }],
+      ultimos: [{ id: 'ret', nome: 'Maria', status: 'enviado', ts: 1794315600, quem: 'Bryan' }],
+      tipos: [{ id: 'ret', nome: 'Retirar nos Correios', dica: 'd2', direcao: true, meu: false, hoje: 3, desligou: ['Bryan'],
+        textos: [{ campo: 'ret1', rot: 'Dia 1', texto: 'Oi {primeiro}', proprio: false, vars: ['primeiro'], outros: ['Bryan', 'Hay'] }] }] }
+    const desenhaCasa = (a) => F(a, esc, '', { swp: { autoConfig: () => {} } }, '<i>lapis</i>', '<i>gira</i>').desenhaAuto()
+    let hc = desenhaCasa(casa)
+    vale('casa: o seletor tem Todos (marcado) e um botao por cobrador, com o nome escapado', /data-quem="casa" aria-pressed="true">Todos</.test(hc) && /data-quem="c1" aria-pressed="false">Bryan</.test(hc) && /data-quem="c2" aria-pressed="false">Hay &lt;b&gt;</.test(hc), '')
+    vale('casa: o interruptor e o da operacao e a frase fala do cobrador', /class="au-sw" role="switch" aria-checked="false"[^>]*data-au="ret"/.test(hc) && /quando o cobrador está livre/.test(hc) && !/Desligada pela direção/.test(hc), '')
+    vale('casa: diz quem desligou a dele e quem usa outro texto', /Bryan desligou no app/.test(hc) && /Bryan, Hay usam outro texto/.test(hc), '')
+    vale('casa: os ultimos envios dizem quem mandou', /Maria<\/b><i>Retirar nos Correios · Bryan<\/i>/.test(hc), '')
+    casa.edita = { id: 'ret', campo: 'ret1', valor: 'Oi {primeiro}', original: 'Oi {primeiro}', erro: '', salvando: '' }
+    hc = desenhaCasa(casa)
+    vale('casa: editando, o botao e "Salvar pra todos" (um so) e Cancelar', /data-salva="todos">Salvar pra todos</.test(hc) && !/data-salva="um"/.test(hc) && /data-cancela/.test(hc), '')
+    casa.edita = null
+    hc = desenhaCasa({ ...casa, casa: false, quem: 'c2', de: { id: 'c2', nome: 'Hay' } })
+    vale('escolhido um cobrador, o botao dele fica marcado e a frase de numero fala dele', /data-quem="c2" aria-pressed="true"/.test(hc) && /data-quem="casa" aria-pressed="false"/.test(hc), '')
+    hc = desenhaCasa({ ...casa, tipos: [], em: 0, quem: 'c1', carregando: true })
+    vale('enquanto a lista da pessoa escolhida carrega, o seletor continua na tela', /data-quem="c1" aria-pressed="true"/.test(hc) && /Carregando/.test(hc), '')
+    hc = desenhaCasa({ ...casa, numeros: 0 })
+    vale('casa sem numero de cobranca nenhum: avisa onde por', /Nenhum cobrador tem número de cobrança/.test(hc), '')
+    vale('o cobrador nao ve seletor nenhum', !/data-quem=/.test(h) && !/data-quem=/.test(he), '')
+    vale('a ponte manda de quem e a aba tambem ao salvar o texto', /quem: \(opc && opc\.quem\) \|\| ''/.test(leia('preload-painel.js')), '')
+  }
   }
 }
 // ── o laco
