@@ -1675,6 +1675,9 @@ window.sw.ao('sw:erro', (d) => {
   desenhaLista()
 })
 window.sw.ao('sw:aberto', async () => { await recarregaEstado() })
+// O PAINEL PEDIU A CONVERSA DE UM CLIENTE QUE ESTA NUM NUMERO FECHADO (14/11/2026, lista da aba Cobranca):
+// abre o numero como se ele tivesse clicado nele aqui; a conversa vem sozinha quando ficar pronto.
+window.sw.ao('sw:abre-numero', (d) => { if (d && d.numero) abrir(d.numero) })
 // A CONEXAO MUDOU: redesenha na hora, sem esperar o proximo minuto. Se o numero da tela for o que
 // mudou, a tela de abrir e refeita; senao basta a lista. O `recarregaEstado` traz o campo `conn`
 // atualizado do servidor, que e a mesma fonte que a tela le quando o numero esta fechado.

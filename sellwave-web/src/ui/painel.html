@@ -547,6 +547,40 @@
   .cob-outros { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 12px 0; }
   .cob-outros button { font: inherit; font-size: 11px; color: var(--apagado); padding: 3px 8px; border-radius: 99px; border: 1px solid var(--borda); background: none; cursor: pointer; }
   .cob-outros button.on { color: var(--texto); border-color: var(--verde); background: rgba(0, 168, 132, .15); }
+  /* A LISTA DE CLIENTES (14/11/2026): a agenda do cobrador, com os clientes do OUTRO numero dele mais
+     apagados e as setas discretas pra passar o cliente pra este numero. */
+  .cl-ver { display: flex; gap: 5px; padding: 10px 12px 0; }
+  .cl-ver button { font: inherit; font-size: 11px; color: var(--apagado); padding: 3px 10px; border-radius: 99px; border: 1px solid var(--borda); background: none; cursor: pointer; }
+  .cl-ver button.on { color: var(--texto); border-color: var(--verde); background: rgba(0, 168, 132, .15); }
+  .cl-ver button:focus-visible, .cl-abre:focus-visible, .cl-passa:focus-visible { outline: 2px solid var(--azul); outline-offset: 1px; }
+  .cl-nota { padding: 12px 12px 0; font-size: 11.5px; line-height: 15px; color: var(--apagado); }
+  .cl { display: grid; grid-template-columns: minmax(0, 1fr); padding: 4px 8px 14px; }
+  .cl-topo { padding: 8px 4px 2px; font-size: 11px; line-height: 14px; color: var(--apagado); }
+  .cl-sec { display: flex; align-items: center; gap: 6px; padding: 12px 4px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--apagado); }
+  .cl-sec i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+  .cl-sec span { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .cl-it { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: 8px; }
+  .cl-it:hover, .cl-it.armado { background: var(--hover); }
+  .cl-abre { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; padding: 6px 6px; text-align: left; border-radius: 8px; }
+  .cl-abre b { font-size: 12.5px; font-weight: 600; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cl-l2 { font-size: 11px; line-height: 14px; color: var(--apagado); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .cl-it.outro .cl-abre { opacity: .45; }
+  .cl-it.outro:hover .cl-abre { opacity: .7; }
+  .cl-no { flex-shrink: 0; padding: 0 6px; border: 1px solid var(--borda); border-radius: 99px; font-size: 10px; line-height: 16px; color: var(--apagado);
+    font-variant-numeric: tabular-nums; opacity: .8; }
+  .cl-passa { flex-shrink: 0; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--apagado); opacity: .5;
+    transition: opacity .15s, background-color .15s, color .15s; }
+  .cl-it:hover .cl-passa, .cl-it.armado .cl-passa, .cl-passa:focus-visible { opacity: 1; }
+  .cl-passa:hover { background: var(--fraco); color: var(--texto); }
+  .cl-passa:disabled { cursor: default; }
+  .cl-passa svg { width: 14px; height: 14px; }
+  .cl-pergunta { margin: 2px 2px 8px; padding: 9px 10px; border: 1px solid rgba(255, 185, 0, .3); border-radius: 9px; background: rgba(255, 185, 0, .07);
+    font-size: 11.5px; line-height: 15px; color: var(--texto); }
+  .cl-erro { margin-top: 6px; color: #ffb3bf; }
+  .cl-bts { display: flex; gap: 6px; margin-top: 8px; }
+  /* `.bt.sec` herda do `.sec` (titulo de secao) caixa alta, largura cheia e margem: zera aqui */
+  .cl-bts .bt { width: auto; height: 30px; margin: 0; padding: 0 12px; font-size: 12px; text-transform: none; letter-spacing: normal; }
 
   /* ═══════════════ A ABA AUTOMACOES (11/11/2026, so na versao de cobrador) ═══════════════
      Pedido do Bruno: "uma aba de automacoes dentro do SellWave Web (...) eles vao poder ligar e

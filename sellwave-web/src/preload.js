@@ -56,7 +56,7 @@ contextBridge.exposeInMainWorld('sw', {
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {
-    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:atualizacao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso', 'sw:fotos', 'sw:area', 'sw:marcacao', 'sw:modo', 'sw:cob-abrir']
+    const permitidos = ['sw:aberto', 'sw:fechado', 'sw:ativo', 'sw:erro', 'sw:status', 'sw:saida', 'sw:hibernou', 'sw:fila', 'sw:semMotor', 'sw:versao', 'sw:atualizacao', 'sw:agente', 'sw:destacado', 'sw:devolvido', 'sw:conexao', 'sw:nuvem', 'sw:saindo', 'sw:aviso', 'sw:fotos', 'sw:area', 'sw:marcacao', 'sw:modo', 'sw:cob-abrir', 'sw:abre-numero']
     if (!permitidos.includes(canal)) return () => {}
     const envelope = (_e, dados) => fn(dados)
     ipcRenderer.on(canal, envelope)

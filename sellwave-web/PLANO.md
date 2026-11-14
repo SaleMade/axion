@@ -501,6 +501,31 @@ Toda conversa que mexer aqui escreve uma linha. Data, o que fez, o que **verific
   nome comprido escondia qual mensagem foi. Testes: autoteste com 6 conferências novas da geometria de
   verdade (vendedor, direção, modal abre e fecha, sem conta, o painel lendo o estado), `teste-painel`
   (459: "direcao:", "sem numero"), `teste-auto-cobranca` (129) e `backend/teste-cob-auto3.mjs` (66).
+- **14/11/2026 — A ABA COBRANÇA MOSTRA OS CLIENTES DOS DOIS NÚMEROS, E O CLIENTE PASSA DE NÚMERO (1.26.21).**
+  O Bryan (dois números) dizia que, no número novo, a aba Cobrança ficava vazia: as conversas dali eram de
+  gente sem pedido (o número era de venda até 12/11) e os clientes dele conversavam no outro. Pedido do Bruno:
+  "que aparecessem ali os leads, mesmo que sejam de outro número, porém com um pouco mais apagado (...) e uma
+  opção bem discreta para ele trocar o lead de um número para outro, porém com aviso de que o lead já chamou
+  no outro número; caso nunca tenha chamado, ele só troca normalmente".
+  **A lista** (painel-ui.js, "A LISTA DE CLIENTES DA ABA COBRANCA"): conversa sem pedido (ou nenhuma conversa)
+  mostra a AGENDA do cobrador (`C.agenda`, a mesma ordem e o mesmo "só os meus" do quadro); com pedido, a ficha
+  vem primeiro e "Este cliente / Todos os clientes" troca. O servidor manda em cada pedido `numCli` (de qual
+  número é o cliente: a escolha à mão, onde ele escreveu por último, a marca do link) e `falou` (em quais
+  números dele o cliente já escreveu), mais `nums`. Com mais de um número, quem é do OUTRO vem apagado com o
+  final do número, depois dos deste, em cada grupo. As setas (`cl-passa`) aparecem em quem é do outro e em
+  quem ainda não chamou; quem já escreveu noutro ganha a pergunta embaixo dele (Passar / Cancelar). Clicar no
+  nome abre a conversa no número do cliente (`swp:cob-abre` = o mesmo `cobConversa` do ícone do quadro;
+  número fechado: a casca abre ele pelo evento `sw:abre-numero`).
+  **Passar** = `POST /api/swweb/cobranca/numero` → `cob_num_cli` com origem `manual`, que vale acima de tudo:
+  o link de acompanhar abre esse número, o ícone do quadro também (o `/cobranca/contato` põe ele na frente)
+  e as automáticas passam pra ele SÓ depois de existir conversa ali (automática nunca é a primeira mensagem
+  de um número que o cliente não conhece; a pergunta diz isso).
+  Na mesma rodada, sem build: o "não pagou" só sai pra quem está esquecido (sem comprovante anexado, sem
+  foto/documento do cliente desde que saiu, ninguém da equipe falou nem anotou depois da entrega, sem
+  retorno pra hoje ou depois), "saiu", retirada e boas-vindas perdem a linha do valor com sinal de
+  pagamento, e a pega confere de novo. Motivo medido: a página do WhatsApp só tinha a última mensagem
+  carregada e o "o cobrador já falou" passava batido. Testes: `teste-painel` (477, "lista:"),
+  `backend/teste-cob-pagou-numero.mjs` (50, 15 mutações pegas).
 
 ## 10b. O PADRÃO A SEGUIR É O INBOX (regra do Bruno, 16/10/2026)
 

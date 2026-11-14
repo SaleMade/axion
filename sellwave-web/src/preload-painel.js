@@ -63,6 +63,10 @@ contextBridge.exposeInMainWorld('swp', {
   },
   // A FICHA DE COBRANCA do cliente da conversa aberta (31/10/2026, versao de cobrador).
   cobPedido: (phone) => ipcRenderer.invoke('swp:cob-pedido', { phone }),
+  // a lista de clientes da aba Cobranca, passar o cliente pra este numero e abrir a conversa dele (14/11/2026)
+  cobLista: (sig) => ipcRenderer.invoke('swp:cob-lista', { sig }),
+  cobNumero: (phone, nk) => ipcRenderer.invoke('swp:cob-numero', { phone, nk }),
+  cobAbre: (fone, nk) => ipcRenderer.invoke('swp:cob-abre', { fone, nk }),
   cobSalva: (id, patch) => ipcRenderer.invoke('swp:cob-salva', { id, patch }),
   cobCurto: (url, id) => ipcRenderer.invoke('swp:cob-curto', { url, id }),
   // A ABA AUTOMACOES do cobrador (11/11/2026): a lista com o que esta ligado e o que saiu hoje, e o

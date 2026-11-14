@@ -1176,6 +1176,89 @@ app.whenReady().then(async () => {
   const pcQ = await js('(() => { const u = (window.__ver()).filter(c => c.nome === "cobSalva").pop(); return { nova: !document.querySelector("#corpo .fx").__marca, patch: u && u.args[1], pago: !!document.querySelector("#corpo .fx-pago"), txt: (document.querySelector("#corpo [data-sec=pagamento]") || {}).textContent.replace(/\\u00a0/g, " ") } })()')
   conta('painel: confirmado, fecha com parcela do resto + valor_neg no total (100 + 350 = 450) e a ficha redesenha como paga',
     pcQ.nova && pcQ.patch && pcQ.patch.pagamento_add && pcQ.patch.pagamento_add.valor === 350 && pcQ.patch.spg === 'Pago' && pcQ.patch.valor_neg === 450 && pcQ.patch.col === 'Pagos' && pcQ.patch.antes.spg === 'Parcial' && pcQ.pago && /Recebido R\$ 450,00/.test(pcQ.txt) && !/data-acao=pago/.test(''), JSON.stringify(pcQ))
+  // ══ A LISTA DE CLIENTES NA ABA COBRANCA (14/11/2026) ══ o cobrador com dois numeros via a aba vazia
+  // no numero que nao era o da conversa dos clientes ("Nenhum pedido desse telefone na dash"). Agora a
+  // agenda dele aparece ali, com os clientes do OUTRO numero mais apagados, e as setas passam o cliente
+  // pra este numero (perguntando antes se ele ja conversou no outro).
+  ponto = 'lista cobranca'
+  const lc = (c) => js('(() => { const it = [...document.querySelectorAll("#corpo .cl-it")]; const nome = (e) => e.querySelector(".cl-abre b").textContent; ' + c + ' })()')
+  await js('window.__semPedido(true); window.__trocaConversa("5531988887777", "Eni", "95983293")')
+  await espera(2200)
+  const l1 = await lc('return { nota: (document.querySelector("#corpo .cl-nota") || {}).textContent || "", seletor: !!document.querySelector("#corpo .cl-ver"),'
+    + ' secs: [...document.querySelectorAll("#corpo .cl-sec")].map(e => e.querySelector("b").textContent + ":" + e.querySelector("span").textContent),'
+    + ' nomes: it.map(e => nome(e).split(" ")[0] + (e.classList.contains("outro") ? "*" : "")), no: [...document.querySelectorAll("#corpo .cl-no")].map(e => e.textContent),'
+    + ' passa: it.filter(e => e.querySelector("[data-passa]")).map(e => nome(e).split(" ")[0]), topo: (document.querySelector("#corpo .cl-topo") || {}).textContent || "",'
+    + ' l2: it.map(e => e.querySelector(".cl-l2").textContent), pediu: (window.__ver()).filter(c => c.nome === "cobLista").length }')
+  conta('lista: conversa sem pedido mostra a agenda do cobrador, com a frase de antes em cima', /Nenhum pedido desse telefone na dash/.test(l1.nota) && !l1.seletor && l1.pediu >= 1, JSON.stringify(l1))
+  conta('lista: na ordem da agenda, so os dele (nem de outro cobrador nem pago)', l1.secs.join('|') === 'Entraram em contato:1|Atrasados:1|Sem retorno:2|Chegando:1', JSON.stringify(l1.secs))
+  conta('lista: os clientes do OUTRO numero vem apagados, com o final do numero, e depois dos deste', l1.nomes.join('|') === 'Dani*|Ana|Bia*|Gabriela*|Caio' && l1.no.join('|') === '5679|5679|5679', JSON.stringify(l1))
+  conta('lista: o topo diz quantos sao do outro numero', /^3 clientes são de outro número/.test(l1.topo), l1.topo)
+  conta('lista: as setas aparecem no do outro numero e em quem ainda nao chamou, nunca no deste', l1.passa.join('|') === 'Dani|Bia|Gabriela|Caio', JSON.stringify(l1.passa))
+  conta('lista: a segunda linha diz o valor e o que importa (escreveu, retorno, etapa)', /^R\$\s497,00 · escreveu há 3\d min$/.test(l1.l2[0].replace(/\u00a0/g, ' ')) && /^R\$\s497,00 · retorno ontem 09:00$/.test(l1.l2[1].replace(/\u00a0/g, ' ')) && /^R\$\s497,00 · Entregue em 12\/11$/.test(l1.l2[2].replace(/\u00a0/g, ' ')) && /^R\$\s497,00 · Cobrança$/.test(l1.l2[3].replace(/\u00a0/g, ' ')) && /R\$\s397,00 · Enviado$/.test(l1.l2[4].replace(/\u00a0/g, ' ')), JSON.stringify(l1.l2))
+  const lw = await js('(() => { const c = document.getElementById("corpo"), lim = c.getBoundingClientRect().right; let pior = 0; for (const e of c.querySelectorAll(".cl-it, .cl-abre, .cl-no, .cl-passa, .cl-sec, .cl-topo")) { const r = e.getBoundingClientRect(); if (r.width && r.right - lim > pior) pior = r.right - lim } const g = [...c.querySelectorAll(".cl-abre b")].find(b => /Gabriela/.test(b.textContent)); return { sobra: c.scrollWidth - c.clientWidth, pior: Math.round(pior), corta: g.scrollWidth > g.clientWidth, estilo: getComputedStyle(g).textOverflow } })()')
+  conta('lista: nada passa da largura do painel e o nome comprido termina em reticencias', lw.sobra <= 0 && lw.pior <= 0 && lw.corta && lw.estilo === 'ellipsis', JSON.stringify(lw))
+  // quem nunca chamou: passa direto, sem pergunta
+  const nNum0 = await js('(window.__ver()).filter(c => c.nome === "cobNumero").length')
+  await lc('it.find(e => /Caio/.test(nome(e))).querySelector("[data-passa]").click(); return 1')
+  await espera(500)
+  const l2 = await lc('const v = (window.__ver()).filter(c => c.nome === "cobNumero"); const caio = it.find(e => /Caio/.test(nome(e))); return { chamou: v.slice(' + nNum0 + ').map(c => c.args.join(">")), pergunta: !!document.querySelector("#corpo .cl-pergunta"), setas: !!caio.querySelector("[data-passa]"), rod: document.getElementById("rod").textContent }')
+  conta('lista: quem nunca chamou passa na hora, sem pergunta, pra este numero', l2.chamou.join('|') === '19900008003>95983293' && !l2.pergunta && !l2.setas && /Caio passou pra este número/.test(l2.rod), JSON.stringify(l2))
+  // quem ja conversou no outro: pergunta, e Cancelar nao grava
+  await lc('it.find(e => /Bia/.test(nome(e))).querySelector("[data-passa]").click(); return 1')
+  await espera(200)
+  const l3 = await lc('const q = document.querySelector("#corpo .cl-pergunta"); return { txt: q ? q.textContent : "", depoisDe: q ? q.previousElementSibling.querySelector(".cl-abre b").textContent : "", grav: (window.__ver()).filter(c => c.nome === "cobNumero").length }')
+  conta('lista: quem ja conversou no outro numero ganha a pergunta embaixo dele, com o final do numero, e nada e gravado ainda', /^Ele já conversou no número final 5679\. Passando, mande a primeira mensagem por este número/.test(l3.txt) && l3.depoisDe === 'Bia Do Outro' && l3.grav === nNum0 + 1, JSON.stringify(l3))
+  await clica('#corpo [data-passa-nao]')
+  await espera(150)
+  const l4 = await js('({ q: !!document.querySelector("#corpo .cl-pergunta"), grav: (window.__ver()).filter(c => c.nome === "cobNumero").length })')
+  conta('lista: Cancelar fecha a pergunta sem gravar', !l4.q && l4.grav === nNum0 + 1, JSON.stringify(l4))
+  await lc('it.find(e => /Bia/.test(nome(e))).querySelector("[data-passa]").click(); return 1')
+  await espera(150)
+  await clica('#corpo [data-passa-sim]')
+  await espera(500)
+  const l5 = await lc('const bia = it.find(e => /Bia/.test(nome(e))); return { outro: bia.classList.contains("outro"), setas: !!bia.querySelector("[data-passa]"), q: !!document.querySelector("#corpo .cl-pergunta"), ult: (window.__ver()).filter(c => c.nome === "cobNumero").pop().args.join(">") }')
+  conta('lista: "Passar" grava e ela deixa de ser apagada', !l5.outro && !l5.setas && !l5.q && l5.ult === '19900008002>95983293', JSON.stringify(l5))
+  // a dash recusa: o motivo aparece na pergunta e ela continua apagada
+  await js('window.__falhaNumero(1)')
+  await lc('it.find(e => /Gabriela/.test(nome(e))).querySelector("[data-passa]").click(); return 1')
+  await espera(150)
+  await clica('#corpo [data-passa-sim]')
+  await espera(500)
+  const l6 = await lc('const g = it.find(e => /Gabriela/.test(nome(e))); return { outro: g.classList.contains("outro"), erro: (document.querySelector("#corpo .cl-erro") || {}).textContent || "", txt: (document.querySelector("#corpo .cl-pergunta") || {}).textContent || "" }')
+  conta('lista: a dash recusou: o motivo aparece embaixo dela e ela continua apagada', l6.outro && /Esse número não é seu/.test(l6.erro) && /final 5679\./.test(l6.txt), JSON.stringify(l6))
+  await clica('#corpo [data-passa-nao]')
+  await espera(150)
+  // clicar no nome abre a conversa, no numero do cliente
+  await lc('it.find(e => /Ana/.test(nome(e))).querySelector(".cl-abre").click(); return 1')
+  await lc('it.find(e => /Dani/.test(nome(e))).querySelector(".cl-abre").click(); return 1')
+  await espera(200)
+  const l7 = await js('(window.__ver()).filter(c => c.nome === "cobAbre").map(c => c.args.join(">"))')
+  conta('lista: clicar no nome abre a conversa no numero do cliente (o deste e o do outro)', l7.slice(-2).join('|') === '19900008001>(19) 99598-3293|19900008004>(11) 92733-5679', JSON.stringify(l7))
+  // trocou de numero: quem fica apagado e o outro lado
+  await js('window.__trocaConversa("5531988887777", "Eni", "1127335679")')
+  await espera(1900)
+  const l8 = await lc('return it.map(e => nome(e).split(" ")[0] + (e.classList.contains("outro") ? "*" : ""))')
+  conta('lista: no outro numero, apagados passam a ser os do primeiro', l8.join('|') === 'Dani|Ana*|Gabriela|Bia*|Caio*', JSON.stringify(l8))
+  // conversa COM pedido: a ficha vem primeiro, e "Todos os clientes" troca
+  await js('window.__semPedido(false); window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293")')
+  await espera(2200)
+  const l9 = await js('({ ficha: !!document.querySelector("#corpo .fx"), lista: !!document.querySelector("#corpo .cl"), bts: [...document.querySelectorAll("#corpo .cl-ver button")].map(b => b.textContent + (b.classList.contains("on") ? "*" : "")) })')
+  conta('lista: conversa com pedido abre a ficha, com o seletor Este cliente / Todos os clientes', l9.ficha && !l9.lista && l9.bts.join('|') === 'Este cliente*|Todos os clientes', JSON.stringify(l9))
+  await clica('#corpo [data-cobver=lista]')
+  await espera(300)
+  const l10 = await js('({ ficha: !!document.querySelector("#corpo .fx"), itens: document.querySelectorAll("#corpo .cl-it").length, nota: !!document.querySelector("#corpo .cl-nota"), bts: [...document.querySelectorAll("#corpo .cl-ver button")].map(b => b.textContent + (b.classList.contains("on") ? "*" : "")) })')
+  conta('lista: "Todos os clientes" troca pra lista, sem a frase de "nenhum pedido"', !l10.ficha && l10.itens === 5 && !l10.nota && l10.bts.join('|') === 'Este cliente|Todos os clientes*', JSON.stringify(l10))
+  await clica('#corpo [data-cobver=ficha]')
+  await espera(300)
+  conta('lista: "Este cliente" volta pra ficha', await js('!!document.querySelector("#corpo .fx") && !document.querySelector("#corpo .cl")'))
+  await clica('#corpo [data-cobver=lista]')
+  await espera(200)
+  await js('window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293"); window.__trocaConversa("5511900001111", "Outro", "95983293")')
+  await espera(1900)
+  await js('window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293")')
+  await espera(1900)
+  conta('lista: trocou de conversa, volta pro automatico (a ficha de quem tem pedido)', await js('!!document.querySelector("#corpo .fx") && !document.querySelector("#corpo .cl")'))
+
   // ══ A ABA AUTOMACOES (11/11/2026) ══ so na versao de cobrador: lista, interruptor, texto e envios
   ponto = 'automacoes painel'
   const au0 = await js('({ visivel: !document.getElementById("aba-auto").hidden && getComputedStyle(document.getElementById("aba-auto")).display !== "none", rot: document.getElementById("aba-auto").textContent.trim() })')

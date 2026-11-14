@@ -6,6 +6,21 @@ const chamadas = []
 // O pedido 7001 da ficha de cobranca do painel, com o que a ficha gravou (ver cobPedido/cobSalva).
 const P7001 = { valor: 397, saldo: 397, pago: false, spg: 'Pendente', agend: '', comentarios: [], pagamentos: [] }
 let rascSeq = 0
+// A LISTA DE CLIENTES DA ABA COBRANCA (14/11/2026): dois numeros do cobrador ('95983293' e o do final 5679),
+// clientes de cada um, um que nunca chamou, um de outro cobrador e um pago (esses dois nao aparecem).
+let SEM_PEDIDO = false, FALHA_NUM = 0, LISTA_V = 1
+const H_ = 3600000
+const ontem9 = () => { const d = new Date(Date.now() - 86400000); d.setHours(9, 0, 0, 0); const p = (n) => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T09:00' }
+const cli = (id, nome, o) => ({ id, nome, wa: '1990000' + id, vl: 497, valor: 497, saldo: 497, pago: false, col: 'Entregues', mod: 'entrega', agend: '', cob: 'hc', contato: 0, numCli: '', falou: [], ...(o || {}) })
+const LISTA = [
+  cli('8001', 'Ana Deste Numero', { agend: ontem9(), numCli: '95983293', falou: ['95983293'] }),
+  cli('8002', 'Bia Do Outro', { numCli: '27335679', falou: ['27335679'], entrega: { label: 'Entregue em', data: '12/11/2026', dias: '2 dias' } }),
+  cli('8003', 'Caio Sem Numero', { col: 'Enviados', saldo: 397, valor: 397 }),
+  cli('8004', 'Dani Escreveu', { contato: Date.now() - 0.5 * H_, numCli: '27335679', falou: ['27335679'] }),
+  cli('8005', 'Edu De Outro Cobrador', { cob: 'bc', numCli: '27335679' }),
+  cli('8006', 'Fabio Pago', { pago: true, col: 'Pagos', numCli: '95983293' }),
+  cli('8007', 'Gabriela Nome Muito Comprido Que Nao Cabe Na Linha Do Painel De Jeito Nenhum Silva', { numCli: '27335679', falou: ['27335679', '95983293'] }),
+]
 const reg = (nome, valor) => (...args) => { chamadas.push({ nome, args }); return Promise.resolve(valor) }
 // AS AUTOMACOES do painel do cobrador (11/11/2026): o que ESTA pessoa ligou, com estado.
 const AUTO_MEU = { rec: true, ret: true, pag: true }
@@ -173,6 +188,7 @@ contextBridge.exposeInMainWorld('swp', {
   // leitura seguinte, como o worker faz. E o que prova que a ficha do painel redesenha depois de gravar.
   cobPedido: (phone) => {
     chamadas.push({ nome: 'cobPedido', args: [phone] })
+    if (SEM_PEDIDO) return Promise.resolve({ ok: true, prontos: [], pedidos: [] })
     const e = P7001
     return Promise.resolve({ ok: true, prontos: ['Aguardando resposta do cliente'], pedidos: [{
       id: '7001', nome: 'Cliente de Teste', wa: '19995983293', cidade: 'Campinas', uf: 'SP', prod: 'Produto A - 3 Meses',
@@ -194,6 +210,21 @@ contextBridge.exposeInMainWorld('swp', {
     return Promise.resolve({ ok: true, negados: [], ...(p.pagamento_add ? { parcelas: e.pagamentos.length } : {}) })
   },
   cobCurto: reg('cobCurto', { ok: true, url: 'https://sw.li/abc' }),
+  // A LISTA (14/11/2026): com assinatura, como o servidor (sem mudanca volta `igual`)
+  cobLista: (sig) => {
+    chamadas.push({ nome: 'cobLista', args: [sig] })
+    if (sig === 'v' + LISTA_V) return Promise.resolve({ ok: true, igual: true, sig })
+    return Promise.resolve({ ok: true, sig: 'v' + LISTA_V, eu: 'hc', pedidos: JSON.parse(JSON.stringify(LISTA)),
+      nums: [{ n8: '95983293', num: '(19) 99598-3293' }, { n8: '27335679', num: '(11) 92733-5679' }] })
+  },
+  cobNumero: (phone, nk) => {
+    chamadas.push({ nome: 'cobNumero', args: [phone, nk] })
+    if (FALHA_NUM > 0) { FALHA_NUM -= 1; return new Promise((r) => setTimeout(() => r({ ok: false, erro: 'Esse número não é seu.' }), 80)) }
+    const p = LISTA.find((x) => x.wa === phone)
+    if (p) { p.numCli = String(nk).slice(-8); LISTA_V += 1 }
+    return new Promise((r) => setTimeout(() => r({ ok: true, n8: String(nk).slice(-8) }), 80))
+  },
+  cobAbre: reg('cobAbre', { ok: true }),
   // A ABA AUTOMACOES (11/11/2026): tres de exemplo, com estado (o que ele desliga volta desligado) e
   // uma recusa pra provar que o interruptor volta sozinho.
   // `quem` = de quem a direcao escolheu ver ('casa' ou o id do cobrador); fica fora do `args` pras
@@ -246,6 +277,8 @@ contextBridge.exposeInMainWorld('__poeSemNumero', (v) => {
     Object.assign(ESTADO, { motor: false, autenticado: false, envia: false, chatId: '', phone: '', nome: '', eu: '', semNumero: true }) }
   else if (ESTADO.__antes) { Object.assign(ESTADO, ESTADO.__antes, { semNumero: false }); delete ESTADO.__antes }
 })
+contextBridge.exposeInMainWorld('__semPedido', (v) => { SEM_PEDIDO = !!v })
+contextBridge.exposeInMainWorld('__falhaNumero', (n) => { FALHA_NUM = Number(n) || 0 })
 contextBridge.exposeInMainWorld('__poeAuto', (o) => { if ('dir' in o) AUTO_DIR = !!o.dir; if ('velho' in o) AUTO_VELHO = !!o.velho; if ('longo' in o) AUTO_LONGO = !!o.longo })
 // O contextBridge COPIA o valor na hora de expor: um array exposto direto nasce congelado e os
 // push() daqui nunca aparecem do outro lado. Por isso vai uma funcao, que copia a cada chamada.

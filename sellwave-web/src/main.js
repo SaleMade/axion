@@ -3220,7 +3220,9 @@ function lembraCob(k8, nk) {
   config.cobUltimo = m
   gravarConfig()
 }
-ipcMain.handle('sw:cob-conversa', async (_e, { fone, nk: escolhido }) => {
+// O MESMO CAMINHO PRO QUADRO (icone do card) E PRO PAINEL (lista da aba Cobranca, 14/11/2026).
+ipcMain.handle('sw:cob-conversa', (_e, { fone, nk }) => cobConversa(fone, nk))
+async function cobConversa(fone, escolhido) {
   const f = String(fone || '').replace(/\D/g, '')
   if (f.length < 10) return { ok: false, erro: 'Esse pedido está sem telefone válido.' }
   const k8 = f.slice(-8)
@@ -3267,6 +3269,39 @@ ipcMain.handle('sw:cob-conversa', async (_e, { fone, nk: escolhido }) => {
     ok: false, semNumero: true,
     erro: meus.length ? 'Nenhum número conectado agora. Escolha por qual chamar.' : 'Você ainda não tem número. Peça pra direção pôr um no seu nome na Contingência.',
   }
+}
+
+// A LISTA DA ABA COBRANCA DO PAINEL (14/11/2026). Pedido do Bruno: o cobrador com dois numeros "troca de
+// numero de cobranca para outro [e] nao visualiza nenhuma das cobrancas (...) gostaria que aparecessem
+// ali os leads, mesmo que sejam de outro numero, porem com um pouco mais apagado". E o mesmo quadro do
+// app (/api/swweb/cobranca), que agora diz de qual numero e cada cliente (`numCli`) e onde ele ja falou
+// (`falou`). `sig` = a assinatura da lista que o painel ja tem: sem mudanca volta { igual: true }.
+ipcMain.handle('swp:cob-lista', (_e, o) => lerCob('/api/swweb/cobranca?sig=' + encodeURIComponent(String((o && o.sig) || '')) + comoE()))
+// PASSAR O CLIENTE PRA ESTE NUMERO ("uma opcao bem discreta (...) com aviso de que o lead ja chamou no
+// outro numero"). O aviso e da tela; aqui so grava. O servidor confere de quem e o numero.
+ipcMain.handle('swp:cob-numero', async (_e, { phone, nk }) => {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const f = String(phone || '').replace(/\D/g, ''), n = numKey(nk)
+  if (f.length < 10 || n.length < 10) return { ok: false, erro: 'Telefone inválido.' }
+  try {
+    const r = await fetch(baseCob() + '/api/swweb/cobranca/numero', {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' },
+      body: JSON.stringify({ phone: f, nk: n }), signal: AbortSignal.timeout(20000),
+    })
+    ajustaRelogio(r)
+    let d = {}
+    try { d = await r.json() } catch (_) { d = {} }
+    if (!r.ok || !d.ok) return { ok: false, erro: (d && d.error) || respostaRuim(r) }
+    anota('[cobranca] cliente ...' + f.slice(-4) + ' passou pro numero ...' + n.slice(-4))
+    return { ok: true, n8: String(d.n8 || n.slice(-8)) }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+})
+// ABRIR A CONVERSA DE UM CLIENTE DA LISTA, no numero dele. Numero fechado: a casca abre ele (o mesmo que
+// clicar nele na lista da esquerda) e a conversa vem sozinha quando ficar pronto (crmPendente).
+ipcMain.handle('swp:cob-abre', async (_e, { fone, nk }) => {
+  const r = await cobConversa(fone, nk)
+  if (r && r.ok && r.fechado && r.numero) avisaCasca('sw:abre-numero', { numero: r.numero })
+  return r
 })
 
 // O LEMBRETE DO RETORNO: a agenda avisa na hora marcada, mesmo com o quadro fechado ou o app atras de

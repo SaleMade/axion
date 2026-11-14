@@ -35,6 +35,14 @@ const C = window.SWCob
 try { if (C) C.poeEstilo() } catch (_) { /* sem o estilo a ficha so sai sem cor */ }
 let cobModo = false
 let cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: [], em: 0 }
+// a LISTA de clientes da aba Cobranca (14/11/2026, ver A LISTA DE CLIENTES DA ABA COBRANCA)
+let cobL = { pedidos: [], eu: '', nums: [], sig: '', em: 0, carregando: false, erro: '' }
+let cobVer = ''               // '' = automatico (ficha se a conversa tem pedido), 'lista' ou 'ficha'
+let cobVerFone = ''           // em qual conversa ele escolheu: trocou de conversa, volta pro automatico
+let cobListaNaTela = false
+let cobListaNk = ''           // o numero pra quem a lista foi desenhada (trocou de numero, redesenha)
+let cobPassa = { id: '', salvando: false, erro: '' }
+let cobGen = 0                // muda quando a lista passa a ser de outra pessoa: leitura velha que chegar depois e jogada fora
 // A ABA AUTOMACOES (11/11/2026, so na versao de cobrador; ver "automacoes" la embaixo). Aqui em cima
 // pelo mesmo motivo: o desenha() le.
 // `edita` = o texto aberto pra editar ({ id, campo, valor, original, erro, salvando }); `pode` = o
@@ -338,7 +346,13 @@ function desenha() {
     auto.redesenha = false
     const rolo = corpo.scrollTop; corpo.innerHTML = desenhaAuto(); ligaAuto(corpo); corpo.scrollTop = rolo; return
   }
-  if (aba === 'pedidos' && cobModo) { corpo.innerHTML = desenhaCob(); ligaCob(corpo); return }
+  if (aba === 'pedidos' && cobModo) {
+    // A LISTA REDESENHADA (pulso, passar de numero) fica onde ele estava rolando
+    const eraLista = cobListaNaTela, rolo = corpo.scrollTop
+    corpo.innerHTML = desenhaCob(); ligaCob(corpo)
+    if (eraLista && cobListaNaTela) corpo.scrollTop = rolo
+    return
+  }
   if (aba === 'pedidos') { corpo.innerHTML = desenhaPedidos(); ligaPedidos(corpo); voltaFoco(_foco); return }
 
   const itens = visiveis()
@@ -2481,6 +2495,10 @@ function aplicaModo(v) {
   auto.edita = null
   auto.quem = ''              // o "ver como" mudou: a aba volta pro padrao (o cobrador visto, ou a casa)
   cob = { fone: '', carregando: false, pedidos: [], erro: '', sel: 0, prontos: cob.prontos || [], em: 0 }
+  // a lista de clientes e de outra pessoa agora (ou de ninguem): rele do zero
+  cobGen++
+  cobL = { pedidos: [], eu: '', nums: [], sig: '', em: 0, carregando: false, erro: '' }
+  cobVer = ''; cobPassa = { id: '', salvando: false, erro: '' }
   // O ROTEIRO E OUTRO (de venda pra cobranca, ou de volta): rele na hora em vez de esperar o vazio.
   roteiro = { messages: [], sequences: [], media: [], mediaBase: '' }
   assinaturaRoteiro = ''        // a lista foi zerada: a proxima leitura TEM que redesenhar
@@ -2494,7 +2512,7 @@ function aplicaModo(v) {
   else desenha()
 }
 function mostraAbaAuto() { const a = $('aba-auto'); if (a) a.hidden = !(cobModo || souDir) }
-try { if (window.swp.aoMudarModo) window.swp.aoMudarModo((v) => { if (v !== cobModo) aplicaModo(v); else pegaRoteiro() }) } catch (_) { /* painel velho sem o evento: o pulso pega */ }
+try { if (window.swp.aoMudarModo) window.swp.aoMudarModo((v) => { if (v !== cobModo) aplicaModo(v); else { pegaRoteiro(); cobL.em = 0 } }) } catch (_) { /* painel velho sem o evento: o pulso pega */ }
 // `semGuarda` (05/11/2026): a releitura pedida pela PROPRIA ficha depois de gravar redesenha sempre,
 // como o quadro faz; so a releitura de fundo (30 s, troca de conversa) respeita o que ele esta fazendo.
 async function puxaCob(fone, forca, semGuarda) {
@@ -2765,13 +2783,39 @@ function ligaAuto(corpo) {
 function desenhaCob() {
   const vazio = (t) => '<div class="vazio">' + esc(t) + '</div>'
   if (!C) return vazio('Atualize o app pra ver a ficha de cobrança.')
-  if (!estadoWa.phone) return vazio(estadoWa.grupo ? 'Conversa de grupo não tem pedido.' : 'Abra a conversa de um cliente pra ver o pedido dele.')
-  if (estadoWa.lid) return vazio('Esta conversa não mostra o telefone, então não dá pra achar o pedido.')
-  if (cob.carregando && !cob.pedidos.length) return vazio('Procurando o pedido na dash...')
-  if (cob.erro && !cob.pedidos.length) return vazio('Não deu pra falar com a dash: ' + cob.erro)
-  if (!cob.pedidos.length) return vazio('Nenhum pedido desse telefone na dash.')
+  // TROCOU DE CONVERSA: volta pro automatico (a ficha, se ela tiver pedido) e fecha a pergunta aberta
+  const fone = String(estadoWa.phone || '').replace(/\D/g, '')
+  if (cobVerFone !== fone) { cobVerFone = fone; cobVer = ''; if (!cobPassa.salvando) cobPassa = { id: '', salvando: false, erro: '' } }
+  const comPedido = !!fone && !estadoWa.lid && !estadoWa.grupo
+  if (comPedido && cob.carregando && !cob.pedidos.length) { cobListaNaTela = false; return vazio('Procurando o pedido na dash...') }
+  const temFicha = comPedido && cob.pedidos.length > 0
+  // A LISTA (14/11/2026, ver A LISTA DE CLIENTES DA ABA COBRANCA): sem pedido na conversa aberta (ou sem
+  // conversa) ela vem sozinha; com pedido, a ficha vem primeiro e "Todos os clientes" troca.
+  const seletor = temFicha && window.swp.cobLista
+    ? '<div class="cl-ver"><button data-cobver="ficha" class="' + (cobVer !== 'lista' ? 'on' : '') + '">Este cliente</button>'
+      + '<button data-cobver="lista" class="' + (cobVer === 'lista' ? 'on' : '') + '">Todos os clientes</button></div>'
+    : ''
+  if (!temFicha || cobVer === 'lista') {
+    if (!window.swp.cobLista) {
+      cobListaNaTela = false
+      if (!fone) return vazio(estadoWa.grupo ? 'Conversa de grupo não tem pedido.' : 'Abra a conversa de um cliente pra ver o pedido dele.')
+      if (estadoWa.lid) return vazio('Esta conversa não mostra o telefone, então não dá pra achar o pedido.')
+      if (cob.erro) return vazio('Não deu pra falar com a dash: ' + cob.erro)
+      return vazio('Nenhum pedido desse telefone na dash.')
+    }
+    let nota = ''
+    if (!temFicha) {
+      if (estadoWa.grupo) nota = 'Conversa de grupo não tem pedido.'
+      else if (estadoWa.lid) nota = 'Esta conversa não mostra o telefone, então não dá pra achar o pedido.'
+      else if (fone && cob.erro) nota = 'Não deu pra falar com a dash: ' + cob.erro
+      else if (fone) nota = 'Nenhum pedido desse telefone na dash.'
+    }
+    cobListaNaTela = true
+    return seletor + (nota ? '<div class="cl-nota">' + esc(nota) + '</div>' : '') + desenhaListaCob()
+  }
+  cobListaNaTela = false
   const p = cob.pedidos[cob.sel] || cob.pedidos[0]
-  let h = ''
+  let h = seletor
   // CLIENTE COM MAIS DE UM PEDIDO: escolhe qual (o mais novo vem primeiro).
   if (cob.pedidos.length > 1) {
     h += '<div class="cob-outros">' + cob.pedidos.map((x, i) => '<button data-sel="' + i + '" class="' + (i === cob.sel ? 'on' : '') + '">'
@@ -2781,6 +2825,15 @@ function desenhaCob() {
   return h
 }
 function ligaCob(corpo) {
+  for (const b of corpo.querySelectorAll('[data-cobver]')) {
+    b.onclick = () => {
+      if (b.dataset.cobver === (cobVer === 'lista' ? 'lista' : 'ficha')) return
+      cobVer = b.dataset.cobver
+      if (cobVer === 'lista') puxaListaCob(false)
+      desenha(); corpo.scrollTop = 0
+    }
+  }
+  if (cobListaNaTela) { ligaListaCob(corpo); return }
   for (const b of corpo.querySelectorAll('.cob-outros [data-sel]')) b.onclick = () => { cob.sel = Number(b.dataset.sel) || 0; desenha() }
   const p = cob.pedidos[cob.sel] || cob.pedidos[0]
   if (!p || !C) return
@@ -2798,6 +2851,146 @@ function ligaCob(corpo) {
     },
     recarrega: async () => { await puxaCob(cob.fone, true, true) },
   })
+}
+
+// ── A LISTA DE CLIENTES DA ABA COBRANCA (14/11/2026) ─────────────────────────────────────────────
+// Pedido do Bruno, pelo Bryan (dois numeros): "quando ele troca de numero de cobranca para outro, ele nao
+// visualiza nenhuma das cobrancas (...) gostaria que aparecessem ali os leads, mesmo que sejam de outro
+// numero, porem com um pouco mais apagado, indicando que aquele lead e de outro numero (...) apenas para a
+// gente ter ali uma nocao". E "uma opcao (...) bem discreta para ele trocar o lead de um numero para outro,
+// porem com aviso de que o lead ja chamou no outro numero (...) caso o lead nunca tenha chamado, ele so
+// troca normalmente".
+// E a AGENDA do quadro (C.agenda, a mesma ordem: quem escreveu, atrasados, sem retorno, hoje, chegando,
+// proximos), so os dele (o "so os meus" do quadro). O servidor diz de qual numero e cada cliente (`numCli`,
+// a mesma regra do link de acompanhar) e em quais ele ja escreveu (`falou`). Com mais de um numero, o
+// cliente do OUTRO vem apagado, com o final daquele numero; as setas passam ele pra este. Ja conversou no
+// outro: pergunta antes, dizendo o que muda. Clicar no nome abre a conversa dele, no numero dele.
+const IC_TROCA = svg('<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>')
+const fimNum = (n8) => String(n8 || '').slice(-4)
+async function puxaListaCob(forca) {
+  if (!window.swp.cobLista || cobL.carregando) return
+  if (!forca && cobL.sig && Date.now() - cobL.em < 60000) return
+  const gen = cobGen
+  cobL.carregando = true
+  cobL.em = Date.now()
+  let r = null
+  try { r = await window.swp.cobLista(cobL.sig) } catch (_) { r = null }
+  if (gen !== cobGen) return
+  cobL.carregando = false
+  if (!r || r.ok === false) cobL.erro = humano((r && r.erro) || 'não deu pra falar com a dash')
+  else {
+    cobL.erro = ''
+    if (!r.igual) {
+      cobL.pedidos = Array.isArray(r.pedidos) ? r.pedidos : []
+      cobL.eu = String(r.eu || '')
+      cobL.nums = (Array.isArray(r.nums) ? r.nums : []).filter((x) => x && x.n8).map((x) => ({ n8: String(x.n8), num: String(x.num || '') }))
+      cobL.sig = String(r.sig || '')
+    }
+  }
+  if (aba === 'pedidos' && cobModo && cobListaNaTela) desenha()
+}
+function desenhaListaCob() {
+  const vazio = (t) => '<div class="vazio">' + esc(t) + '</div>'
+  cobListaNk = String(estadoWa.nk || '')
+  if (!cobL.sig) {
+    if (!cobL.carregando && !cobL.erro) setTimeout(() => puxaListaCob(true), 0)
+    return vazio(cobL.erro ? 'Não deu pra falar com a dash: ' + cobL.erro : 'Carregando seus clientes...')
+  }
+  const aqui = cobListaNk.slice(-8)
+  const n8s = cobL.nums.map((x) => x.n8)
+  // SO COM MAIS DE UM NUMERO E COM UM DELES NA TELA ha o que apagar e o que passar
+  const multi = n8s.length > 1 && n8s.includes(aqui)
+  const meus = cobL.pedidos.filter((p) => !p.cob || p.cob === cobL.eu || Number(p.contato) > 0)
+  const ag = C.agenda(meus)
+  const outro = (p) => multi && !!p.numCli && p.numCli !== aqui
+  // dentro de cada grupo, os deste numero (e os que ainda nao chamaram) primeiro; a ordem da agenda segue
+  const ordena = (l) => l.filter((p) => !outro(p)).concat(l.filter(outro))
+  const grupos = [
+    ['Entraram em contato', '#24c278', ag.contato, 'contato'], ['Atrasados', '#ef4444', ag.atrasados, ''], ['Sem retorno', '#f59e0b', ag.semRetorno, ''],
+    ['Hoje', '#3b82f6', ag.hoje, ''], ['Chegando', '#818cf8', ag.chegando, 'chegando'], ['Próximos', '#0ea5e9', ag.proximos, ''],
+  ].filter((g) => g[2].length)
+  if (!grupos.length) return vazio('Nenhum cliente na sua fila de cobrança.')
+  let h = '<div class="cl">'
+  if (multi) {
+    const nOutro = grupos.flatMap((g) => g[2]).filter(outro).length
+    if (nOutro) h += '<div class="cl-topo">' + nOutro + (nOutro > 1 ? ' clientes são' : ' cliente é') + ' de outro número e aparece' + (nOutro > 1 ? 'm' : '') + ' mais apagado' + (nOutro > 1 ? 's' : '') + '.</div>'
+  }
+  for (const [rot, cor, lista, tipo] of grupos) {
+    h += '<div class="cl-sec" style="--c:' + cor + '"><i></i><b>' + esc(rot) + '</b><span>' + lista.length + '</span></div>'
+    for (const p of ordena(lista)) h += linhaCli(p, tipo, multi, aqui, outro(p))
+  }
+  return h + '</div>'
+}
+function linhaCli(p, tipo, multi, aqui, deOutro) {
+  const ag = C.quandoAgend(p)
+  // sem retorno marcado: a etapa (Retirar nos Correios importa) ou, na Cobranca, quando foi entregue
+  const etapa = p.col === 'Entregues' && p.entrega && p.entrega.data ? String(p.entrega.label || 'Entregue em') + ' ' + String(p.entrega.data).slice(0, 5) : C.colDef(p.col).lbl
+  const quando = tipo === 'contato' ? 'escreveu ' + C.haQuanto(Number(p.contato))
+    : tipo === 'chegando' ? C.colDef(p.col).lbl
+      : (!isNaN(ag) ? 'retorno ' + C.quandoTxt(ag).toLowerCase() : etapa)
+  const valor = !p.pago && Number(p.saldo) > 0 ? Number(p.saldo) : Number(p.valor)
+  const nOutro = deOutro ? (cobL.nums.find((x) => x.n8 === p.numCli) || {}).num || p.numCli : ''
+  // as setas: cliente do outro numero, ou que ainda nao chamou ninguem (vai sem pergunta)
+  const passa = multi && p.numCli !== aqui
+  const armado = cobPassa.id === String(p.id)
+  let h = '<div class="cl-it' + (deOutro ? ' outro' : '') + (armado ? ' armado' : '') + '">'
+    + '<button class="cl-abre" data-cl="' + esc(p.id) + '" title="' + esc(deOutro ? 'Conversa no número ' + nOutro + '. Clique pra abrir.' : 'Abrir a conversa') + '">'
+    + '<b>' + esc(p.nome) + '</b><span class="cl-l2">' + esc(C.brl(valor) + ' · ' + quando) + '</span></button>'
+    + (deOutro ? '<span class="cl-no" title="' + esc('Este cliente é do número ' + nOutro) + '">' + esc(fimNum(p.numCli)) + '</span>' : '')
+    + (passa ? '<button class="cl-passa" data-passa="' + esc(p.id) + '" title="Passar pra este número"' + (cobPassa.salvando ? ' disabled' : '') + '>'
+      + (armado && cobPassa.salvando ? IC_GIRA : IC_TROCA) + '</button>' : '')
+    + '</div>'
+  // A PERGUNTA, so pra quem ja escreveu noutro numero dele
+  if (armado && !cobPassa.salvando && (cobPassa.pergunta || cobPassa.erro)) {
+    const ondeFalou = (p.falou || []).filter((n8) => n8 !== aqui).map(fimNum)
+    h += '<div class="cl-pergunta">'
+      + (cobPassa.pergunta ? esc('Ele já conversou no número final ' + ondeFalou.join(' e ') + '. Passando, mande a primeira mensagem por este número: as mensagens automáticas dele só mudam pra cá depois disso.') : '')
+      + (cobPassa.erro ? '<div class="cl-erro">' + esc(cobPassa.erro) + '</div>' : '')
+      + '<div class="cl-bts"><button class="bt pri" data-passa-sim="' + esc(p.id) + '">Passar</button><button class="bt sec" data-passa-nao="1">Cancelar</button></div></div>'
+  }
+  return h
+}
+function ligaListaCob(corpo) {
+  for (const b of corpo.querySelectorAll('[data-cl]')) b.onclick = () => abreCli(b.dataset.cl)
+  for (const b of corpo.querySelectorAll('[data-passa]')) b.onclick = (ev) => { ev.stopPropagation(); passaCli(b.dataset.passa, false) }
+  for (const b of corpo.querySelectorAll('[data-passa-sim]')) b.onclick = () => passaCli(b.dataset.passaSim, true)
+  for (const b of corpo.querySelectorAll('[data-passa-nao]')) b.onclick = () => { cobPassa = { id: '', salvando: false, erro: '' }; desenha() }
+}
+async function abreCli(id) {
+  const p = cobL.pedidos.find((x) => String(x.id) === String(id))
+  if (!p || !window.swp.cobAbre) return
+  const n = p.numCli ? (cobL.nums.find((x) => x.n8 === p.numCli) || {}).num || '' : ''
+  let r = null
+  try { r = await window.swp.cobAbre(p.wa, n) } catch (_) { r = null }
+  if (!r || !r.ok) rodape(humano((r && r.erro) || 'não consegui abrir essa conversa agora'), 0, true)
+  else if (r.aviso) rodape(r.aviso, 0, true)
+  else if (r.fechado) rodape('Abrindo o número ' + (r.numero || '') + '. A conversa abre quando ele ficar pronto.', 0, true)
+}
+// `certo` = ele ja respondeu a pergunta (ou nao havia o que perguntar)
+async function passaCli(id, certo) {
+  const p = cobL.pedidos.find((x) => String(x.id) === String(id))
+  const nk = String(estadoWa.nk || '')
+  if (!p || !nk || cobPassa.salvando || !window.swp.cobNumero) return
+  const aqui = nk.slice(-8)
+  const falouNoutro = (p.falou || []).some((n8) => n8 !== aqui)
+  if (falouNoutro && !certo) {
+    // segundo clique nas setas fecha a pergunta
+    cobPassa = cobPassa.id === String(id) && cobPassa.pergunta ? { id: '', salvando: false, erro: '' } : { id: String(id), salvando: false, erro: '', pergunta: true }
+    desenha(); return
+  }
+  cobPassa = { id: String(id), salvando: true, erro: '', pergunta: falouNoutro }
+  desenha()
+  let r = null
+  try { r = await window.swp.cobNumero(p.wa, nk) } catch (_) { r = null }
+  if (r && r.ok) {
+    p.numCli = String(r.n8 || aqui)
+    cobPassa = { id: '', salvando: false, erro: '' }
+    cobL.em = 0                     // a proxima volta do pulso rele do servidor
+    rodape(String(p.nome || 'O cliente').split(' ')[0] + ' passou pra este número', 0, true)
+  } else {
+    cobPassa = { id: String(id), salvando: false, erro: humano((r && r.erro) || 'não deu pra passar agora'), pergunta: falouNoutro }
+  }
+  desenha()
 }
 
 // ───────────────────────────────────────────────────────────── criar e organizar
@@ -3555,6 +3748,10 @@ async function pulso() {
     const f = String(estadoWa.phone || '').replace(/\D/g, '')
     if (f !== cob.fone) puxaCob(f, false)
     else if (f && aba === 'pedidos' && Date.now() - cob.em > 30000 && !digitandoNaFicha()) puxaCob(f, true)
+    if (aba === 'pedidos' && cobListaNaTela) {
+      if (String(estadoWa.nk || '') !== cobListaNk) desenha()
+      if (Date.now() - cobL.em > 60000) puxaListaCob(true)
+    }
   }
   // a aba Automacoes aberta se atualiza de 30 em 30 s (o "hoje" e os ultimos envios andam sozinhos)
   if ((cobModo || souDir) && aba === 'auto' && Date.now() - auto.em > 30000 && !auto.carregando && !auto.salvando && !auto.edita) puxaAuto(true)
