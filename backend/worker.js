@@ -19215,6 +19215,15 @@ async function handleSwWeb(req, env, path) {
       if (ts > (porN8.get(n8) || 0)) porN8.set(n8, ts);
     }
     const numeros = [...porN8.entries()].map(([n8, ts]) => ({ n8, ts })).sort((a, b) => b.ts - a.ts);
+    // O CLIENTE QUE O COBRADOR PASSOU PRA UM NUMERO (14/11/2026, POST /api/swweb/cobranca/numero) abre
+    // nesse numero, acima de onde ele conversou: vai na frente com uma hora que nenhuma mensagem alcanca
+    // (o app escolhe a mais recente entre o que a pagina e o servidor viram).
+    try {
+      await _cobNumTabela(env);
+      const mk = await env.DB.prepare('SELECT nk, origem FROM cob_num_cli WHERE k = ?').bind(_waNumKey(fone)).first();
+      const m8 = mk ? String(mk.nk || '').slice(-8) : '';
+      if (mk && String(mk.origem) === 'manual' && dele.has(m8)) return json({ ok: true, numeros: [{ n8: m8, ts: 4102444800, manual: true }, ...numeros.filter((x) => x.n8 !== m8)] });
+    } catch (_) { /* sem a marca, vale onde ele falou */ }
     return json({ ok: true, numeros });
   }
 

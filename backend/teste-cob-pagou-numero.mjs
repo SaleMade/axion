@@ -258,6 +258,8 @@ vale('telefone invalido: 400', mv.st === 400, mv.st);
 mv = await chama(TK.bry, '/api/swweb/cobranca/numero', { phone: '5531900004001', nk: NK_BRY2 });
 vale('o Bryan passa o Beto pro 2248', mv.st === 200 && mv.d.ok === true && mv.d.n8 === '66632248', JSON.stringify(mv.d));
 const marca = sq.prepare("SELECT * FROM cob_num_cli WHERE k='3100004001'").get();
+let ct = await chama(TK.bry, '/api/swweb/cobranca/contato?phone=5531900004001');
+vale('o icone do quadro (onde abrir a conversa) passa a mandar o 2248 na frente', ct.d.numeros && ct.d.numeros[0].n8 === '66632248' && ct.d.numeros[0].manual === true && ct.d.numeros.some((x) => x.n8 === '27335679'), JSON.stringify(ct.d));
 vale('a marca fica como escolha a mao', !!marca && marca.nk === NK_BRY2 && marca.origem === 'manual' && marca.at === 'bry', JSON.stringify(marca));
 q = await chama(TK.bry, '/api/swweb/cobranca');
 vale('o quadro passa a dizer 2248, e continua sabendo que ele falou no 5679 (o aviso)', ped('4001').numCli === '66632248' && JSON.stringify(ped('4001').falou) === '["27335679"]', JSON.stringify([ped('4001').numCli, ped('4001').falou]));
