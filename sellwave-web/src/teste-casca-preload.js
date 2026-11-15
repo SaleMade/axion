@@ -106,7 +106,7 @@ const ESTADO = () => (cobranca ? {
     // em aquecimento: area propria e interruptor liberado
     // lim_dia ZERO de proposito: o teto de quem aquece vem da RAMPA (`aquec.teto`), nao do campo do
     // chip. Era assim que o 8551 aparecia na tela do Bruno, e por isso ele ficava sem contador.
-    { numero: '5515974068551', at: 'a1', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 3, teto: 5, agora: 2 } },
+    { numero: '5515974068551', at: 'a1', dono: 'Guilherme', roleta: true, dist: 'limite', fila: { pos: 1, st: 'vez' }, leads_hoje: 3, lim_dia: 0, cor: '', st: 'aquecimento', aquec: { dia: 3, teto: 5, agora: 2, regra: '5 até o dia 10, 10 até o 20, 15 até o 30 e 50 do dia 31 em diante' } },
     // estado que NAO recebe: sem interruptor
     { numero: '5515977001122', at: 'a1', dono: 'Guilherme', roleta: false, dist: 'roleta', leads_hoje: 0, lim_dia: 0, cor: '', st: 'ativo', em_uso: false, apto: false, status: 'Em análise', ...(usoExtra['5515977001122'] ? { uso: usoExtra['5515977001122'] } : {}) },
     // O SERVIDOR REPROVOU, mas o campo cru `em_uso` ficou true parado (ex: tag virou Restrito e

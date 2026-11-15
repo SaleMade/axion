@@ -2059,6 +2059,15 @@ app.whenReady().then(async () => {
   conta('com o foguinho, e a esquerda do icone do WhatsApp',
     selo8551 && selo8551.fogo === true && /^aq,zap/.test(selo8551.ordem), JSON.stringify(selo8551))
   conta('na cor do aquecimento', selo8551 && selo8551.cor === 'rgb(245, 158, 11)', selo8551 && selo8551.cor)
+  // A RAMPA DO PASSE DE MOUSE VEM DO SERVIDOR (15/11/2026): a tabela mudou e o texto fixo no app
+  // ficou mentindo. Com `aquec.regra` o texto e o do servidor; sem ela, nenhum numero (nunca o velho).
+  const dicas = await js2('(() => { const d = (re) => { const l = [...document.querySelectorAll(".num")].find(e => re.test(e.textContent));'
+    + ' const a = l && l.querySelector(".sub .aq"); return a ? a.getAttribute("title") : null };'
+    + ' return { com: d(/97406-8551/), sem: d(/97700-5566|7700-5566/) } })()')
+  conta('a rampa do passe de mouse e a que o servidor manda',
+    dicas && dicas.com === 'Dia 3 do aquecimento. O teto de leads sobe conforme os dias passam: 5 até o dia 10, 10 até o 20, 15 até o 30 e 50 do dia 31 em diante.', JSON.stringify(dicas))
+  conta('e sem a regra do servidor nao escreve numero nenhum (nem a rampa velha)',
+    dicas && dicas.sem === 'Dia 8 do aquecimento. O teto de leads sobe conforme os dias passam.' && !/35|16 em diante/.test(dicas.sem), JSON.stringify(dicas))
   // E o contador do mesmo numero sai da RAMPA: o lim_dia dele e zero.
   const cnt8551 = await js2('(() => { const l = [...document.querySelectorAll(".num")].find(e => /97406-8551/.test(e.textContent));'
     + ' const c = l && l.querySelector(".cnt"); return c ? c.textContent.replace(/\s+/g, " ").trim() : "" })()')

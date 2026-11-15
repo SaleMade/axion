@@ -514,8 +514,14 @@ function linha(n) {
   // "aquecendo" cobria os dois. O dia vem do servidor (`aquec.dia`) porque ele e contado do
   // warm_start - a tela nao recalcula, pela mesma razao do `apto`.
   const dia = Number(n.aquec && n.aquec.dia) || 0
+  // A RAMPA VEM DO SERVIDOR (`aquec.regra`, 15/11/2026). Os numeros estavam escritos aqui e a
+  // rampa mudou (de 15 dias pra um mes, no maximo 15 leads): cada troca exigiria versao nova do app
+  // so pra corrigir este texto. Sem a regra (worker antigo), a frase fica sem numero nenhum, que e
+  // melhor que numero errado.
+  const regra = String((n.aquec && n.aquec.regra) || '').trim()
   const fogo = dia
-    ? '<span class="aq" title="Dia ' + dia + ' do aquecimento. O teto de leads sobe conforme os dias passam: 5 até o dia 3, 10 até o 6, 20 até o 9, 35 até o 15, e 50 do 16 em diante.">'
+    ? '<span class="aq" title="Dia ' + dia + ' do aquecimento. O teto de leads sobe conforme os dias passam'
+      + (regra ? ': ' + esc(regra) : '') + '.">'
       + FOGO + 'dia ' + dia + '</span>'
     : ''
   // O NUMERO DO CHIP NA CONTINGENCIA (19/10/2026, pedido do Bruno: "eu me baseio muito na numeracao deles,
