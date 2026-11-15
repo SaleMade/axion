@@ -15695,7 +15695,7 @@ const BOT_IA_MANUAL = [
  {"t": "Fechei o app, continuo recebendo?", "q": "se eu fechar o sellwave web eu continuo recebendo lead?", "k": ["app fechado", "continuo recebendo", "fechar o app", "fechei o app", "internet caiu", "internet piscou"], "r": "Não. Fechou o app, em poucos minutos seus interruptores desligam sozinhos e, ao abrir de novo, você liga na mão. Internet piscando rapidinho não desliga, só depois de uns 5 minutos fora. Exceção: de madrugada, sem ninguém do time aberto, entra o plantão.", "g": "vend"},
  {"t": "Plantão da madrugada", "q": "abri o app de manha e chegou um monte de lead de uma vez", "k": ["acumulou", "de manha", "de uma vez", "madrugada", "plantao", "um monte de lead"], "r": "É o plantão da madrugada: quando ninguém do time está com o app aberto, a roleta continua mandando pros números de quem estava trabalhando, pra não perder o clique pago. As mensagens aparecem quando você abre. Responde esses primeiro, que estão esperando, e liga seus interruptores.", "g": "vend"},
  {"t": "Outro vendedor recebendo mais", "q": "por que o outro vendedor ta recebendo mais lead que eu?", "k": ["distribuicao", "divide", "dividindo", "mais lead que eu", "menos lead", "recebendo mais"], "r": "A roleta iguala os leads do dia entre os vendedores: quem está atrás recebe até empatar, quem está na frente espera. Se entrou de uma vez o que caiu de madrugada nos seus números, ela compensa mandando pros outros por um tempo. É normal. Só confere se seus interruptores estão verdes.", "g": "vend"},
- {"t": "Número novo em aquecimento", "q": "meu numero novo quase nao recebe lead, ta com problema?", "k": ["aquecendo", "aquecimento", "chip novo", "numero novo", "quase nao recebe", "recebe pouco"], "r": "É o aquecimento: número novo recebe pouco de propósito e vai subindo, de 5 leads por dia no começo até 50 a partir do dia 16, liberando aos poucos ao longo do dia. Atende normal e pode vender, é o atendimento que aquece. Passar ele pra Em uso é com o Bruno.", "g": "vend"},
+ {"t": "Número novo em aquecimento", "q": "meu numero novo quase nao recebe lead, ta com problema?", "k": ["aquecendo", "aquecimento", "chip novo", "numero novo", "quase nao recebe", "recebe pouco"], "r": "É o aquecimento: número novo recebe pouco de propósito e vai subindo durante um mês, 5 leads por dia até o dia 10, 10 até o dia 20 e 15 até o dia 30 (50 do dia 31 em diante), liberando aos poucos ao longo do dia. Atende normal e pode vender, é o atendimento que aquece. Passar ele pra Em uso é com o Bruno.", "g": "vend"},
  {"t": "Limite de leads do número", "q": "meu numero bateu o limite, da pra aumentar?", "k": ["aumenta o limite", "aumentar o limite", "bateu o limite", "limite", "teto"], "r": "Bateu o limite, ele fica laranja, volta sozinho à meia-noite e o próximo número da sua fila recebe. Pra mudar: dois cliques rápidos no contador dele no SellWave Web (tipo 32/70), escolhe o teto (30, 50, 70 ou 100, que é o máximo) e Salvar. Em número de aquecimento quem manda é a rampa.", "g": "vend"},
  {"t": "Número que \"não está marcando os leads\"", "q": "chegou aviso que meu numero nao esta marcando os leads", "k": ["marcando os leads", "nao esta marcando", "nao ta marcando", "numero mudo"], "r": "Quer dizer que as mensagens dos leads desse número não estão chegando na dash, então ele saiu da roleta por segurança. Fecha e abre ele no SellWave Web (se o app pedir atualização, atualiza antes). Ele volta sozinho pra roleta quando a primeira mensagem dele aparecer na dash.", "g": "vend"},
  {"t": "De quem é o lead", "q": "o cliente clicou de novo e caiu em outro vendedor, de quem e o lead?", "k": ["caiu em outro", "clicou de novo", "de quem e o lead", "lead de quem", "meu lead foi", "roubou meu lead"], "r": "O lead é de quem recebeu: conta pra quem era dono do número na hora que ele chegou, mesmo que o número mude de mão depois. Se o cliente clicar de novo no anúncio e cair em outro vendedor, vale o último clique: dali pra frente conversa e venda são do novo. Caso específico, a direção confere.", "g": "vend"},
@@ -19712,7 +19712,7 @@ async function handleSwWeb(req, env, path) {
         // `teto` e a cota do DIA INTEIRO (verdade as 6h e as 23h); `agora` e quanto ja liberou
         // nesta hora, e vem DAQUI de proposito: calcular no navegador usaria o fuso do cliente e
         // as duas telas passariam a discordar.
-        aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim }; })() : null,
+        aquec: _chipAquecendo(c, _ids.aquec) ? (() => { const a = _numDoAquecimento(c); return { dia: a.dia, teto: a.teto, agora: a.lim, regra: _textoDaRampa() }; })() : null,
         // O status cru, pro app nao ter que adivinhar pelo rotulo traduzido.
         st: String(c.st || ''),
         // O ESTADO DA CONEXAO no SellWave Web, pra tela poder dizer "conectado" ou "caiu" em vez
@@ -31026,7 +31026,8 @@ async function _leadsHojePorAt(env, dayStart){
 // AQUECIMENTO DE CHIP (16/10/2026, pedido do Bruno). Numero em aquecimento DEIXA de ficar fora da
 // roleta e passa a receber pouco, crescendo. Palavras dele: alem dos numeros em uso, o vendedor tem
 // N em aquecimento; eles recebem poucos leads por dia, o vendedor ATENDE esses leads normalmente -
-// e e o atendimento de verdade que aquece o chip - e o teto cresce ao longo de 15 dias. Pode
+// e e o atendimento de verdade que aquece o chip - e o teto cresce ao longo de UM MES (eram 15 dias
+// ate 15/11/2026, ver a rampa logo abaixo). Pode
 // inclusive vender neles.
 //
 // NAO HA SINAL NOVO NA ROLETA, e isso e deliberado. Ja existiu rampa de aquecimento aqui e ela foi
@@ -31037,17 +31038,32 @@ async function _leadsHojePorAt(env, dayStart){
 // num numero e 50 no outro no mesmo dia".
 // Entao aquecimento reusa o que JA existe: o numero entra na roleta em modo `limite`, com `lim_dia`
 // calculado. O balanceador nao sabe que existe aquecimento.
+//
+// UM MES, NO MAXIMO 15 (15/11/2026, pedido do Bruno). A rampa era de 15 dias (5, 10, 20, 35 e 50 do
+// dia 16 em diante) e numero aquecido assim continuava sendo banido. Palavras dele: "o WhatsApp
+// realmente libera e fica quente mesmo quando ele passa de 1 mes" e "quero que, no maximo, cheguem
+// 15 leads nesses numeros nos ultimos dias do mes". Os degraus de 10 dias sao escolha nossa (ele
+// pediu o mes e o teto de 15); do dia 31 em diante volta pros 50 de antes. MEXEU AQUI, MEXE NO
+// lib/chips.js da dash (gemeo) e confira teste-aquecimento-roleta.mjs e scripts/teste-aquecimento.mjs.
 const RAMPA_AQUECIMENTO = [
-  { ate: 3, teto: 5 },      // dias 1 a 3
-  { ate: 6, teto: 10 },     // dias 4 a 6
-  { ate: 9, teto: 20 },     // dias 7 a 9
-  { ate: 15, teto: 35 },    // dias 10 a 15
+  { ate: 10, teto: 5 },     // dias 1 a 10
+  { ate: 20, teto: 10 },    // dias 11 a 20
+  { ate: 30, teto: 15 },    // dias 21 a 30: o maximo do aquecimento
 ];
-const TETO_AQUECIDO = 50;   // dia 16 em diante, e fica aqui ate ele mover pra "Em uso" NA MAO
+const TETO_AQUECIDO = 50;   // dia 31 em diante, e fica aqui ate ele mover pra "Em uso" NA MAO
 function limiteDoAquecimento(dia) {
   const d = Math.max(1, Math.floor(Number(dia) || 1));
   for (const f of RAMPA_AQUECIMENTO) if (d <= f.ate) return f.teto;
   return TETO_AQUECIDO;
+}
+// A RAMPA ESCRITA PRA GENTE LER, montada da propria tabela (15/11/2026). Vai pro app em
+// `aquec.regra` (o passe de mouse do selo "dia N"): o app tinha os numeros digitados a mao e
+// cada troca de rampa exigiria versao nova do app so pra corrigir um texto. Gemeo de
+// textoDaRampa no lib/chips.js da dash.
+function _textoDaRampa() {
+  const partes = RAMPA_AQUECIMENTO.map((f, i) => f.teto + (i === 0 ? ' até o dia ' : ' até o ') + f.ate);
+  const fim = RAMPA_AQUECIMENTO[RAMPA_AQUECIMENTO.length - 1].ate + 1;
+  return partes.join(', ') + ' e ' + TETO_AQUECIDO + ' do dia ' + fim + ' em diante';
 }
 
 // O TETO ACUMULA AO LONGO DO DIA, E ISSO NAO E ENFEITE: sem ele, o chip em aquecimento leva a cota

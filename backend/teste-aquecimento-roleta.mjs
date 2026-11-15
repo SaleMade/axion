@@ -2,8 +2,8 @@
 //
 // O pedido do Bruno: numero EM AQUECIMENTO deixa de ficar fora da roleta e passa a receber pouco,
 // crescendo, porque e o ATENDIMENTO que aquece o chip. A rampa e a tabela que ele confirmou:
-//   dias 1-3 -> 5/dia | 4-6 -> 10 | 7-9 -> 20 | 10-15 -> 35 | 16+ -> 50 (e fica, ate ele mover
-//   pra "Em uso" na mao)
+//   dias 1-10 -> 5/dia | 11-20 -> 10 | 21-30 -> 15 | 31+ -> 50 (e fica, ate ele mover pra "Em uso"
+//   na mao). Desde 15/11/2026: um mes, no maximo 15 nos ultimos dias (era 15 dias, ate 35 e 50 no 16).
 //
 // POR QUE ESTE TESTE EXISTE E PRECISA SER CHATO: ja houve rampa de aquecimento nesta roleta e ela
 // foi REMOVIDA depois de incidente real (21/07/2026) - dava teto de rajada menor pro numero novo e
@@ -39,17 +39,17 @@ const blocoRampa = src.slice(iRampa, iFila);
 const blocoFila = src.slice(iFila, iFim);
 
 const api = new Function(blocoRampa + blocoFila + `
-  return { RAMPA_AQUECIMENTO, TETO_AQUECIDO, limiteDoAquecimento, DIA_ACUM,
+  return { RAMPA_AQUECIMENTO, TETO_AQUECIDO, limiteDoAquecimento, _textoDaRampa, DIA_ACUM,
            _tetoAcumulado, _diaDoAquecimento, _chipAquecendo, _chipEmUso, _numDoAquecimento,
            _numNoLimite, _aplicaFilaLimite };`)();
 
 console.log('\nTESTE DO AQUECIMENTO NA ROLETA\n');
 
 // ── 1) A RAMPA, exatamente como ele confirmou ─────────────────────────────────────────────────
-// As BORDAS sao o que erra: 3 e 4, 6 e 7, 9 e 10, 15 e 16.
+// As BORDAS sao o que erra: 10 e 11, 20 e 21, 30 e 31.
 const esperado = {
-  1: 5, 2: 5, 3: 5, 4: 10, 5: 10, 6: 10, 7: 20, 8: 20, 9: 20,
-  10: 35, 12: 35, 15: 35, 16: 50, 30: 50, 365: 50,
+  1: 5, 3: 5, 10: 5, 11: 10, 15: 10, 16: 10, 20: 10,
+  21: 15, 25: 15, 30: 15, 31: 50, 60: 50, 365: 50,
 };
 for (const [dia, teto] of Object.entries(esperado)) {
   vale('dia ' + dia + ' -> ' + teto + '/dia', api.limiteDoAquecimento(Number(dia)) === teto,
@@ -57,6 +57,14 @@ for (const [dia, teto] of Object.entries(esperado)) {
 }
 vale('dia 0 ou lixo cai no dia 1, nunca em teto alto',
   api.limiteDoAquecimento(0) === 5 && api.limiteDoAquecimento(null) === 5 && api.limiteDoAquecimento('abc') === 5);
+// O pedido de 15/11/2026: durante o mes de aquecimento nenhum dia passa de 15.
+vale('nenhum dia do mes passa de 15',
+  Array.from({ length: 30 }, (_, i) => api.limiteDoAquecimento(i + 1)).every((v) => v <= 15));
+// O texto que vai pro app sai da tabela, entao acompanha qualquer troca de rampa.
+vale('o texto da rampa (passe de mouse do app) e o da tabela de agora',
+  api._textoDaRampa() === '5 até o dia 10, 10 até o 20, 15 até o 30 e 50 do dia 31 em diante', api._textoDaRampa());
+vale('e ele vai junto no aquec do /api/swweb/numeros',
+  /return \{ dia: a\.dia, teto: a\.teto, agora: a\.lim, regra: _textoDaRampa\(\) \}/.test(src));
 // O teto final NAO sobe sozinho: ele disse que fica em 50 ate mover pra "Em uso" na mao.
 vale('nao existe degrau acima de 50', api.TETO_AQUECIDO === 50 && api.limiteDoAquecimento(9999) === 50);
 
@@ -150,8 +158,8 @@ vale('warm_start podre nao vira dia gigante (teto alto por acidente)',
     const lido = api._diaDoAquecimento({ warm_start: converte(d) });
     vale('digitar dia ' + d + ' faz a roleta ler dia ' + d, lido === d, String(lido));
   }
-  vale('digitar dia 7 cai no teto de 20, nao no de 5',
-    api.limiteDoAquecimento(api._diaDoAquecimento({ warm_start: converte(7) })) === 20);
+  vale('digitar dia 21 cai no teto de 15, nao no de 5',
+    api.limiteDoAquecimento(api._diaDoAquecimento({ warm_start: converte(21) })) === 15);
 }
 
 // ── 5) O QUE ELE LEVA PRA ROLETA ──────────────────────────────────────────────────────────────
