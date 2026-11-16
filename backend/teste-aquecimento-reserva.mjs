@@ -25,8 +25,12 @@ const iRampa = src.indexOf('const RAMPA_AQUECIMENTO');
 const iFim = src.indexOf('// NUMEROS MUDOS:');
 if (iRampa < 0 || iFim < 0 || src.indexOf('function _aqReservaConta') < 0) { console.error('NAO ACHEI os trechos no worker.js'); process.exit(1); }
 const W = new Function(src.slice(iRampa, iFim) + `
-  return { _tetoAcumulado, limiteDoAquecimento, _aqVivoAte, _aqReservaConta, _aqPlacar, _aplicaFilaLimite,
-           AQ_RESERVA_JANELA, AQ_RESERVA_ULTIMA, AQ_RESERVA_CARENCIA };`)();
+  return { _tetoAcumulado, limiteDoAquecimento, _aqVivoAte, _aqReservaConta, _aqPlacar, _aplicaFilaLimite, _aqPesoCaminho,
+           AQ_RESERVA_JANELA, AQ_RESERVA_ULTIMA, AQ_RESERVA_CARENCIA, AQ_CLIQUES_POR_VAGA, DIA_ACUM };`)();
+// A REGRA DE ANTES DE 16/11 (uma vaga inteira por visita), pra comparar na simulacao do fim
+if (!/const AQ_CLIQUES_POR_VAGA = 2;/.test(src)) { console.error('NAO ACHEI AQ_CLIQUES_POR_VAGA = 2 no worker.js'); process.exit(1); }
+const W1 = new Function(src.slice(iRampa, iFim).replace('const AQ_CLIQUES_POR_VAGA = 2;', 'const AQ_CLIQUES_POR_VAGA = 1;') + `
+  return { _tetoAcumulado, _aqPlacar, DIA_ACUM };`)();
 
 console.log('\nRESERVA DO AQUECIMENTO\n');
 const MIN = 60;
@@ -58,8 +62,12 @@ vale('mistura: 3 recentes + 2 antigas com app aberto = 3', conta([agora - 1, ago
 // ── 3) o placar que a fila compara ───────────────────────────────────────────────────────────
 const lido = { visitas: { A: [agora - 60, agora - 120] }, leads: { A: 2 }, hb: { A: agora }, uso: {} };
 let pl = W._aqPlacar({ A: 1, B: 7 }, [{ nk: 'A', teto: 5 }], lido, agora);
-vale('chip que aquece: lead fresco (2, nao o cache 1) + 2 a caminho = 4', pl.placar.A === 4 && pl.res.A === 2, JSON.stringify(pl));
+vale('chip que aquece: lead fresco (2, nao o cache 1) + 2 a caminho, meia vaga cada = 3', pl.placar.A === 3 && pl.res.A === 2 && pl.leads.A === 2, JSON.stringify(pl));
+vale('a tela continua lendo o lead de verdade (2) e quantos estao a caminho (2)', pl.leads.A === 2 && pl.res.A === 2);
 vale('numero de producao nao muda (7 continua 7)', pl.placar.B === 7);
+pl = W._aqPlacar({}, [{ nk: 'A', teto: 5 }], { visitas: { A: [agora - 60] }, leads: { A: 4 }, hb: { A: agora }, uso: {} }, agora);
+vale('ULTIMA VAGA DO DIA (4 de 5): quem esta a caminho pesa a vaga inteira, 4 + 1 = 5', pl.placar.A === 5, JSON.stringify(pl));
+vale('peso: 4 a caminho com 0 de 5 = 2 vagas; com 4 de 5 = 4', W._aqPesoCaminho(4, 0, 5) === 2 && W._aqPesoCaminho(4, 4, 5) === 4);
 pl = W._aqPlacar({ A: 3 }, [{ nk: 'A', teto: 5 }], null, agora);
 vale('leitura falhou: fica so o lead, como era antes (a roleta nao para)', pl.placar.A === 3 && !Object.keys(pl.res).length);
 
@@ -70,8 +78,10 @@ const lista = [
 ];
 const vez = (lh) => W._aplicaFilaLimite(lista, lh, '2026-10-31').ficam.map((u) => u.num.slice(-4)).join(',');
 vale('sem reserva: 1 lead de 2, o chip que aquece tem a vez', vez({ 88931497: 1 }) === '1497');
-vale('com 1 a caminho: 1 + 1 = 2 de 2, a vez passa pro numero de producao', vez(W._aqPlacar({ 88931497: 1 }, [{ nk: '88931497', teto: 5 }],
-  { visitas: { 88931497: [agora - 30] }, leads: {}, hb: { 88931497: agora }, uso: {} }, agora).placar) === '3450');
+vale('com 1 a caminho: 1 + meia vaga = 1,5 de 2, o chip que aquece continua com a vez', vez(W._aqPlacar({ 88931497: 1 }, [{ nk: '88931497', teto: 5 }],
+  { visitas: { 88931497: [agora - 30] }, leads: {}, hb: { 88931497: agora }, uso: {} }, agora).placar) === '1497');
+vale('com 2 a caminho: 1 + 1 = 2 de 2, a vez passa pro numero de producao', vez(W._aqPlacar({ 88931497: 1 }, [{ nk: '88931497', teto: 5 }],
+  { visitas: { 88931497: [agora - 30, agora - 20] }, leads: {}, hb: { 88931497: agora }, uso: {} }, agora).placar) === '3450');
 
 // ── 5) REPRISE DE 31/10: o Kevin so abriu os chips as 08:19 ─────────────────────────────────
 // As 76 visitas que a fila mandou pros dois chips (horario real, BRT), na ordem em que chegaram.
@@ -99,8 +109,9 @@ for (const t of VIS31) {
   recebeu[quem.num.slice(-8)].push(t);
 }
 const n1 = recebeu[88948922].length, n2 = recebeu[88931497].length;
-vale('31/10 app fechado ate 08:19: os dois chips levam 1 visita cada em vez de 41 e 35', n1 === 1 && n2 === 1, n1 + ' e ' + n2 + ' (o resto, ' + recebeu[97011859].length + ', foi pro (17) 99701-1859)');
-vale('31/10: no pior caso (toda visita vira lead) nenhum chip passa do teto da hora', n1 <= 1 && n2 <= 1);
+// Desde 16/11 cada vaga segura 2 a caminho (AQ_CLIQUES_POR_VAGA): o teto da hora era 1, entao 2 cada.
+vale('31/10 app fechado ate 08:19: os dois chips levam 2 visitas cada (2 por vaga) em vez de 41 e 35', n1 === 2 && n2 === 2, n1 + ' e ' + n2 + ' (o resto, ' + recebeu[97011859].length + ', foi pro (17) 99701-1859)');
+vale('31/10: no pior caso (toda visita vira lead) nenhum chip passa do dobro do teto da hora', n1 <= 2 && n2 <= 2);
 
 // ── 6) REPRISE DE 30/10: rajada com o app aberto no (49) 98890-8842 do Guilherme ──────────────
 // 70 visitas das 14:23 as 14:42. Os leads foram marcados as 14:29 (2), 14:43 (2), 14:45 e 14:52.
@@ -122,8 +133,43 @@ for (const t of VIS30) {
   if ((placar[88908842] || 0) < lim) meus30.push(t);
 }
 const lim14 = W._tetoAcumulado(5, 14);
-vale('30/10 app aberto: das 70 visitas da rajada o chip leva no maximo o que cabe na hora', meus30.length <= lim14,
-  meus30.length + ' visitas (teto da hora: ' + lim14 + ')');
+vale('30/10 app aberto: das 70 visitas da rajada o chip leva no maximo 2 por vaga da hora', meus30.length <= 2 * lim14 + 2,
+  meus30.length + ' visitas (teto da hora: ' + lim14 + ', 2 leads marcados no meio)');
+vale('30/10: a rajada nao levou o chip todo (de 70, ficou longe)', meus30.length <= 10, String(meus30.length));
+
+// ── 7) SIMULACAO: a regra de 16/11 contra a de antes, app aberto o dia todo ──────────────────
+// O pedido: "os numeros em aquecimento estao bem lentos (...) em vez de 2 contatos esperando, o legal
+// seria ter 4". Dias simulados com cliques chegando pela curva do dia (DIA_ACUM), 13% virando conversa
+// (a dos chips em 30/10) e o atraso medido em 31/10 (81% ate 5 min, 87% ate 20 min, o resto ate 1h30).
+// Mesmo sorteio pras duas regras.
+function sorteio(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function umDia(R, teto, r) {
+  const A = R.DIA_ACUM, visitas = [], leads = [];
+  for (let m = 6 * 60; m < 21 * 60; m++) {
+    const h = Math.floor(m / 60), lam = 400 * (A[h] - (h ? A[h - 1] : 0)) / 1000 / 60;
+    let k = 0, p = Math.exp(-lam), acc = p; const u = r(); while (u > acc && k < 50) { k++; p *= lam / k; acc += p; }
+    for (let i = 0; i < k; i++) {
+      const t = m * 60 + i;
+      const naoReiv = visitas.filter((v) => !(v.lead != null && v.lead <= t)).map((v) => v.ts);
+      const pl = R._aqPlacar({}, [{ nk: 'A', teto }], { visitas: { A: naoReiv }, leads: { A: leads.filter((x) => x <= t).length }, hb: { A: t }, uso: {} }, t).placar.A || 0;
+      if (pl >= R._tetoAcumulado(teto, h)) continue;
+      let quando = null;
+      if (r() < 0.13) { const x = r(); quando = t + (x < 0.81 ? r() * 300 : x < 0.87 ? 300 + r() * 900 : 1200 + r() * 4200); leads.push(quando); }
+      visitas.push({ ts: t, lead: quando });
+    }
+  }
+  return { dia: leads.filter((x) => x < 86400).length, meio: leads.filter((x) => x < 12 * 3600).length };
+}
+const simula = (R) => { const r = sorteio(7), d = []; for (let i = 0; i < 150; i++) d.push(umDia(R, 5, r)); return d; };
+const dAntes = simula(W1), dAgora = simula(W);
+const media = (d, c) => d.reduce((a, x) => a + x[c], 0) / d.length;
+const passou = (d) => d.filter((x) => x.dia > 5).length;
+const fmt = (d) => 'meio-dia ' + media(d, 'meio').toFixed(2) + ', dia ' + media(d, 'dia').toFixed(2) + ', passou do teto em ' + passou(d) + ' de ' + d.length + ' dias';
+vale('simulacao: ate o meio-dia o chip recebe bem mais que antes (pelo menos 20%)', media(dAgora, 'meio') >= 1.2 * media(dAntes, 'meio'),
+  'antes: ' + fmt(dAntes) + ' | agora: ' + fmt(dAgora));
+vale('simulacao: no dia inteiro nunca recebe menos que antes', media(dAgora, 'dia') >= media(dAntes, 'dia'));
+vale('simulacao: passa do teto do dia em no maximo 5% dos dias', passou(dAgora) <= 0.05 * dAgora.length, passou(dAgora) + ' de ' + dAgora.length);
+vale('simulacao: quando passa, nunca e por mais de 1', Math.max(...dAgora.map((x) => x.dia)) <= 6, 'maior dia: ' + Math.max(...dAgora.map((x) => x.dia)));
 
 console.log('\n  ' + ok + ' de ' + (ok + falhas.length) + ' conferencias passaram.');
 if (falhas.length) { console.log('\nFALHOU:\n- ' + falhas.join('\n- ')); process.exit(1); }

@@ -85,11 +85,15 @@ const fw = readFileSync(new URL('./worker.js', import.meta.url), 'utf8');
 const DIA_ACUM = JSON.parse(fw.match(/const DIA_ACUM = (\[[^\]]+\])/)[1]);
 const hora = new Date(Date.now() - 3 * 3600 * 1000).getUTCHours();
 const lim = Math.max(1, Math.ceil(5 * DIA_ACUM[hora] / 1000));
-_log('\nRESERVA DO AQUECIMENTO NA ROTA  (agora ' + hora + 'h BRT: o chip de dia 1 pode ter ' + lim + ' de 5)\n');
+// DESDE 16/11/2026 cada vaga segura 2 contatos a caminho (AQ_CLIQUES_POR_VAGA no worker).
+const POR_VAGA = Number((fw.match(/const AQ_CLIQUES_POR_VAGA = (\d+);/) || [])[1]) || 1;
+const cabe = Math.min(10, POR_VAGA * lim);
+_log('\nRESERVA DO AQUECIMENTO NA ROTA  (agora ' + hora + 'h BRT: o chip de dia 1 pode ter ' + lim + ' de 5, ' + POR_VAGA + ' a caminho por vaga)\n');
 
 // 1) app nunca aberto: o chip leva so o que cabe e o resto vai pro numero de producao
 for (let i = 0; i < 10; i++) await visita();
-vale('app fechado: 10 visitas, o chip que aquece leva so ' + lim, contaVis(A) === lim && contaVis(E) === 10 - lim, 'aquecimento ' + contaVis(A) + ', producao ' + contaVis(E));
+vale('app fechado: 10 visitas, o chip que aquece leva so ' + cabe + ' (' + POR_VAGA + ' por vaga)', contaVis(A) === cabe && contaVis(E) === 10 - cabe, 'aquecimento ' + contaVis(A) + ', producao ' + contaVis(E));
+vale('a regra de 16/11 esta no worker: 2 a caminho por vaga', POR_VAGA === 2, String(POR_VAGA));
 
 // 2) app aberto ha 1 h e as visitas do chip ficaram 25 min sem virar lead: soltam a vaga
 const t = agora();
@@ -97,8 +101,8 @@ sq.prepare("INSERT INTO sc_heartbeat (self_number, at_id, instance, wpp_seen, la
 sq.prepare('INSERT INTO swweb_uso (nk, user_id, nome, maquina, desde, ate, versao) VALUES (?,?,?,?,?,?,?)').run('4988931497', 'kev', 'Kevin', 'm1', t - 3600, t + 120, '1.25.37');
 sq.prepare('UPDATE tt_pending SET ts = ? WHERE num_key = ?').run(t - 25 * 60, A);
 const antesA = contaVis(A);
-for (let i = 0; i < 6; i++) await visita();
-vale('app aberto e visitas velhas sem lead: o chip volta a receber, de novo so ' + lim, contaVis(A) - antesA === lim, String(contaVis(A) - antesA));
+for (let i = 0; i < POR_VAGA * lim + 2; i++) await visita();
+vale('app aberto e visitas velhas sem lead: o chip volta a receber, de novo so ' + POR_VAGA * lim, contaVis(A) - antesA === POR_VAGA * lim, String(contaVis(A) - antesA));
 
 // 3) um lead chega por uma das visitas recentes: ele ocupa a vaga que a visita ocupava, nada abre
 const v1 = sq.prepare('SELECT id, code FROM tt_pending WHERE num_key = ? ORDER BY ts DESC LIMIT 1').get(A);

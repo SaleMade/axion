@@ -31191,6 +31191,18 @@ function _numDoAquecimento(c) {
 const AQ_RESERVA_JANELA = 1200;
 const AQ_RESERVA_ULTIMA = 3600;
 const AQ_RESERVA_CARENCIA = 120;
+// DOIS CONTATOS A CAMINHO POR VAGA (16/11/2026, pedido do Bruno): "os numeros em aquecimento estao bem
+// lentos (...) em vez de 2 contatos esperando, o legal seria ter 4". Uma vaga inteira por visita era
+// fechado demais: de cada 100 cliques so uns 15 viram conversa, entao o chip passava a maior parte do
+// tempo esperando gente que nunca ia escrever. Agora cada visita a caminho pesa meia vaga.
+// A ULTIMA VAGA DO DIA continua uma por uma (o mesmo corte da janela de 60 min do _aqReservaConta):
+// e ali que o dia passaria do teto. O preco: se quase todos os que clicaram escreverem, o chip passa do
+// teto da hora (o do dia so por 1 ou 2, raro). Gemeo na dash: `pesoDoCaminho` em src/lib/chips.js.
+const AQ_CLIQUES_POR_VAGA = 2;
+function _aqPesoCaminho(n, leads, teto) {
+  const ultima = Number(teto) > 0 && (Number(leads) || 0) >= Number(teto) - 1;
+  return ultima ? (Number(n) || 0) : (Number(n) || 0) / AQ_CLIQUES_POR_VAGA;
+}
 // Ate que hora (unix) a captura do numero estava viva. 0 = nao da pra afirmar nada.
 function _aqVivoAte(x, agora) {
   if (x && x.api) return agora;
@@ -31209,11 +31221,13 @@ function _aqReservaConta(visitas, leads, teto, vivoAte, agora) {
   return n;
 }
 // O que a roleta, o diag e o app comparam com o teto do chip em aquecimento: lead de hoje (o maior
-// entre o cache e a leitura fresca) mais as vagas ocupadas. Os outros numeros ficam como estavam.
-// lista = [{ nk, teto, api }].
+// entre o cache e a leitura fresca) mais as vagas ocupadas (meia por visita, ver AQ_CLIQUES_POR_VAGA).
+// Os outros numeros ficam como estavam. lista = [{ nk, teto, api }].
+// `res` = quantos contatos estao a caminho (o que a tela escreve); `leads` = o lead de hoje. O placar
+// NAO e mais leads + res: quem quiser o lead le `leads`, nunca placar menos res.
 function _aqPlacar(lh, lista, lido, agora) {
-  const placar = Object.assign({}, lh || {}), res = {};
-  if (!lido) return { placar, res };
+  const placar = Object.assign({}, lh || {}), res = {}, leadsDe = {};
+  if (!lido) return { placar, res, leads: leadsDe };
   for (const x of (lista || [])) {
     const nk = String((x && x.nk) || '');
     if (!nk || Object.prototype.hasOwnProperty.call(res, nk)) continue;
@@ -31221,9 +31235,10 @@ function _aqPlacar(lh, lista, lido, agora) {
     const vivoAte = _aqVivoAte({ api: !!x.api, hb: lido.hb && lido.hb[nk], uso: lido.uso && lido.uso[nk] }, agora);
     const n = _aqReservaConta((lido.visitas && lido.visitas[nk]) || [], leads, x.teto, vivoAte, agora);
     res[nk] = n;
-    placar[nk] = leads + n;
+    leadsDe[nk] = leads;
+    placar[nk] = leads + _aqPesoCaminho(n, leads, x.teto);
   }
-  return { placar, res };
+  return { placar, res, leads: leadsDe };
 }
 // AS QUATRO LEITURAS NUMA IDA SO, so pros chips em aquecimento (de 2 a 10 numeros). A de visita anda
 // pelo indice (num_key, claimed, ts) e le so as visitas nao reivindicadas daquele numero hoje.
@@ -32415,7 +32430,7 @@ async function handlePresselMeus(req, env) {
       const pl = _aqPlacar(lh, aqL, await _aqReservaLe(env, aqL.map((x) => x.nk), Math.floor(new Date(hoje + 'T00:00:00-03:00').getTime() / 1000)), Math.floor(Date.now() / 1000));
       lhFila = pl.placar;
       for (const k of Object.keys(pl.res)) {
-        leadsHoje[k] = Math.max(Number(leadsHoje[k]) || 0, (Number(pl.placar[k]) || 0) - (Number(pl.res[k]) || 0));
+        leadsHoje[k] = Math.max(Number(leadsHoje[k]) || 0, Number(pl.leads[k]) || 0);
         if (pl.res[k]) aquecReserva[k] = pl.res[k];
       }
     }
@@ -33878,14 +33893,14 @@ async function handlePresselDiag(req, env){
   // A RESERVA DO AQUECIMENTO ENTRA NA MESMA CONTA (31/10/2026): sem ela a tela diria "recebendo" num
   // chip que a roleta segurou porque tem gente a caminho. `_lhFila` e so pra decidir a vez; o placar
   // que aparece na tela continua sendo o lead (`_lhD`).
-  let _lhFila = _lhD, _aqResD = {};
+  let _lhFila = _lhD, _aqResD = {}, _aqLeadsD = {};
   try {
     const _aqL = _aqListaDosChips(chips, _aquecIdsDe(data));
     if (_aqL.length) {
       const pl = _aqPlacar(_lhD, _aqL, await _aqReservaLe(env, _aqL.map((x) => x.nk), _diaIni), Math.floor(Date.now() / 1000));
-      _lhFila = pl.placar; _aqResD = pl.res;
+      _lhFila = pl.placar; _aqResD = pl.res; _aqLeadsD = pl.leads || {};
     }
-  } catch (_) { _lhFila = _lhD; _aqResD = {}; }
+  } catch (_) { _lhFila = _lhD; _aqResD = {}; _aqLeadsD = {}; }
   const _k8d = (n) => String(n || '').replace(/\D/g, '').slice(-8);
   // Gestor de trafego: numero cortado e NADA de limite (ver _roletaResumida). O `numeros` continua
   // indo, cortado: "Entregando lead para" e o que diz a ele que a pressel esta viva.
@@ -34031,7 +34046,7 @@ async function handlePresselDiag(req, env){
       // chip em aquecimento: o lead lido na hora (o _lhD e o cache de 30 s) e as vagas ocupadas por
       // quem ja clicou e ainda nao chegou, pra tela explicar por que o chip esta segurado
       for (const k of Object.keys(_aqResD)) if (_meus2.has(k)) {
-        leadsHoje[k] = Math.max(Number(leadsHoje[k]) || 0, (Number(_lhFila[k]) || 0) - (Number(_aqResD[k]) || 0));
+        leadsHoje[k] = Math.max(Number(leadsHoje[k]) || 0, Number(_aqLeadsD[k]) || 0);
         if (_aqResD[k]) aquecReserva[k] = _aqResD[k];
       }
     }
