@@ -36,7 +36,17 @@
     { id: 'Cancelado sem Custo', lbl: 'Cancelado', cor: '#64748b' },
   ]
   const TODAS = [...COLS, ...PERDA.filter((c) => !COLS.some((x) => x.id === c.id))]
-  const colDef = (id) => TODAS.find((c) => c.id === id) || { id: String(id || ''), lbl: String(id || 'Sem etapa'), cor: '#64748b' }
+  // PAGAMENTO PARCIAL (17/11/2026, pedido do Bruno com os audios do Bryan: "uma abazinha de pagamento
+  // parcial (...) nos entregues fica tudo meio poluido; ali seria so eu pra cobrar hoje"). Coluna de
+  // VISAO, nao etapa: o pedido que pagou uma parte e ainda nao quitou aparece nela e continua com a
+  // etapa dele (Cobranca, Retirada...), entao a agenda, o servidor e a dash nao mudam. Sai sozinho
+  // quando quita ou vira perda. Gemea da coluna "Pagamento parcial" da dash (KB_COLS, ehParcialL).
+  const PARCIAL = { id: 'Parcial', lbl: 'Pagamento parcial', cor: '#0ea5e9' }
+  const ehParcial = (p) => !!p && !p.pago && jaPagoDe(p) > 0.005
+  const colunaDoQuadro = (p) => (ehParcial(p) && p.col !== 'Pagos' && !PERDA.some((c) => c.id === p.col) ? PARCIAL.id : (p && p.col))
+  // O quadro do app: o caminho da dash com a coluna do parcial logo antes de Pagos.
+  const QUADRO = (() => { const i = COLS.findIndex((c) => c.id === 'Pagos'); return [...COLS.slice(0, i), PARCIAL, ...COLS.slice(i)] })()
+  const colDef = (id) => TODAS.find((c) => c.id === id) || (id === PARCIAL.id ? PARCIAL : null) || { id: String(id || ''), lbl: String(id || 'Sem etapa'), cor: '#64748b' }
   // Sair de Pagos so pra perda (SAIDAS_DE_PAGOS da dash): Pagos e dinheiro que entrou, e tirar dali
   // por engano apaga uma venda da contabilidade sem rastro.
   const SAIDAS_DE_PAGOS = PERDA.map((c) => c.id)
@@ -304,6 +314,104 @@
     calendario: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>',
     esq: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
     dir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    // o painel de pagamento, os comentarios e as frases prontas (17/11/2026)
+    okGrande: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+    pizza: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></svg>',
+    nota: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>',
+    calOk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/></svg>',
+    calRelogio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/></svg>',
+    imagem: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M16 5h6"/><path d="M19 2v6"/><path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/><circle cx="9" cy="9" r="2"/></svg>',
+    foto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>',
+    colar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M11 14h10"/><path d="M16 4h2a2 2 0 0 1 2 2v1.344"/><path d="m17 18 4-4-4-4"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>',
+    clipe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>',
+    lapis: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>',
+    x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  }
+
+  // ── O PAINEL DE PAGAMENTO (17/11/2026) ───────────────────────────────────────────────────────
+  // Pedido do Bruno com tres audios do Bryan: o cliente "da uma entrada agora e acerta o final do mes",
+  // e o cobrador precisa marcar isso facil, "mais icones do que texto". Dois cartoes (pagou tudo, uma
+  // parte) e, escolhido um, quatro linhas com icone: valor, o dia em que pagou, o proximo pagamento
+  // (so na parte; vira o retorno, e cai sozinho na agenda e no calendario) e o print do comprovante,
+  // que entra como comentario com imagem (o que o Bryan fazia na dash, a mao). Tudo numa gravacao so.
+  // A MESMA CONTA da dash (lib/pagamentos.js, patchDoPagamento) e do worker (pagamento_add.quando,
+  // pago_quando): mudou aqui, muda la.
+  const PROX_DIAS = [1, 7, 15, 30]
+  const curtoDia = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + '/' + m[2] : '' }
+  function proxAtalhos(agora) {
+    return PROX_DIAS.map((n) => { const d = new Date(agora || Date.now()); d.setDate(d.getDate() + n); return { n, v: chaveDia(d.getTime()) + 'T09:00', rot: n === 1 ? 'Amanhã' : n + ' dias' } })
+  }
+  // A PARTE QUE COBRE O QUE FALTA E QUITACAO: nao fica um parcial de R$ 0 sobrando.
+  const modoEfetivo = (modo, v, falta) => (modo === 'parte' && falta > 0 && Number(v) + 0.005 >= falta ? 'tudo' : modo)
+  function patchPagamento({ modo, valor, quando, prox, jaPago, spg, col, comentario }) {
+    const v = Math.round((Number(valor) || 0) * 100) / 100
+    const antes = { spg: String(spg || ''), col: String(col || '') }
+    let patch
+    if (modo === 'parte') { patch = { pagamento_add: { valor: v, quando, obs: 'parcial pelo SellWave Web' }, antes }; if (prox) patch.agend = prox }
+    else if (jaPago > 0) patch = { pagamento_add: { valor: v, quando, obs: 'quitou pelo SellWave Web' }, spg: 'Pago', valor_neg: Math.round((jaPago + v) * 100) / 100, col: 'Pagos', antes }
+    else patch = { spg: 'Pago', valor_neg: v, col: 'Pagos', pago_quando: quando, antes }
+    if (comentario) patch.comment_add = comentario
+    return patch
+  }
+  function textoPagamento({ modo, valor, quando, prox, falta }) {
+    const dia = curtoDia(quando)
+    if (modo === 'parte') {
+      const resto = Math.max(0, Math.round(((Number(falta) || 0) - (Number(valor) || 0)) * 100) / 100)
+      return 'Pagou ' + brl(valor) + (dia ? ' em ' + dia : '') + '. Falta ' + brl(resto) + (prox ? ', próximo pagamento ' + curtoDia(prox) : '') + '.'
+    }
+    return 'Pagou ' + brl(valor) + (dia ? ' em ' + dia : '') + '.'
+  }
+  const linhaPg = (ic, rot, miolo, depois, chave) => '<div class="fx-pg-l"' + (chave ? ' data-linha="' + chave + '"' : '') + '>'
+    + '<div class="fx-pg-ic" title="' + esc(rot) + '">' + ic + '<span>' + esc(rot) + '</span></div>'
+    + '<div class="fx-pg-m"><div class="fx-wrap">' + miolo + '</div>' + (depois || '') + '</div></div>'
+  function pagamentoHtml(p, agora) {
+    agora = agora || Date.now()
+    const falta = faltaDe(p), jaPago = jaPagoDe(p), total = Number(p.valor) || 0
+    const parcelas = Array.isArray(p.pagamentos) ? p.pagamentos.filter((x) => x && Number(x.valor) > 0) : []
+    let h = ''
+    if (jaPago > 0) {
+      const pct = total > 0 ? Math.min(100, Math.round((jaPago / total) * 100)) : 0
+      h += '<div class="fx-prog"><div class="fx-prog-l"><span><b>' + esc(brl(jaPago)) + '</b> de ' + esc(brl(total)) + '</span><span>falta <b>' + esc(brl(falta)) + '</b></span></div>'
+        + '<div class="fx-barra"><i style="width:' + pct + '%"></i></div>'
+        + (parcelas.length ? '<div class="fx-parcelas">' + parcelas.slice(-6).map((x) => '<span title="' + esc([x.data, brl(x.valor), x.quem].filter(Boolean).join(' · ')) + '">' + I.ok + esc(String(x.data || '').slice(0, 5) + ' · ' + brl(x.valor)) + '</span>').join('') + '</div>' : '')
+        + '</div>'
+    }
+    h += '<div class="fx-tiles">'
+      + '<button type="button" class="fx-tile" data-acao="pg-modo" data-v="tudo" style="--t:#10b981">' + I.okGrande + '<span>' + (jaPago > 0 ? 'Quitou' : 'Pagou tudo') + '</span></button>'
+      + '<button type="button" class="fx-tile" data-acao="pg-modo" data-v="parte" style="--t:#0ea5e9">' + I.pizza + '<span>Uma parte</span></button></div>'
+    const hoje = chaveDia(agora), ontem = chaveDia(agora - 86400000)
+    h += '<div class="fx-pg" hidden>'
+      + linhaPg(I.nota, 'Valor', '<input class="fx-valor-in fx-pg-valor" inputmode="decimal" placeholder="0,00" aria-label="Valor"><span class="fx-pg-dica"></span>')
+      + linhaPg(I.calOk, 'Pagou em', '<button type="button" class="fx-chip on" data-acao="pg-quando" data-v="' + hoje + '">Hoje</button>'
+        + '<button type="button" class="fx-chip" data-acao="pg-quando" data-v="' + ontem + '">Ontem</button>'
+        + '<button type="button" class="fx-chip fx-chip-cal" data-acao="pg-cal" data-para="quando" title="Escolher no calendário">' + I.calendario + '<em></em></button>',
+      '<div class="fx-pg-cal" data-para="quando" hidden></div>')
+      + linhaPg(I.calRelogio, 'Próximo', proxAtalhos(agora).map((a) => '<button type="button" class="fx-chip azul" data-acao="pg-prox" data-v="' + a.v + '" title="' + esc(curtoDia(a.v)) + ' às 09:00">' + a.rot + '</button>').join('')
+        + '<button type="button" class="fx-chip azul fx-chip-cal" data-acao="pg-cal" data-para="prox" title="Escolher no calendário">' + I.calendario + '<em></em></button>',
+      '<div class="fx-pg-cal" data-para="prox" hidden></div>', 'prox')
+      + linhaPg(I.imagem, 'Print', '<span class="fx-pg-arq"></span>'
+        + '<button type="button" class="fx-chip" data-acao="pg-colar" title="Colar o print copiado (ou Ctrl+V aqui)">' + I.colar + 'Colar</button>'
+        + '<button type="button" class="fx-chip" data-acao="pg-arquivo" title="Escolher o arquivo">' + I.clipe + 'Arquivo</button>')
+      + '<div class="fx-pg-pe"><button type="button" class="fx-bt fx-fraco" data-acao="pg-cancela">Cancelar</button><button type="button" class="fx-bt fx-verde" data-acao="pg-confirma">Confirmar</button></div>'
+      + '</div>'
+    return h
+  }
+  // O CALENDARIO DE UM DIA SO (sem hora): o "pagou em" vai ate hoje (no maximo 119 dias atras, o que o
+  // servidor aceita); o "proximo" vai de amanha em diante. Mesmo desenho do calendario do Retorno.
+  function calDia(st, agora, para) {
+    agora = agora || Date.now()
+    const hojeK = chaveDia(agora), limiteK = chaveDia(agora - 119 * 86400000)
+    const tit = mesRotulo(st.ano, st.mes)
+    let h = '<div class="fx-cal-nav"><button type="button" class="fx-cal-seta" data-acao="pg-cal-mes" data-para="' + para + '" data-v="-1" title="Mês anterior">' + I.esq + '</button>'
+      + '<b>' + esc(tit.charAt(0).toUpperCase() + tit.slice(1)) + '</b>'
+      + '<button type="button" class="fx-cal-seta" data-acao="pg-cal-mes" data-para="' + para + '" data-v="1" title="Próximo mês">' + I.dir + '</button></div>'
+    h += '<div class="fx-cal-sem">' + SEM_CURTA.map((x) => '<span>' + x + '</span>').join('') + '</div>'
+    h += '<div class="fx-cal-grade">' + diasDaGrade(st.ano, st.mes).map((c) => {
+      const fora = para === 'quando' ? (c.k > hojeK || c.k < limiteK) : c.k <= hojeK
+      const cls = ['fx-cal-d', c.fora ? 'fora' : '', c.k === hojeK ? 'hoje' : '', c.k === st.sel ? 'sel' : ''].filter(Boolean).join(' ')
+      return '<button type="button" class="' + cls + '" data-acao="pg-cal-dia" data-para="' + para + '" data-v="' + c.k + '"' + (fora ? ' disabled' : '') + '>' + c.dia + '</button>'
+    }).join('') + '</div>'
+    return h
   }
 
   // ── A FICHA ──────────────────────────────────────────────────────────────────────────────────
@@ -371,24 +479,14 @@
       + (p.agend ? '<button class="fx-mini fx-fraco" data-acao="agend" data-v="">Tirar</button>' : '')
       + '</div><div class="fx-cal" hidden></div></div>'
     // pagamento
-    h += '<div class="fx-bloco fx-caixa" data-sec="pagamento" style="--c:#10b981"><div class="fx-tit">' + I.ok + 'Pagamento</div>'
+    h += '<div class="fx-bloco fx-caixa" data-sec="pagamento" style="--c:#10b981"><div class="fx-tit">' + I.ok + 'Pagamento'
+      + (!p.pago && jaPagoDe(p) > 0 ? '<span class="fx-ap fx-parc-tag">' + I.pizza + 'parcial</span>' : '') + '</div>'
     if (p.pago) {
       h += '<div class="fx-ap">Recebido ' + esc(brl(p.valor)) + (p.pagoTs ? ' em ' + esc(new Date(Number(p.pagoTs)).toLocaleDateString('pt-BR')) : '') + '.</div>'
     } else {
-      // PAGAMENTO PARCIAL (05/11/2026, o Bruno: "as vezes o lead nao paga todo o valor e fala que daqui
-      // a tantos dias vai pagar o restante"). O que ja entrou e o que falta ficam a mostra, o campo
-      // ja vem com o que FALTA, e o pedido fica na fila ate quitar. O rotulo "Valor recebido" saiu
-      // ("ja e bem obvio pra que serve"): o campo diz isso pro leitor de tela, nao pra tela.
-      const falta = faltaDe(p), jaPago = jaPagoDe(p)
-      const parcelas = Array.isArray(p.pagamentos) ? p.pagamentos.filter((x) => x && Number(x.valor) > 0) : []
-      if (jaPago > 0) {
-        h += '<div class="fx-parcial">Já pagou <b>' + esc(brl(jaPago)) + '</b> de ' + esc(brl(p.valor)) + ' · faltam <b>' + esc(brl(falta)) + '</b>'
-          + (parcelas.length ? '<div class="fx-parcelas">' + parcelas.slice(-6).map((x) => '<span>' + esc([x.data, brl(x.valor), x.quem].filter(Boolean).join(' · ')) + '</span>').join('') + '</div>' : '')
-          + '</div>'
-      }
-      h += '<div class="fx-wrap"><input class="fx-valor-in" inputmode="decimal" value="' + esc(valorCampo(falta)) + '" aria-label="Valor recebido" title="Valor recebido">'
-        + '<button class="fx-bt fx-verde" data-acao="pago">Marcar como pago</button>'
-        + '<button class="fx-bt" data-acao="parcial" title="O cliente pagou só uma parte: registra o valor e o pedido continua na cobrança com o que falta">Pagamento parcial</button></div>'
+      // O PAINEL COM ICONES (17/11/2026, ver pagamentoHtml). Substitui o campo solto com "Marcar como
+      // pago" e "Pagamento parcial" de 05/11.
+      h += pagamentoHtml(p, agora)
       const links = LINKS.filter((l) => p.links && p.links[l.k])
       if (links.length) h += links.map((l) => linkLinha(l, p.links[l.k], ctx)).join('')
       else if (p.links) h += '<div class="fx-ap">Sem link de pagamento cadastrado para este pedido.</div>'
@@ -403,11 +501,23 @@
       + '<div class="fx-ap">' + (p.col === 'Pagos' ? 'Pedido pago só sai para uma frustração.' : 'As etapas de entrega mudam sozinhas, pela plataforma.') + '</div>'
       + '</div>'
     // comentarios
+    // FRASES PRONTAS COM LAPIS e COMENTARIO COM LAPIS E IMAGEM (17/11/2026, audios do Bryan: "nao da pra
+    // colar a imagem pelo aplicativo, so pelo web (...) nao tem como alterar as mensagens (...) nao
+    // achei o lapizinho pra deixar a frase preparada"). O lapis da frase so aparece pra quem pode
+    // (direcao e cobrador da casa, `ctx.podeProntos`); o do comentario, no que e dele (`c.meu`).
     const coms = Array.isArray(p.comentarios) ? p.comentarios : []
-    h += '<div class="fx-bloco"><div class="fx-tit">' + I.balao + 'Comentários' + (coms.length ? '<span class="fx-ap">' + coms.length + '</span>' : '') + '</div>'
-      + (Array.isArray(ctx.prontos) && ctx.prontos.length ? '<div class="fx-wrap fx-prontos">' + ctx.prontos.map((t) => '<button class="fx-mini fx-fraco" data-acao="pronto" data-v="' + esc(t) + '">' + esc(t) + '</button>').join('') + '</div>' : '')
-      + '<div class="fx-com-novo"><textarea class="fx-com" rows="2" placeholder="Escreva o que combinou com o cliente"></textarea><button class="fx-bt" data-acao="comentar">Salvar</button></div>'
-      + coms.slice(0, 12).map((c) => '<div class="fx-com-item"><div><b>' + esc(c.quem || 'alguém') + '</b><time>' + esc(c.quando) + '</time></div><p>' + esc(c.tipo === 'image' ? '[imagem] ' + (c.tx || '') : c.tx) + '</p></div>').join('')
+    const prontos = Array.isArray(ctx.prontos) ? ctx.prontos : []
+    h += '<div class="fx-bloco" data-sec="comentarios"><div class="fx-tit">' + I.balao + 'Comentários' + (coms.length ? '<span class="fx-ap">' + coms.length + '</span>' : '') + '</div>'
+      + (prontos.length || ctx.podeProntos ? '<div class="fx-wrap fx-prontos">' + prontos.map((t) => '<button class="fx-mini fx-fraco" data-acao="pronto" data-v="' + esc(t) + '">' + esc(t) + '</button>').join('')
+        + (ctx.podeProntos ? '<button class="fx-mini fx-fraco fx-so-ic" data-acao="prontos-edita" title="Editar as frases prontas">' + I.lapis + '</button>' : '') + '</div>'
+        + '<div class="fx-pront-ed" hidden></div>' : '')
+      + '<div class="fx-com-novo"><textarea class="fx-com" rows="2" placeholder="Escreva o que combinou com o cliente"></textarea>'
+      + '<button class="fx-bt fx-so-ic" data-acao="com-print" title="Anexar imagem: cola o print copiado, ou escolhe o arquivo (Ctrl+V no campo também)">' + I.imagem + '</button>'
+      + '<button class="fx-bt" data-acao="comentar">Salvar</button></div>'
+      + coms.slice(0, 12).map((c, i) => '<div class="fx-com-item" data-i="' + i + '"><div><b>' + esc(c.quem || 'alguém') + '</b><time>' + esc(c.quando) + (c.editado ? ' · editado' : '') + '</time>'
+        + (c.meu && c.tipo !== 'image' && c.time ? '<button class="fx-ic" data-acao="com-edita" data-i="' + i + '" title="Editar">' + I.lapis + '</button>' : '') + '</div>'
+        + (c.tipo === 'image' && c.url ? '<button class="fx-mini fx-com-img" data-acao="com-img" data-i="' + i + '" title="Abrir a imagem no navegador">' + I.foto + 'Ver imagem</button>' : '')
+        + (c.tx ? '<p>' + esc(c.tx) + '</p>' : '') + '</div>').join('')
       + '</div>'
     // historico
     const hist = Array.isArray(p.hist) ? p.hist.slice(-6).reverse() : []
@@ -439,6 +549,12 @@
     const cal = raiz.querySelector('.fx-cal')
     if (cal && !cal.hidden) return true
     if (raiz.querySelector('[data-armado="1"]')) return true
+    // o painel de pagamento aberto (17/11/2026), o lapis de um comentario e o das frases prontas
+    const pg = raiz.querySelector('.fx-pg')
+    if (pg && !pg.hidden) return true
+    if (raiz.querySelector('.fx-com-ed')) return true
+    const pe = raiz.querySelector('.fx-pront-ed')
+    if (pe && !pe.hidden) return true
     const com = raiz.querySelector('.fx-com')
     if (com && String(com.value || '').trim()) return true
     const a = (typeof document !== 'undefined') ? document.activeElement : null
@@ -450,6 +566,7 @@
   //   abrirLink(url)   curto(url, id) -> { ok, url }   conversa?(p)   enviar?(texto) -> { ok, erro }
   //   recarrega() -> relê a ficha e redesenha (depois de gravar)
   function ligaFicha(raiz, p, ad, ctx) {
+    ctx = ctx || {}
     const fx = raiz.querySelector('.fx[data-id="' + CSS.escape(String(p.id)) + '"]') || raiz.querySelector('.fx')
     if (!fx) return
     // A mensagem vai na ficha de AGORA: depois de uma releitura a ficha e outro no (o `fx` daqui
@@ -504,6 +621,106 @@
       return r
     }
     const linkDe = (k) => (p.links && p.links[k]) || ''
+    // O PAINEL DE PAGAMENTO (17/11/2026): o que ele escolheu ate o "Confirmar". O valor fica no campo.
+    const pg = { modo: '', quando: chaveDia(Date.now()), prox: '', arq: null }
+    const calPg = { quando: null, prox: null }
+    let enviando = false
+    const fechaCalPg = (para) => { const cx = fx.querySelector('.fx-pg-cal[data-para="' + para + '"]'); if (cx) cx.hidden = true }
+    function atualizaPg() {
+      const cx = fx.querySelector('[data-sec="pagamento"]')
+      const form = cx && cx.querySelector('.fx-pg')
+      if (!form) return
+      form.hidden = !pg.modo
+      for (const t of cx.querySelectorAll('[data-acao="pg-modo"]')) t.classList.toggle('on', t.dataset.v === pg.modo)
+      const v = valorDigitado((cx.querySelector('.fx-pg-valor') || {}).value)
+      const falta = faltaDe(p), jaPago = jaPagoDe(p)
+      const ef = modoEfetivo(pg.modo, v, falta)
+      const lp = cx.querySelector('[data-linha="prox"]'); if (lp) lp.hidden = ef !== 'parte'
+      const marca = (sel, valor) => {
+        const bs = Array.from(cx.querySelectorAll('[data-acao="' + sel + '"]'))
+        for (const x of bs) x.classList.toggle('on', x.dataset.v === valor)
+        const outro = !!valor && !bs.some((x) => x.dataset.v === valor)
+        const c = cx.querySelector('[data-acao="pg-cal"][data-para="' + (sel === 'pg-quando' ? 'quando' : 'prox') + '"]')
+        if (c) { c.classList.toggle('on', outro); const em = c.querySelector('em'); if (em) em.textContent = outro ? curtoDia(valor) : '' }
+      }
+      marca('pg-quando', pg.quando)
+      marca('pg-prox', pg.prox)
+      const dica = cx.querySelector('.fx-pg-dica')
+      if (dica) {
+        dica.textContent = pg.modo === 'parte' && ef === 'tudo' ? 'Esse valor quita o pedido.'
+          : ef === 'parte' && v > 0 ? 'Fica faltando ' + brl(Math.max(0, falta - v)) + '.'
+            : ef === 'tudo' && falta > 0 && v > 0 && Math.abs(v - falta) > 0.005 ? (v < falta ? 'Desconto de ' + brl(falta - v) + '.' : 'A mais ' + brl(v - falta) + '.') : ''
+        dica.className = 'fx-pg-dica' + (ef === 'tudo' && v > 0 && Math.abs(v - falta) > 0.005 && pg.modo === 'tudo' ? ' alerta' : '')
+      }
+      const arq = cx.querySelector('.fx-pg-arq')
+      if (arq) arq.innerHTML = pg.arq ? '<span class="fx-arq">' + I.imagem + '<span>' + esc(pg.arq.nome) + '</span><button type="button" data-acao="pg-tira" title="Tirar">' + I.x + '</button></span>' : ''
+      for (const x of cx.querySelectorAll('[data-acao="pg-colar"], [data-acao="pg-arquivo"]')) x.hidden = !!pg.arq
+      const bt = cx.querySelector('[data-acao="pg-confirma"]')
+      if (bt) {
+        bt.textContent = ef === 'parte' ? 'Registrar ' + brl(v > 0 ? v : 0) : 'Confirmar ' + brl(v > 0 ? v : 0) + (jaPago > 0 && v > 0 ? ' · total ' + brl(jaPago + v) : '')
+        bt.className = 'fx-bt ' + (ef === 'parte' ? 'fx-azul' : 'fx-verde')
+      }
+    }
+    // O PRINT: sobe pro mesmo lugar do comprovante da dash (/api/comprovante) e volta o link.
+    const sobe = async (arq) => {
+      if (!ad.sobe) { diz('Atualize o app pra mandar imagem.', true); return null }
+      diz('Enviando a imagem...')
+      let r = null
+      try { r = await ad.sobe(p.id, arq) } catch (e) { r = { ok: false, erro: String((e && e.message) || e) } }
+      if (!r || !r.ok || !r.url) { diz('A imagem não subiu: ' + semPonto((r && r.erro) || 'a dash não respondeu') + '.', true); return null }
+      return r
+    }
+    // A area de transferencia (o print que ele copiou). Sem imagem la, avisa (ou fica quieto, quando
+    // quem chamou vai abrir o seletor de arquivo em seguida).
+    const printDaArea = async (quieto) => {
+      if (!ad.colaPrint) { if (!quieto) diz('Atualize o app pra colar imagem.', true); return null }
+      let r = null
+      try { r = await ad.colaPrint() } catch (_) { r = null }
+      if (r && r.ok && r.bytes) return { bytes: r.bytes, mime: r.mime || 'image/png', nome: r.nome || 'print.png' }
+      if (!quieto) diz('Não achei imagem copiada. Copie o print e clique de novo, ou use "Arquivo".', true)
+      return null
+    }
+    const leArquivo = async (f) => {
+      if (!f || !/^image\//.test(String(f.type || ''))) { diz('Só imagem (PNG, JPG, WebP).', true); return null }
+      if (f.size > 20 * 1024 * 1024) { diz('Imagem muito grande (máximo 20 MB).', true); return null }
+      return { bytes: new Uint8Array(await f.arrayBuffer()), mime: f.type, nome: String(f.name || 'imagem').slice(0, 80) }
+    }
+    const escolheImagem = (fim) => {
+      const inp = document.createElement('input')
+      inp.type = 'file'; inp.accept = 'image/*'
+      inp.onchange = async () => { const a = await leArquivo(inp.files && inp.files[0]); if (a) fim(a) }
+      inp.click()
+    }
+    // COMENTARIO COM IMAGEM: o texto do campo vai junto, como legenda (igual a dash).
+    const comentaImagem = async (arq) => {
+      if (enviando) return
+      enviando = true
+      try {
+        const up = await sobe(arq)
+        if (!up) return
+        const ta = fx.querySelector('.fx-com')
+        await grava({ comment_add: { tx: String((ta && ta.value) || '').trim(), kind: 'image', url: up.url, mime: up.mime || arq.mime, file_name: arq.nome } }, 'Imagem anexada.')
+      } finally { enviando = false }
+    }
+    fx.addEventListener('input', (ev) => { if (ev.target && ev.target.matches && ev.target.matches('.fx-pg-valor')) atualizaPg() })
+    fx.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && ev.target && ev.target.matches && ev.target.matches('.fx-pg-valor')) { ev.preventDefault(); const bt = fx.querySelector('[data-acao="pg-confirma"]'); if (bt) bt.click() }
+    })
+    // CTRL+V COM IMAGEM: no campo do comentario vira comentario com imagem; com o painel de pagamento
+    // aberto, vira o print do pagamento. Texto colado passa direto.
+    fx.addEventListener('paste', async (ev) => {
+      const it = Array.from((ev.clipboardData && ev.clipboardData.items) || []).find((x) => x.kind === 'file' && /^image\//.test(String(x.type || '')))
+      if (!it) return
+      const pgAberto = !!pg.modo
+      const noCom = ev.target && ev.target.matches && ev.target.matches('.fx-com-novo .fx-com')
+      if (!pgAberto && !noCom) return
+      ev.preventDefault()
+      const f = it.getAsFile()
+      const a = await leArquivo(f ? new File([f], 'print-' + Date.now() + '.png', { type: f.type }) : null)
+      if (!a) return
+      if (noCom) { await comentaImagem(a); return }
+      pg.arq = a; atualizaPg()
+    })
     let cal = null   // o estado do calendario da ficha; nasce no primeiro "Outro dia" (calInicial)
     const redesenhaCal = () => { const cx = fx.querySelector('.fx-cal'); if (cx && cal) cx.innerHTML = calFicha(cal, Date.now()) }
     fx.addEventListener('click', async (ev) => {
@@ -552,49 +769,6 @@
         await grava({ agend: v }, 'Retorno marcado: ' + quandoTxt(Date.parse(v), Date.now()) + '.')
         return
       }
-      if (acao === 'pago') {
-        const v = valorDigitado((fx.querySelector('.fx-valor-in') || {}).value)
-        if (!(v > 0)) { diz('Escreva o valor que o cliente pagou.', true); return }
-        const jaPago = jaPagoDe(p), falta = faltaDe(p)
-        // DOIS CLIQUES, como tudo que nao tem desfazer simples: o primeiro arma e diz o valor. Com
-        // parcela anterior o botao diz tambem o TOTAL que o pedido vai fechar (o digitado e o resto),
-        // e se o digitado passa do que faltava, avisa antes: pagar a mais e caso real (regra de 23/09,
-        // nao se bloqueia), mas o cobrador acostumado a digitar o total precisa ver a conta.
-        if (b.dataset.armado !== '1') {
-          b.dataset.rot = 'Marcar como pago'; b.dataset.cls = 'fx-bt fx-verde'
-          b.dataset.armado = '1'; b.className = 'fx-bt fx-alerta'; b.textContent = 'Confirmar ' + brl(v) + (jaPago > 0 ? ' (total ' + brl(jaPago + v) + ')' : '')
-          if (jaPago > 0 && v > falta + 0.005) diz('Faltavam ' + brl(falta) + '. Confirme só se ele pagou ' + brl(v) + ' agora: o pedido fecha com ' + brl(jaPago + v) + ' no total.', true)
-          setTimeout(() => { if (b.isConnected && b.dataset.armado === '1') { b.dataset.armado = ''; b.className = 'fx-bt fx-verde'; b.textContent = 'Marcar como pago' } }, 6000)
-          return
-        }
-        // A MESMA CHAMADA DO "JA PAGOU" DA DASH: spg, valor e coluna numa gravacao so, com o `antes`
-        // pra recusar se outra pessoa mexeu no pedido desde que a ficha abriu.
-        // COM PARCELA ANTERIOR (05/11/2026): o que ele digitou e o RESTO. Entra como parcela (a ficha
-        // de pagamentos fecha a conta) e o valor negociado vira o total que entrou (parcelas + resto):
-        // o resto com desconto fecha o pedido com menos, que e o que um desconto e.
-        const antes = { spg: p.spg || '', col: p.colBruta || '' }
-        const patch = jaPago > 0
-          ? { pagamento_add: { valor: v, obs: 'quitou pelo SellWave Web' }, spg: 'Pago', valor_neg: Math.round((jaPago + v) * 100) / 100, col: 'Pagos', antes }
-          : { spg: 'Pago', valor_neg: v, col: 'Pagos', antes }
-        await grava(patch, 'Pago: ' + brl(jaPago + v) + '.')
-        return
-      }
-      if (acao === 'parcial') {
-        const v = valorDigitado((fx.querySelector('.fx-valor-in') || {}).value)
-        if (!(v > 0)) { diz('Escreva o valor que o cliente pagou.', true); return }
-        const falta = faltaDe(p)
-        if (v + 0.005 >= falta) { diz('Esse valor quita o pedido: use o "Marcar como pago".', true); return }
-        if (b.dataset.armado !== '1') {
-          b.dataset.rot = 'Pagamento parcial'; b.dataset.cls = 'fx-bt'
-          b.dataset.armado = '1'; b.className = 'fx-bt fx-alerta'; b.textContent = 'Confirmar parcial de ' + brl(v)
-          setTimeout(() => { if (b.isConnected && b.dataset.armado === '1') { b.dataset.armado = ''; b.className = 'fx-bt'; b.textContent = 'Pagamento parcial' } }, 6000)
-          return
-        }
-        // So a parcela (pagamento_add, o servidor acrescenta): sem spg e sem coluna, o pedido fica na
-        // fila com o saldo. O `antes` recusa se alguem marcou pago ou moveu enquanto a ficha estava aberta.
-        await grava({ pagamento_add: { valor: v, obs: 'parcial pelo SellWave Web' }, antes: { spg: p.spg || '', col: p.colBruta || '' } }, 'Parcial de ' + brl(v) + ' registrado. Faltam ' + brl(falta - v) + '.')
-        return
-      }
       if (acao === 'etapa') {
         const para = String((fx.querySelector('.fx-etapa') || {}).value || '')
         if (!para) { diz('Escolha a etapa.', true); return }
@@ -613,6 +787,146 @@
         if (!tx) { diz('Escreva o comentário.', true); return }
         // SEM `who`: o servidor carimba quem esta logado (no "ver como", a direcao, nunca a pessoa do preview).
         await grava({ comment_add: { tx } }, 'Comentário salvo.')
+        return
+      }
+      // ── o painel de pagamento (17/11/2026, ver pagamentoHtml) ──
+      if (acao === 'pg-modo') {
+        pg.modo = b.dataset.v
+        const inp = fx.querySelector('.fx-pg-valor')
+        if (inp) { const falta = faltaDe(p); inp.value = pg.modo === 'tudo' ? valorCampo(falta > 0 ? falta : p.valor) : '' }
+        atualizaPg()
+        if (inp) { inp.focus(); if (inp.select) inp.select() }
+        return
+      }
+      if (acao === 'pg-cancela') { pg.modo = ''; pg.arq = null; for (const c of fx.querySelectorAll('.fx-pg-cal')) c.hidden = true; atualizaPg(); return }
+      if (acao === 'pg-quando') { pg.quando = b.dataset.v; fechaCalPg('quando'); atualizaPg(); return }
+      if (acao === 'pg-prox') { pg.prox = pg.prox === b.dataset.v ? '' : b.dataset.v; fechaCalPg('prox'); atualizaPg(); return }
+      if (acao === 'pg-cal') {
+        const para = b.dataset.para
+        const cx = fx.querySelector('.fx-pg-cal[data-para="' + para + '"]')
+        if (!cx) return
+        if (!cx.hidden) { cx.hidden = true; return }
+        const base = para === 'quando' ? pg.quando : (pg.prox ? pg.prox.slice(0, 10) : chaveDia(Date.now() + 86400000))
+        const d = new Date(base + 'T12:00')
+        calPg[para] = { ano: d.getFullYear(), mes: d.getMonth(), sel: para === 'quando' ? pg.quando : (pg.prox ? pg.prox.slice(0, 10) : '') }
+        cx.innerHTML = calDia(calPg[para], Date.now(), para)
+        cx.hidden = false
+        return
+      }
+      if (acao === 'pg-cal-mes') {
+        const para = b.dataset.para, st = calPg[para]
+        if (!st) return
+        st.mes += Number(b.dataset.v) || 0
+        if (st.mes < 0) { st.mes = 11; st.ano -= 1 } else if (st.mes > 11) { st.mes = 0; st.ano += 1 }
+        const cx = fx.querySelector('.fx-pg-cal[data-para="' + para + '"]')
+        if (cx) cx.innerHTML = calDia(st, Date.now(), para)
+        return
+      }
+      if (acao === 'pg-cal-dia') {
+        if (b.disabled) return
+        if (b.dataset.para === 'quando') pg.quando = b.dataset.v
+        else pg.prox = b.dataset.v + 'T09:00'
+        fechaCalPg(b.dataset.para)
+        atualizaPg()
+        return
+      }
+      if (acao === 'pg-colar') { const a = await printDaArea(); if (a) { pg.arq = a; atualizaPg() } return }
+      if (acao === 'pg-arquivo') { escolheImagem((a) => { pg.arq = a; atualizaPg() }); return }
+      if (acao === 'pg-tira') { pg.arq = null; atualizaPg(); return }
+      if (acao === 'pg-confirma') {
+        if (enviando || !pg.modo) return
+        const v = valorDigitado((fx.querySelector('.fx-pg-valor') || {}).value)
+        if (!(v > 0)) { diz('Escreva quanto o cliente pagou.', true); return }
+        const falta = faltaDe(p), jaPago = jaPagoDe(p)
+        const ef = modoEfetivo(pg.modo, v, falta)
+        const prox = ef === 'parte' ? pg.prox : ''
+        const texto = textoPagamento({ modo: ef, valor: v, quando: pg.quando, prox, falta })
+        let comentario = ef === 'parte' ? { tx: texto } : null
+        enviando = true
+        try {
+          if (pg.arq) {
+            const up = await sobe(pg.arq)
+            if (!up) return
+            comentario = { tx: texto, kind: 'image', url: up.url, mime: up.mime || pg.arq.mime, file_name: pg.arq.nome }
+          }
+          // SEM `who` no comentario: o servidor carimba quem esta logado.
+          const patch = patchPagamento({ modo: ef, valor: v, quando: pg.quando, prox, jaPago, spg: p.spg, col: p.colBruta, comentario })
+          await grava(patch, ef === 'parte' ? 'Parcial de ' + brl(v) + ' registrado' + (prox ? '. Próximo: ' + curtoDia(prox) : '') + '.' : 'Pago: ' + brl(jaPago + v) + '.')
+        } finally { enviando = false }
+        return
+      }
+      // ── comentario com imagem e o lapis (17/11/2026) ──
+      if (acao === 'com-print') {
+        let a = await printDaArea(true)
+        if (a) { await comentaImagem(a); return }
+        escolheImagem((x) => { comentaImagem(x) })
+        return
+      }
+      if (acao === 'com-img') {
+        const c = (p.comentarios || [])[Number(b.dataset.i)]
+        if (c && c.url) ad.abrirLink(c.url)
+        return
+      }
+      if (acao === 'com-edita') {
+        const i = Number(b.dataset.i), c = (p.comentarios || [])[i]
+        const item = fx.querySelector('.fx-com-item[data-i="' + i + '"]')
+        if (!c || !item || item.querySelector('.fx-com-ed')) return
+        const pe = item.querySelector('p')
+        const ed = document.createElement('div')
+        ed.className = 'fx-com-ed'
+        ed.innerHTML = '<textarea class="fx-com" rows="2"></textarea><div class="fx-wrap"><button class="fx-bt fx-verde" data-acao="com-salva" data-i="' + i + '">Salvar</button><button class="fx-bt fx-fraco" data-acao="com-cancela" data-i="' + i + '">Cancelar</button></div>'
+        ed.querySelector('textarea').value = String(c.tx || '')
+        if (pe) pe.hidden = true
+        item.appendChild(ed)
+        ed.querySelector('textarea').focus()
+        return
+      }
+      if (acao === 'com-cancela') {
+        const item = fx.querySelector('.fx-com-item[data-i="' + Number(b.dataset.i) + '"]')
+        if (!item) return
+        const ed = item.querySelector('.fx-com-ed'); if (ed) ed.remove()
+        const pe = item.querySelector('p'); if (pe) pe.hidden = false
+        return
+      }
+      if (acao === 'com-salva') {
+        const i = Number(b.dataset.i), c = (p.comentarios || [])[i]
+        const item = fx.querySelector('.fx-com-item[data-i="' + i + '"]')
+        const tx = String(((item && item.querySelector('.fx-com-ed textarea')) || {}).value || '').trim()
+        if (!c || !c.time) return
+        if (!tx) { diz('Escreva o comentário.', true); return }
+        if (tx === String(c.tx || '').trim()) { const ed = item.querySelector('.fx-com-ed'); if (ed) ed.remove(); const pe = item.querySelector('p'); if (pe) pe.hidden = false; return }
+        await grava({ comment_set: { time: c.time, who: c.who, tx } }, 'Comentário editado.')
+        return
+      }
+      // ── as frases prontas com lapis (17/11/2026) ──
+      if (acao === 'prontos-edita') {
+        const ed = fx.querySelector('.fx-pront-ed')
+        if (!ed) return
+        if (!ed.hidden) { ed.hidden = true; return }
+        const lista = Array.isArray(ctx.prontos) ? ctx.prontos : []
+        const linha = () => '<div class="fx-pront-l"><input class="fx-pront-in" maxlength="200"><button type="button" class="fx-ic" data-acao="prontos-tira" title="Tirar esta frase">' + I.x + '</button></div>'
+        ed.innerHTML = '<div class="fx-pront-lista">' + lista.map(linha).join('') + '</div>'
+          + '<div class="fx-pront-l"><input class="fx-pront-in fx-pront-nova" maxlength="200" placeholder="Nova frase"><span class="fx-ic">' + I.lapis + '</span></div>'
+          + '<div class="fx-wrap"><button type="button" class="fx-bt fx-verde" data-acao="prontos-salva">Salvar</button><button type="button" class="fx-bt fx-fraco" data-acao="prontos-edita">Cancelar</button></div>'
+        const ins = ed.querySelectorAll('.fx-pront-lista .fx-pront-in')
+        lista.forEach((t, k) => { if (ins[k]) ins[k].value = t })
+        ed.hidden = false
+        const nova = ed.querySelector('.fx-pront-nova'); if (nova) nova.focus()
+        return
+      }
+      if (acao === 'prontos-tira') { const l = b.closest('.fx-pront-l'); if (l) l.remove(); return }
+      if (acao === 'prontos-salva') {
+        if (!ad.prontos) { diz('Atualize o app pra editar as frases.', true); return }
+        const lista = Array.from(fx.querySelectorAll('.fx-pront-ed .fx-pront-in')).map((x) => String(x.value || '').trim()).filter(Boolean)
+        b.disabled = true
+        let r = null
+        try { r = await ad.prontos(lista) } catch (e) { r = { ok: false, erro: String((e && e.message) || e) } }
+        b.disabled = false
+        if (!r || !r.ok) { diz('Não salvou as frases: ' + semPonto((r && r.erro) || 'a dash não respondeu') + '.', true); return }
+        const ed = fx.querySelector('.fx-pront-ed'); if (ed) ed.hidden = true
+        diz('Frases prontas salvas.')
+        try { await ad.recarrega('') } catch (_) { /* a releitura seguinte acerta */ }
+        dizNaNova('Frases prontas salvas.')
         return
       }
       if (acao === 'copiar-link' || acao === 'abrir-link' || acao === 'enviar') {
@@ -709,6 +1023,62 @@
   .fx-parcial b { color: var(--texto); }
   .fx-parcelas { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
   .fx-parcelas span { padding: 1px 7px; border-radius: 6px; font-size: 11px; background: rgba(255, 255, 255, .05); color: var(--apagado); }
+  /* o painel de pagamento (17/11/2026): dois cartoes com icone e, escolhido, as linhas com icone */
+  .fx-parc-tag { display: inline-flex; align-items: center; gap: 4px; color: #38bdf8; }
+  .fx-prog { display: flex; flex-direction: column; gap: 5px; padding: 8px 9px; border-radius: 9px; border: 1px solid rgba(14, 165, 233, .3); background: rgba(14, 165, 233, .07); }
+  .fx-prog-l { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--apagado); font-variant-numeric: tabular-nums; }
+  .fx-prog-l b { color: var(--texto); }
+  .fx-barra { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+  .fx-barra i { display: block; height: 100%; border-radius: 99px; background: #0ea5e9; }
+  .fx-parcelas span { display: inline-flex; align-items: center; gap: 4px; }
+  .fx-parcelas span svg { width: 11px; height: 11px; color: #38bdf8; }
+  .fx-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .fx-tile { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 6px 9px; border-radius: 11px; border: 1px solid var(--linha);
+    background: rgba(255, 255, 255, .02); color: var(--apagado); font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+  .fx-tile svg { width: 24px; height: 24px; }
+  .fx-tile:hover { color: var(--texto); background: rgba(255, 255, 255, .06); }
+  .fx-tile.on { color: var(--t); border-color: var(--t); background: color-mix(in srgb, var(--t) 12%, transparent); }
+  .fx-pg { display: flex; flex-direction: column; gap: 9px; padding-top: 2px; }
+  .fx-pg[hidden], .fx-pg-l[hidden], .fx-pg-cal[hidden], .fx-pront-ed[hidden], .fx-chip[hidden] { display: none; }
+  .fx-pg-l { display: flex; align-items: flex-start; gap: 9px; }
+  .fx-pg-ic { width: 54px; flex: 0 0 54px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 3px; color: var(--apagado); }
+  .fx-pg-ic svg { width: 16px; height: 16px; }
+  .fx-pg-ic span { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; text-align: center; line-height: 1.15; }
+  .fx-pg-m { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .fx-valor-in.fx-pg-valor { width: 120px; font-size: 14px; font-weight: 700; padding: 5px 8px; }
+  .fx-pg-dica { font-size: 11.5px; color: var(--apagado); }
+  .fx-pg-dica.alerta { color: #f5a524; }
+  .fx-chip { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--linha);
+    background: transparent; color: var(--apagado); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  .fx-chip:hover { color: var(--texto); background: rgba(255, 255, 255, .06); }
+  .fx-chip.on { color: var(--texto); font-weight: 650; border-color: color-mix(in srgb, var(--verde) 60%, transparent); background: color-mix(in srgb, var(--verde) 16%, transparent); }
+  .fx-chip.azul.on { border-color: rgba(14, 165, 233, .7); background: rgba(14, 165, 233, .16); }
+  .fx-chip em { font-style: normal; }
+  .fx-chip em:empty { display: none; }
+  .fx-pg-cal { padding: 8px 8px 9px; border-radius: 10px; border: 1px solid var(--linha); background: rgba(0, 0, 0, .22); max-width: 260px; }
+  .fx-arq { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; height: 26px; padding: 0 4px 0 9px; border-radius: 99px;
+    border: 1px solid color-mix(in srgb, var(--verde) 45%, transparent); background: color-mix(in srgb, var(--verde) 12%, transparent); font-size: 11.5px; }
+  .fx-arq > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fx-arq button { display: grid; place-items: center; width: 20px; height: 20px; border: 0; background: transparent; color: var(--apagado); cursor: pointer; border-radius: 99px; padding: 0; }
+  .fx-arq button:hover { color: var(--texto); background: rgba(255, 255, 255, .08); }
+  .fx-pg-pe { display: flex; justify-content: flex-end; gap: 6px; }
+  .fx-azul { background: rgba(14, 165, 233, .2); border-color: rgba(14, 165, 233, .55); }
+  .fx-azul:hover { background: rgba(14, 165, 233, .3); }
+  /* o lapis do comentario, a imagem e as frases prontas (17/11/2026) */
+  .fx-so-ic { padding: 6px 8px; }
+  .fx-so-ic svg { width: 14px; height: 14px; }
+  .fx-ic { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-left: auto; border: 0; border-radius: 6px; background: transparent; color: var(--apagado); cursor: pointer; padding: 0; }
+  .fx-ic:hover { color: var(--texto); background: rgba(255, 255, 255, .08); }
+  .fx-com-img { margin-top: 4px; }
+  .fx-com-item .fx-com-ed { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .fx-com-ed .fx-com { width: 100%; }
+  .fx-com-item p[hidden] { display: none; }
+  .fx-pront-ed { display: flex; flex-direction: column; gap: 5px; padding: 8px; border-radius: 9px; border: 1px solid var(--linha); background: rgba(0, 0, 0, .18); }
+  .fx-pront-lista { display: flex; flex-direction: column; gap: 5px; }
+  .fx-pront-l { display: flex; align-items: center; gap: 4px; }
+  .fx-pront-l .fx-ic { margin-left: 0; }
+  .fx-pront-in { flex: 1; min-width: 0; font: inherit; color: var(--texto); background: rgba(255, 255, 255, .04); border: 1px solid var(--linha); border-radius: 7px; padding: 4px 7px; outline: none; }
+  .fx-pront-in:focus { border-color: color-mix(in srgb, var(--verde) 60%, transparent); }
   .fx-link { display: flex; align-items: center; gap: 6px; }
   .fx-link > span { min-width: 64px; font-weight: 650; }
   .fx-prontos .fx-mini { white-space: normal; text-align: left; }
@@ -734,9 +1104,11 @@
 
   window.SWCob = {
     esc, brl, COLS, PERDA, TODAS, colDef, chip, SAIDAS_DE_PAGOS, DESTINOS_COB, podeIrCob, COLS_COBRANCA, COLS_A_CAMINHO,
+    PARCIAL, ehParcial, colunaDoQuadro, QUADRO,
     naFila, aCaminho, emContato, quandoAgend, agenda, rotuloDia, hora, haQuanto, quandoTxt, chaveDia, diaIni,
     COR_CAL, calendario, diasDaGrade, mesRotulo, agendNoDia,
     valorDigitado, atalhosRetorno, DIAS_ATALHO, HORAS_FICHA, calInicial, calFicha, faltaDe, jaPagoDe,
+    PROX_DIAS, proxAtalhos, modoEfetivo, patchPagamento, textoPagamento, curtoDia, calDia, pagamentoHtml,
     foneBonito, textoDados, fichaHtml, ligaFicha, fichaOcupada, poeEstilo, I,
   }
 })()

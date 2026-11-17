@@ -2531,6 +2531,7 @@ async function puxaCob(fone, forca, semGuarda) {
     cob.erro = ''
     cob.pedidos = Array.isArray(r.pedidos) ? r.pedidos : []
     if (Array.isArray(r.prontos)) cob.prontos = r.prontos
+    cob.podeProntos = !!r.podeProntos   // o lapis das frases prontas (17/11/2026)
     if (Array.isArray(r.tags)) cob.tags = r.tags
     if (cob.sel >= cob.pedidos.length) cob.sel = 0
   }
@@ -2821,7 +2822,7 @@ function desenhaCob() {
     h += '<div class="cob-outros">' + cob.pedidos.map((x, i) => '<button data-sel="' + i + '" class="' + (i === cob.sel ? 'on' : '') + '">'
       + esc([x.data, C.brl(x.valor), C.colDef(x.col).lbl].filter(Boolean).join(' · ')) + '</button>').join('') + '</div>'
   }
-  h += '<div class="cob-ficha-p">' + C.fichaHtml(p, { enviar: true, prontos: cob.prontos, tags: cob.tags }) + '</div>'
+  h += '<div class="cob-ficha-p">' + C.fichaHtml(p, { enviar: true, prontos: cob.prontos, podeProntos: cob.podeProntos, tags: cob.tags }) + '</div>'
   return h
 }
 function ligaCob(corpo) {
@@ -2849,8 +2850,12 @@ function ligaCob(corpo) {
       await enfileira([{ tipo: 'texto', texto: String(texto || ''), pausa: 1 }], 'cob-link', 'link pro cliente')
       return { ok: true }
     },
+    // o print do pagamento e do comentario, e as frases prontas (17/11/2026)
+    sobe: (id, arq) => window.swp.cobSobe(id, arq),
+    colaPrint: () => window.swp.colaPrint(),
+    prontos: (lista) => window.swp.cobProntos(lista),
     recarrega: async () => { await puxaCob(cob.fone, true, true) },
-  })
+  }, { prontos: cob.prontos, podeProntos: cob.podeProntos })
 }
 
 // ── A LISTA DE CLIENTES DA ABA COBRANCA (14/11/2026) ─────────────────────────────────────────────

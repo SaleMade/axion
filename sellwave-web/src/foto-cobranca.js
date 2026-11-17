@@ -47,6 +47,16 @@ app.whenReady().then(async () => {
   await js('window.__swCob.abreFicha("9004")')
   await espera(700)
   await foto(w, '4c-ficha-parcial')
+  // O PAINEL DE PAGAMENTO (17/11/2026): "Uma parte" aberto, com valor, o proximo em 7 dias e um print
+  await js('(() => { document.querySelector("#cob-ficha [data-acao=pg-modo][data-v=parte]").click(); const i = document.querySelector("#cob-ficha .fx-pg-valor"); i.value = "150"; i.dispatchEvent(new Event("input", { bubbles: true })); document.querySelectorAll("#cob-ficha [data-acao=pg-prox]")[1].click(); document.querySelector("#cob-ficha [data-sec=pagamento]").scrollIntoView() })()')
+  await espera(300)
+  await foto(w, '4d-ficha-pagamento-parte')
+  await js('(() => { document.querySelector("#cob-ficha [data-acao=pg-modo][data-v=tudo]").click(); document.querySelector("#cob-ficha [data-sec=pagamento]").scrollIntoView() })()')
+  await espera(300)
+  await foto(w, '4e-ficha-pagamento-quitou')
+  await js('(() => { document.querySelector("#cob-ficha [data-sec=comentarios]").scrollIntoView() })()')
+  await espera(200)
+  await foto(w, '4f-ficha-comentarios')
   // o painel com a ficha
   const p = new BrowserWindow({ show: false, width: 340, height: 1000, webPreferences: { preload: path.join(__dirname, 'teste-painel-preload.js'), sandbox: false, contextIsolation: true, backgroundThrottling: false } })
   await p.loadFile(path.join(__dirname, 'ui/painel.html'))

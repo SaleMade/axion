@@ -143,7 +143,7 @@
       erro = ''
       lidoEm = Date.now()
       if (!r.igual) {
-        dados = { pedidos: Array.isArray(r.pedidos) ? r.pedidos : [], prontos: Array.isArray(r.prontos) ? r.prontos : [], tags: Array.isArray(r.tags) ? r.tags : [], eu: String(r.eu || '') }
+        dados = { pedidos: Array.isArray(r.pedidos) ? r.pedidos : [], prontos: Array.isArray(r.prontos) ? r.prontos : [], podeProntos: !!r.podeProntos, tags: Array.isArray(r.tags) ? r.tags : [], eu: String(r.eu || '') }
         sig = String(r.sig || '')
         carregou = true
         if (aberto) { if (arrastando) redesenhaDepois = true; else desenha() }
@@ -260,6 +260,17 @@
   // marcado (vermelho se passou), "escreveu ha X" em Entraram em contato, ou a data do pedido.
   const pad = (n) => String(n).padStart(2, '0')
   const iniciais = (n) => String(n || '').trim().split(/\s+/).map((x) => x[0] || '').join('').slice(0, 2).toUpperCase() || '?'
+  // PAGOU UMA PARTE (17/11/2026): quanto ja entrou, a barra e o dia do proximo pagamento. O valor
+  // grande do card ja e o que falta.
+  function parcialHtml(p, ag) {
+    if (!C.ehParcial(p)) return ''
+    const jp = C.jaPagoDe(p), tot = Number(p.valor) || 0
+    const pct = tot > 0 ? Math.min(100, Math.round((jp / tot) * 100)) : 0
+    return '<div class="cob-parc" title="Já pagou ' + esc(C.brl(jp)) + ' de ' + esc(C.brl(tot)) + '">'
+      + '<div><span class="cob-parc-v">' + C.I.pizza + esc(C.brl(jp)) + ' <small>de ' + esc(C.brl(tot)) + '</small></span>'
+      + (!isNaN(ag) ? '<span title="Próximo pagamento">' + C.I.calRelogio + esc(C.curtoDia(C.chaveDia(ag))) + '</span>' : '') + '</div>'
+      + '<i><b style="width:' + pct + '%"></b></i></div>'
+  }
   function cartao(p, o) {
     o = o || {}
     const ag = C.quandoAgend(p)
@@ -290,6 +301,7 @@
       + (p.wa ? '<div class="cob-ln">' + C.I.fone + '<span>' + esc(C.foneBonito(p.wa)) + '</span></div>' : '')
       + linhaQ
       + '<div class="cob-v">' + esc(C.brl(valor)) + desconto + '</div>'
+      + parcialHtml(p, ag)
       + ent
       + (pills ? '<div class="cob-pills">' + pills + '</div>' : '')
       + '<div class="cob-pe"><span class="cob-av">' + esc(iniciais(p.atNome)) + '</span><span class="cob-vend">' + esc(p.atNome || 'Sem vendedor') + '</span>'
@@ -420,11 +432,18 @@
 
   function desenhaKanban() {
     const l = visiveis()
-    resumo.innerHTML = '<span>Arraste pra Pagos, Requer Atenção ou uma frustração. Pago pede o valor recebido; as etapas de entrega mudam sozinhas.</span>'
+    resumo.innerHTML = '<span>Arraste pra Pagos, Pagamento parcial, Requer Atenção ou uma frustração. Pago e parcial pedem o valor; as etapas de entrega mudam sozinhas.</span>'
     const porCol = new Map()
-    for (const p of l) { if (!porCol.has(p.col)) porCol.set(p.col, []); porCol.get(p.col).push(p) }
+    // PAGOU UMA PARTE vai pra coluna "Pagamento parcial" (17/11/2026, C.colunaDoQuadro); a etapa dele
+    // nao muda. Na coluna, o proximo pagamento mais perto fica em cima.
+    for (const p of l) { const k = C.colunaDoQuadro(p); if (!porCol.has(k)) porCol.set(k, []); porCol.get(k).push(p) }
     const ordem = (a, b) => (Number(b.entrou) || 0) - (Number(a.entrou) || 0)   // o ultimo que entrou fica em cima
-    let html = C.COLS.map((c) => {
+    const porProx = (a, b) => { const x = C.quandoAgend(a), y = C.quandoAgend(b); return (isNaN(x) ? Infinity : x) - (isNaN(y) ? Infinity : y) }
+    let html = C.QUADRO.map((c) => {
+      if (c.id === C.PARCIAL.id) {
+        const itens = (porCol.get(c.id) || []).sort(porProx)
+        return coluna(c.id, c.lbl, c.cor, itens.length, itens.map((p) => cartao(p, { arrasta: true, semColuna: true, cor: c.cor })).join(''), 'Arraste pra cá quem pagou uma parte')
+      }
       const itens = (porCol.get(c.id) || []).sort(ordem)
       return coluna(c.id, c.lbl, c.cor, itens.length, itens.map((p) => cartao(p, { arrasta: true, semColuna: true, quando: C.naFila(p) ? undefined : false })).join(''), C.DESTINOS_COB.includes(c.id) ? 'Arraste pedidos pra cá' : 'Nenhum pedido')
     }).join('')
@@ -504,7 +523,12 @@
   }
   const podeSoltar = (a, alvo) => {
     const p = a && alvo && dados.pedidos.find((x) => String(x.id) === String(a.id))
-    return !!p && C.podeIrCob(p.col, alvo.id)
+    if (!p) return false
+    // A coluna do parcial (17/11/2026) recebe quem ainda nao pagou nem pagou parte; quem esta nela so
+    // sai pra Pagos (quitar) ou perda.
+    if (alvo.id === C.PARCIAL.id) return !p.pago && !C.ehParcial(p)
+    if (C.ehParcial(p) && alvo.id !== 'Pagos' && !C.PERDA.some((c) => c.id === alvo.id)) return false
+    return C.podeIrCob(p.col, alvo.id)
   }
   const celulaDe = (ev) => (ev.target.closest && ev.target.closest('.cob-cal-dia')) || null
   corpo.addEventListener('dragover', (ev) => {
@@ -542,7 +566,9 @@
   async function move(id, para) {
     const p = dados.pedidos.find((x) => String(x.id) === String(id))
     if (!p || p.col === para) return
-    if (para === 'Pagos') { avisa('Confira o valor recebido e confirme na ficha.'); abreFicha(p.id); return }
+    if (para === 'Pagos') { avisa('Confira o valor recebido e confirme na ficha.'); abreFicha(p.id, 'tudo'); return }
+    // PAGOU UMA PARTE (17/11/2026): abre a ficha com o painel de pagamento ja em "uma parte".
+    if (para === C.PARCIAL.id) { if (p.pago || C.ehParcial(p)) return; avisa('Escreva quanto ele pagou e o dia do próximo pagamento.'); abreFicha(p.id, 'parte'); return }
     if (!C.podeIrCob(p.col, para)) { avisa('Por aqui o pedido só vai pra Pagos, Requer Atenção ou uma frustração. As etapas de entrega mudam sozinhas.'); return }
     // MOVE NA HORA e grava depois; a dash recusou, volta e diz por que.
     const antes = { col: p.col, colBruta: p.colBruta, spg: p.spg }
@@ -557,9 +583,11 @@
   }
 
   // ── a ficha ─────────────────────────────────────────────────────────────────────────────────
-  async function abreFicha(id) {
+  let fichaModo = ''   // o painel de pagamento ja aberto num modo (o arrasto pra Pagos ou pro parcial)
+  async function abreFicha(id, modoPg) {
     fichaId = String(id)
     fichaPed = null
+    fichaModo = modoPg || ''
     ficha.hidden = false
     const p = dados.pedidos.find((x) => String(x.id) === fichaId)
     fichaCorpo.innerHTML = '<div class="cob-carrega">' + esc(p ? p.nome : 'Pedido') + '<br>buscando a ficha na dash...</div>'
@@ -577,15 +605,21 @@
     // calendario aberto, com o "Confirmar" armado ou com comentario escrito (fichaOcupada, 05/11).
     if (quieto && (C.fichaOcupada ? C.fichaOcupada(fichaCorpo) : (fichaCorpo.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')))) return
     fichaPed = det
-    fichaCorpo.innerHTML = C.fichaHtml(det, { conversa: true, prontos: dados.prontos, tags: dados.tags })
+    fichaCorpo.innerHTML = C.fichaHtml(det, { conversa: true, prontos: dados.prontos, podeProntos: dados.podeProntos, tags: dados.tags })
     C.ligaFicha(fichaCorpo, det, {
       salva: (pid, patch) => window.sw.cobSalva(pid, patch),
       copiar: (t) => window.sw.copiar(t),
       abrirLink: (u) => window.sw.abrirLink(u),
       curto: (u, pid) => window.sw.cobCurto(u, pid),
       conversa: (p, b) => conversa(p, b),
+      // o print do pagamento e do comentario, e as frases prontas (17/11/2026)
+      sobe: (pid, arq) => window.sw.cobSobe(pid, arq),
+      colaPrint: () => window.sw.cobColaPrint(),
+      prontos: (lista) => window.sw.cobProntos(lista),
       recarrega: async () => { sig = ''; await Promise.all([busca(), recarregaFicha(false)]) },
-    })
+    }, { prontos: dados.prontos, podeProntos: dados.podeProntos })
+    // O ARRASTO PRA PAGOS OU PRO PARCIAL abre a ficha com o painel ja no modo certo, uma vez so.
+    if (fichaModo && !det.pago) { const t = fichaCorpo.querySelector('[data-acao="pg-modo"][data-v="' + fichaModo + '"]'); fichaModo = ''; if (t) t.click() }
   }
   function fechaFicha() { ficha.hidden = true; fichaId = ''; fichaPed = null }
 

@@ -53,6 +53,11 @@ contextBridge.exposeInMainWorld('sw', {
   abrirLink: (url) => chamar('sw:abrir-link', { url }),
   cobConversa: (fone, nk) => chamar('sw:cob-conversa', { fone, nk }),
   cobLembrete: (d) => chamar('sw:cob-lembrete', d),
+  // O PRINT (do pagamento ou do comentario) sobe pela dash e volta o link; colar le a area de
+  // transferencia; as frases prontas gravam a lista (17/11/2026).
+  cobSobe: (id, arq) => chamar('sw:cob-sobe', { id, arq }),
+  cobColaPrint: () => chamar('sw:cob-cola-print', {}),
+  cobProntos: (lista) => chamar('sw:cob-prontos', { lista }),
 
   // avisos vindos do processo principal
   ao: (canal, fn) => {

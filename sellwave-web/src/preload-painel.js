@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld('swp', {
   cobAbre: (fone, nk) => ipcRenderer.invoke('swp:cob-abre', { fone, nk }),
   cobSalva: (id, patch) => ipcRenderer.invoke('swp:cob-salva', { id, patch }),
   cobCurto: (url, id) => ipcRenderer.invoke('swp:cob-curto', { url, id }),
+  // o print do pagamento e do comentario, e as frases prontas (17/11/2026)
+  cobSobe: (id, arq) => ipcRenderer.invoke('swp:cob-sobe', { id, arq }),
+  cobProntos: (lista) => ipcRenderer.invoke('swp:cob-prontos', { lista }),
   // A ABA AUTOMACOES do cobrador (11/11/2026): a lista com o que esta ligado e o que saiu hoje, e o
   // interruptor de cada uma (so a dele).
   // `quem` (13/11/2026): a direcao escolhe na aba de quem ela esta vendo ('casa' ou o id do cobrador).

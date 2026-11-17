@@ -839,16 +839,57 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('ficha do painel tem "Enviar" (manda na conversa); a do quadro nao, mas abre a conversa',
     /data-acao="enviar"/.test(htmlPainel) && !/data-acao="enviar"/.test(htmlQuadro) && /data-acao="conversa"/.test(htmlQuadro) && !/data-acao="conversa"/.test(htmlPainel))
   vale('pedido pago nao oferece "Marcar como pago" e so sai pra perda', !/data-acao="pago"/.test(htmlPainel) && !/value="Enviados"/.test(htmlPainel) && /value="Frustrados"/.test(htmlPainel))
-  vale('pedido em aberto nao oferece Pagos no "mudar etapa" (pago pede o valor)', !/value="Pagos"/.test(htmlQuadro) && /data-acao="pago"/.test(htmlQuadro))
+  vale('pedido em aberto nao oferece Pagos no "mudar etapa" (pago pede o valor, no painel de pagamento)', !/value="Pagos"/.test(htmlQuadro) && /data-acao="pg-modo" data-v="tudo"/.test(htmlQuadro))
   // PAGAMENTO PARCIAL E O CAMPO SEM ROTULO (05/11/2026)
   const nb = (s) => String(s).replace(/ /g, ' ')
-  vale('a ficha nao tem mais o rotulo "Valor recebido" nem o campo nativo de data; o campo do valor diz o que e so pro leitor de tela',
-    !/Valor recebido</.test(htmlQuadro) && !/datetime-local|agend-campo/.test(htmlQuadro) && /aria-label="Valor recebido"/.test(htmlQuadro) && /data-acao="cal-abre"/.test(htmlQuadro) && /class="fx-cal" hidden/.test(htmlQuadro))
-  vale('pedido em aberto oferece "Pagamento parcial"; pago nao', /data-acao="parcial"/.test(htmlQuadro) && !/data-acao="parcial"/.test(htmlPainel))
+  vale('a ficha nao tem o rotulo "Valor recebido" nem o campo nativo de data; o valor diz o que e so pro leitor de tela',
+    !/Valor recebido</.test(htmlQuadro) && !/datetime-local|agend-campo/.test(htmlQuadro) && /aria-label="Valor"/.test(htmlQuadro) && /data-acao="cal-abre"/.test(htmlQuadro) && /class="fx-cal" hidden/.test(htmlQuadro))
+  // O PAINEL DE PAGAMENTO COM ICONES (17/11/2026, pedido do Bruno com os audios do Bryan)
+  vale('pedido em aberto oferece os dois cartoes (pagou tudo, uma parte) e o painel nasce fechado; pago nao tem nenhum',
+    /data-acao="pg-modo" data-v="tudo"[^>]*>[\s\S]*?Pagou tudo/.test(htmlQuadro) && /data-acao="pg-modo" data-v="parte"[^>]*>[\s\S]*?Uma parte/.test(htmlQuadro) && /class="fx-pg" hidden/.test(htmlQuadro)
+    && !/data-acao="pg-modo"/.test(htmlPainel) && !/data-acao="pago"|data-acao="parcial"/.test(htmlQuadro))
+  vale('as quatro linhas com icone: valor, pagou em (Hoje, Ontem, calendario), proximo (Amanha, 7, 15, 30 dias, calendario) e print (Colar, Arquivo)',
+    /data-acao="pg-quando" data-v="\d{4}-\d\d-\d\d">Hoje</.test(htmlQuadro) && />Ontem</.test(htmlQuadro) && (htmlQuadro.match(/data-acao="pg-prox"/g) || []).length === 4
+    && /data-linha="prox"/.test(htmlQuadro) && /data-acao="pg-colar"/.test(htmlQuadro) && /data-acao="pg-arquivo"/.test(htmlQuadro) && (htmlQuadro.match(/data-acao="pg-cal"/g) || []).length === 2)
   const parcial = nb(C.fichaHtml({ ...pedido, pago: false, col: 'Entregues', valor: 297, saldo: 147, spg: 'Parcial', pagamentos: [{ valor: 150, data: '03/11/2026', quem: 'Haynan', obs: '' }] }, {}))
-  vale('com parcela registrada a ficha diz o que ja entrou e o que falta, lista a parcela, e o campo ja vem com o que falta',
-    /Já pagou <b>R\$ 150,00<\/b> de R\$ 297,00 · faltam <b>R\$ 147,00<\/b>/.test(parcial) && /<span>03\/11\/2026 · R\$ 150,00 · Haynan<\/span>/.test(parcial) && /value="147,00"/.test(parcial), parcial.slice(parcial.indexOf('Já pagou'), parcial.indexOf('Já pagou') + 110))
-  vale('sem parcela a ficha nao fala em "ja pagou" e o campo vem com o valor inteiro', !/Já pagou/.test(htmlQuadro) && /value="100,00"/.test(htmlQuadro))
+  vale('com parcela registrada: a barra diz o que entrou e o que falta, lista a parcela, e o cartao vira "Quitou"',
+    /<b>R\$ 150,00<\/b> de R\$ 297,00<\/span><span>falta <b>R\$ 147,00<\/b>/.test(parcial) && /fx-barra"><i style="width:51%">/.test(parcial) && /03\/11 · R\$ 150,00<\/span>/.test(parcial) && />Quitou</.test(parcial) && /fx-parc-tag/.test(parcial),
+    parcial.slice(parcial.indexOf('fx-prog'), parcial.indexOf('fx-prog') + 160))
+  vale('sem parcela a ficha nao mostra a barra', !/fx-prog/.test(htmlQuadro) && />Pagou tudo</.test(htmlQuadro))
+  vale('a coluna do parcial: quem pagou parte e nao quitou, de qualquer etapa do caminho; pago e perda nao',
+    C.ehParcial({ valor: 297, saldo: 147 }) && !C.ehParcial({ valor: 297, saldo: 297 }) && !C.ehParcial({ valor: 297, saldo: 0, pago: true }) && !C.ehParcial({ valor: 297 })
+    && C.colunaDoQuadro({ valor: 297, saldo: 147, col: 'Entregues' }) === 'Parcial' && C.colunaDoQuadro({ valor: 297, saldo: 147, col: 'Requer Atenção' }) === 'Parcial'
+    && C.colunaDoQuadro({ valor: 297, saldo: 147, col: 'Devolvido com Reverso' }) === 'Devolvido com Reverso' && C.colunaDoQuadro({ valor: 297, col: 'Entregues' }) === 'Entregues')
+  vale('o quadro tem a coluna "Pagamento parcial" logo antes de Pagos', C.QUADRO.map((c) => c.id).join('>').endsWith('Requer Atenção>Parcial>Pagos') && C.colDef('Parcial').lbl === 'Pagamento parcial')
+  vale('uma parte que cobre o que falta vira quitacao', C.modoEfetivo('parte', 147, 147) === 'tudo' && C.modoEfetivo('parte', 100, 147) === 'parte' && C.modoEfetivo('tudo', 10, 147) === 'tudo')
+  const pp = C.patchPagamento({ modo: 'parte', valor: 250, quando: '2026-11-16', prox: '2026-11-30T09:00', jaPago: 0, spg: 'Pendente', col: 'Cobrança', comentario: { tx: 'x' } })
+  vale('patch da parte: parcela com o dia, proximo = retorno, sem spg nem coluna, com o comentario e o "antes"',
+    pp.pagamento_add.valor === 250 && pp.pagamento_add.quando === '2026-11-16' && pp.agend === '2026-11-30T09:00' && !('spg' in pp) && !('col' in pp) && pp.comment_add.tx === 'x' && pp.antes.col === 'Cobrança', JSON.stringify(pp))
+  const pt = C.patchPagamento({ modo: 'tudo', valor: 297, quando: '2026-11-16', jaPago: 0, spg: 'Pendente', col: 'Cobrança' })
+  vale('patch do pagou tudo: Pago, Pagos, valor e o dia (pago_quando), sem parcela', pt.spg === 'Pago' && pt.col === 'Pagos' && pt.valor_neg === 297 && pt.pago_quando === '2026-11-16' && !pt.pagamento_add, JSON.stringify(pt))
+  const pq = C.patchPagamento({ modo: 'tudo', valor: 147, quando: '2026-11-17', jaPago: 150, spg: 'Parcial', col: 'Cobrança' })
+  vale('patch do quitou: o resto vira parcela e o valor e a soma', pq.spg === 'Pago' && pq.valor_neg === 297 && pq.pagamento_add.valor === 147 && pq.pagamento_add.quando === '2026-11-17', JSON.stringify(pq))
+  const tp = nb(C.textoPagamento({ modo: 'parte', valor: 250, quando: '2026-11-16', prox: '2026-11-30T09:00', falta: 500 }))
+  vale('a anotacao da parte diz quanto, quando, quanto falta e o proximo', tp === 'Pagou R$ 250,00 em 16/11. Falta R$ 250,00, próximo pagamento 30/11.', tp)
+  // (AGORA e 31/10/2026, 15h)
+  const cq = C.calDia({ ano: 2026, mes: 9, sel: '2026-10-30' }, AGORA, 'quando')
+  const cqNov = C.calDia({ ano: 2026, mes: 10, sel: '' }, AGORA, 'quando')
+  vale('o calendario do "pagou em" nao deixa escolher depois de hoje', /class="fx-cal-d sel" data-acao="pg-cal-dia" data-para="quando" data-v="2026-10-30">30</.test(cq) && /data-v="2026-11-01"[^>]* disabled>/.test(cqNov) && !/data-v="2026-10-31"[^>]* disabled>/.test(cq), '')
+  const cp = C.calDia({ ano: 2026, mes: 9, sel: '' }, AGORA, 'prox')
+  vale('o do proximo so deixa de amanha em diante', /data-v="2026-10-31"[^>]* disabled>/.test(cp) && !/data-v="2026-11-01"[^>]* disabled>/.test(cp), '')
+  const raizPg = (pgAberto) => ({ querySelector: (s) => s === '.fx-pg' ? { hidden: !pgAberto } : s === '.fx-com' ? { value: '' } : null, contains: () => false })
+  vale('o painel de pagamento aberto segura a releitura de fundo', C.fichaOcupada(raizPg(true)) === true && C.fichaOcupada(raizPg(false)) === false)
+  // O LAPIS E A IMAGEM DOS COMENTARIOS, E AS FRASES PRONTAS (17/11/2026, audios do Bryan)
+  const coms = C.fichaHtml({ ...pedido, pago: false, col: 'Entregues', comentarios: [
+    { quem: 'Bryan', tx: 'liguei', quando: '16/11 10:00', time: '16/11 10:00', who: 'b', meu: true },
+    { quem: 'Kevin', tx: 'vendi', quando: '15/11 10:00', time: '15/11 10:00', who: 'k', meu: false },
+    { quem: 'Bryan', tx: 'comprovante', quando: '14/11 10:00', time: '14/11 10:00', who: 'b', meu: true, tipo: 'image', url: 'https://x/a.png?exp=1&sig=2' },
+  ] }, { prontos: ['Cliente não atendeu'], podeProntos: true })
+  vale('o lapis so aparece no comentario de texto que e dele; a imagem tem "Ver imagem"',
+    (coms.match(/data-acao="com-edita"/g) || []).length === 1 && /data-acao="com-edita" data-i="0"/.test(coms) && /data-acao="com-img" data-i="2"/.test(coms) && !/\[imagem\]/.test(coms))
+  vale('o campo do comentario tem o botao de imagem', /data-acao="com-print"/.test(coms))
+  vale('com permissao, o lapis das frases prontas aparece; sem, nao',
+    /data-acao="prontos-edita"/.test(coms) && !/data-acao="prontos-edita"/.test(C.fichaHtml({ ...pedido, pago: false }, { prontos: ['a'] })))
   vale('o nome do cliente sai escapado (nada de HTML do pedido na tela)', !/<img/.test(C.fichaHtml({ ...pedido, nome: '<img src=x onerror=1>' }, {})))
 
   // COPIAR DADOS E ABRIR O LINK (05/11/2026, pedido do Haynan via Bruno): a ficha ganha o "Copiar

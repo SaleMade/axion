@@ -1156,26 +1156,38 @@ app.whenReady().then(async () => {
   await espera(500)
   const pcC = await js('({ nova: !document.querySelector("#corpo .fx").__marca, campo: document.querySelector("#corpo .fx-com").value, lista: [...document.querySelectorAll("#corpo .fx-com-item p")].map(x => x.textContent) })')
   conta('painel: salvar o comentario limpa o campo e a ficha redesenha com ele na lista', pcC.nova && pcC.campo === '' && pcC.lista.join('|') === 'combinou sexta', JSON.stringify(pcC))
-  // parcial: duas vezes no botao, a ficha volta com "Ja pagou" e o campo com o que falta
-  await js('(() => { document.querySelector("#corpo .fx").__marca = 1; document.querySelector("#corpo .fx-valor-in").value = "100"; document.querySelector("#corpo [data-acao=parcial]").click() })()')
+  // O PAINEL DE PAGAMENTO COM ICONES (17/11/2026): "Uma parte" abre o painel vazio, com o proximo
+  // pagamento; o confirmar grava parcela + retorno + anotacao numa vez e a ficha volta com a barra.
+  await js('(() => { document.querySelector("#corpo .fx").__marca = 1; document.querySelector("#corpo [data-acao=pg-modo][data-v=parte]").click() })()')
   await espera(120)
-  const pcA = await js('({ txt: document.querySelector("#corpo [data-acao=parcial]").textContent, ocupada: window.SWCob.fichaOcupada(document.querySelector("#corpo .fx")) })')
-  conta('painel: o primeiro clique no parcial arma (e a ficha conta como ocupada, pra releitura de fundo nao atropelar)', /Confirmar parcial de R\$\s100,00/.test(pcA.txt) && pcA.ocupada === true, JSON.stringify(pcA))
-  await js('document.querySelector("#corpo [data-acao=parcial]").click()')
-  await espera(600)
-  const pcP = await js('(() => { const s = document.querySelector("#corpo [data-sec=pagamento]"); const u = (window.__ver()).filter(c => c.nome === "cobSalva").pop(); return { nova: !document.querySelector("#corpo .fx").__marca, txt: s.textContent.replace(/\\u00a0/g, " "), campo: s.querySelector(".fx-valor-in").value, patch: u && u.args[1], bt: s.querySelector("[data-acao=parcial]").textContent, ocupada: window.SWCob.fichaOcupada(document.querySelector("#corpo .fx")) } })()')
-  conta('painel: confirmada a parcial, grava pagamento_add e a ficha redesenha com "Ja pagou 100 de 397 · faltam 297" e o campo com 297',
-    pcP.nova && pcP.patch && pcP.patch.pagamento_add && pcP.patch.pagamento_add.valor === 100 && /Já pagou R\$ 100,00 de R\$ 397,00 · faltam R\$ 297,00/.test(pcP.txt) && pcP.campo === '297,00' && pcP.bt === 'Pagamento parcial' && pcP.ocupada === false, JSON.stringify(pcP))
-  // marcar como pago com parcela: o botao diz o total; valor acima do que falta avisa, mas nao bloqueia
-  await js('(() => { document.querySelector("#corpo .fx-valor-in").value = "350"; document.querySelector("#corpo [data-acao=pago]").click() })()')
+  const pcA = await js('(() => { const s = document.querySelector("#corpo [data-sec=pagamento]"); return { aberto: !s.querySelector(".fx-pg").hidden, campo: s.querySelector(".fx-pg-valor").value, prox: !s.querySelector("[data-linha=prox]").hidden, on: s.querySelector("[data-acao=pg-modo][data-v=parte]").classList.contains("on"), hoje: (s.querySelector("[data-acao=pg-quando].on") || {}).textContent, ocupada: window.SWCob.fichaOcupada(document.querySelector("#corpo .fx")) } })()')
+  conta('painel: "Uma parte" abre o painel com o campo vazio, o "Pagou em" em Hoje e a linha do proximo (a ficha fica ocupada)', pcA.aberto && pcA.campo === '' && pcA.prox && pcA.on && pcA.hoje === 'Hoje' && pcA.ocupada === true, JSON.stringify(pcA))
+  await js('(() => { const i = document.querySelector("#corpo .fx-pg-valor"); i.value = "100"; i.dispatchEvent(new Event("input", { bubbles: true })); document.querySelectorAll("#corpo [data-acao=pg-prox]")[1].click() })()')
   await espera(120)
-  const pcT = await js('({ bt: document.querySelector("#corpo [data-acao=pago]").textContent.replace(/\\u00a0/g, " "), msg: document.querySelector("#corpo .fx-msg").textContent.replace(/\\u00a0/g, " ") })')
-  conta('painel: "Marcar como pago" com parcela anterior arma com o TOTAL e avisa quando o digitado passa do que faltava', pcT.bt === 'Confirmar R$ 350,00 (total R$ 450,00)' && /^Faltavam R\$ 297,00\./.test(pcT.msg) && /fecha com R\$ 450,00 no total/.test(pcT.msg), JSON.stringify(pcT))
-  await js('(() => { document.querySelector("#corpo .fx").__marca = 1; document.querySelector("#corpo [data-acao=pago]").click() })()')
+  const pcB = await js('(() => { const s = document.querySelector("#corpo [data-sec=pagamento]"); return { bt: s.querySelector("[data-acao=pg-confirma]").textContent.replace(/\u00a0/g, " "), dica: s.querySelector(".fx-pg-dica").textContent.replace(/\u00a0/g, " "), prox: (s.querySelector("[data-acao=pg-prox].on") || {}).textContent } })()')
+  conta('painel: digitado 100, o botao diz "Registrar R$ 100,00", a dica diz o que fica faltando e o 7 dias fica marcado', pcB.bt === 'Registrar R$ 100,00' && pcB.dica === 'Fica faltando R$ 297,00.' && pcB.prox === '7 dias', JSON.stringify(pcB))
+  await js('document.querySelector("#corpo [data-acao=pg-confirma]").click()')
   await espera(600)
-  const pcQ = await js('(() => { const u = (window.__ver()).filter(c => c.nome === "cobSalva").pop(); return { nova: !document.querySelector("#corpo .fx").__marca, patch: u && u.args[1], pago: !!document.querySelector("#corpo .fx-pago"), txt: (document.querySelector("#corpo [data-sec=pagamento]") || {}).textContent.replace(/\\u00a0/g, " ") } })()')
+  const pcP = await js('(() => { const s = document.querySelector("#corpo [data-sec=pagamento]"); const u = (window.__ver()).filter(c => c.nome === "cobSalva").pop(); return { nova: !document.querySelector("#corpo .fx").__marca, txt: s.textContent.replace(/\u00a0/g, " "), patch: u && u.args[1], tile: (s.querySelector("[data-acao=pg-modo][data-v=tudo]") || {}).textContent, ocupada: window.SWCob.fichaOcupada(document.querySelector("#corpo .fx")), com: (document.querySelector("#corpo .fx-com-item p") || {}).textContent } })()')
+  const hojeIso = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') })()
+  conta('painel: confirmada a parte, grava parcela com o dia de hoje + proximo (retorno as 9h) + anotacao, e a ficha volta com a barra e o "Quitou"',
+    pcP.nova && pcP.patch && pcP.patch.pagamento_add && pcP.patch.pagamento_add.valor === 100 && pcP.patch.pagamento_add.quando === hojeIso && /T09:00$/.test(String(pcP.patch.agend))
+    && pcP.patch.comment_add && /^Pagou R\$\s100,00 em \d\d\/\d\d\. Falta R\$\s297,00, próximo pagamento \d\d\/\d\d\.$/.test(pcP.patch.comment_add.tx) && !('who' in pcP.patch.comment_add)
+    && /R\$ 100,00 de R\$ 397,00falta R\$ 297,00/.test(pcP.txt) && pcP.tile === 'Quitou' && pcP.ocupada === false && /^Pagou R\$/.test(String(pcP.com || '').replace(/\u00a0/g, ' ')), JSON.stringify(pcP).slice(0, 400))
+  // quitou: o campo ja vem com o que falta; valor diferente avisa (nao bloqueia) e o botao diz o TOTAL
+  await js('(() => { document.querySelector("#corpo [data-acao=pg-modo][data-v=tudo]").click(); })()')
+  await espera(120)
+  const pcV = await js('document.querySelector("#corpo .fx-pg-valor").value')
+  await js('(() => { const i = document.querySelector("#corpo .fx-pg-valor"); i.value = "350"; i.dispatchEvent(new Event("input", { bubbles: true })) })()')
+  await espera(120)
+  const pcT = await js('(() => { const s = document.querySelector("#corpo [data-sec=pagamento]"); return { bt: s.querySelector("[data-acao=pg-confirma]").textContent.replace(/\u00a0/g, " "), dica: s.querySelector(".fx-pg-dica").textContent.replace(/\u00a0/g, " "), prox: s.querySelector("[data-linha=prox]").hidden } })()')
+  conta('painel: "Quitou" vem com o que falta (297), e 350 avisa "A mais" com o botao dizendo o total (100 + 350 = 450), sem a linha do proximo',
+    pcV === '297,00' && pcT.bt === 'Confirmar R$ 350,00 · total R$ 450,00' && pcT.dica === 'A mais R$ 53,00.' && pcT.prox === true, JSON.stringify({ pcV, pcT }))
+  await js('(() => { document.querySelector("#corpo .fx").__marca = 1; document.querySelector("#corpo [data-acao=pg-confirma]").click() })()')
+  await espera(600)
+  const pcQ = await js('(() => { const u = (window.__ver()).filter(c => c.nome === "cobSalva").pop(); return { nova: !document.querySelector("#corpo .fx").__marca, patch: u && u.args[1], pago: !!document.querySelector("#corpo .fx-pago"), txt: (document.querySelector("#corpo [data-sec=pagamento]") || {}).textContent.replace(/\u00a0/g, " ") } })()')
   conta('painel: confirmado, fecha com parcela do resto + valor_neg no total (100 + 350 = 450) e a ficha redesenha como paga',
-    pcQ.nova && pcQ.patch && pcQ.patch.pagamento_add && pcQ.patch.pagamento_add.valor === 350 && pcQ.patch.spg === 'Pago' && pcQ.patch.valor_neg === 450 && pcQ.patch.col === 'Pagos' && pcQ.patch.antes.spg === 'Parcial' && pcQ.pago && /Recebido R\$ 450,00/.test(pcQ.txt) && !/data-acao=pago/.test(''), JSON.stringify(pcQ))
+    pcQ.nova && pcQ.patch && pcQ.patch.pagamento_add && pcQ.patch.pagamento_add.valor === 350 && pcQ.patch.spg === 'Pago' && pcQ.patch.valor_neg === 450 && pcQ.patch.col === 'Pagos' && pcQ.patch.antes.spg === 'Parcial' && pcQ.pago && /Recebido R\$ 450,00/.test(pcQ.txt), JSON.stringify(pcQ))
   // ══ A LISTA DE CLIENTES NA ABA COBRANCA (14/11/2026) ══ o cobrador com dois numeros via a aba vazia
   // no numero que nao era o da conversa dos clientes ("Nenhum pedido desse telefone na dash"). Agora a
   // agenda dele aparece ali, com os clientes do OUTRO numero mais apagados, e as setas passam o cliente
@@ -2376,7 +2388,7 @@ app.whenReady().then(async () => {
   await js2('document.querySelector("#cob-abas [data-a=kanban]").click()')
   await espera(200)
   const cb3 = await colsCob()
-  conta('kanban: as colunas da dash, na ordem, mais a perda', cb3.cols.map((c) => c.col).join('|') === 'A Enviar|Preparando|Enviados|Saiu para Entrega|Entregues|Retirar nos Correios|Requer Atenção|Pagos|perda', cb3.cols.map((c) => c.col).join('|'))
+  conta('kanban: as colunas da dash, na ordem, mais a perda', cb3.cols.map((c) => c.col).join('|') === 'A Enviar|Preparando|Enviados|Saiu para Entrega|Entregues|Retirar nos Correios|Requer Atenção|Parcial|Pagos|perda', cb3.cols.map((c) => c.col).join('|'))
   conta('kanban: Cobranca com os tres dele, mais o Ivo que escreveu pra ele, e Pagos com o Fabio', col(cb3, 'Entregues').split(',').sort().join(',') === 'Ana Atrasada,Bia Hoje,Davi Sem Data,Ivo Escreveu' && col(cb3, 'Pagos') === 'Fabio Pago', JSON.stringify(cb3.cols))
   conta('kanban: a perda fica recolhida, so com a contagem', (cb3.cols.find((c) => c.col === 'perda') || {}).n === '1')
 
@@ -2391,15 +2403,18 @@ app.whenReady().then(async () => {
   conta('ficha: Entrega, Retorno e Pagamento em caixas separadas, com borda e fundo', secs === 'entrega:solid:true|retorno:solid:true|pagamento:solid:true', secs)
   const salvas = () => js2('(window.__ver()).filter(c => c.nome === "cobSalva").map(c => c.args)')
   const nSalvas0 = (await salvas()).length
-  await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
+  // O PAINEL DE PAGAMENTO (17/11/2026): o cartao "Pagou tudo" abre com o valor do pedido; nada grava
+  // antes do Confirmar, que vai numa chamada so com o dia (pago_quando) e o "antes".
+  await js2('document.querySelector("#cob-ficha [data-acao=pg-modo][data-v=tudo]").click()')
   await espera(150)
-  const armou = await js2('(document.querySelector("#cob-ficha [data-acao=pago]") || {}).textContent')
-  conta('ficha: "Marcar como pago" pede confirmacao com o valor antes de gravar', /Confirmar/.test(armou) && /297,00/.test(armou) && (await salvas()).length === nSalvas0, armou)
-  await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
+  const armou = await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); return s.querySelector(".fx-pg-valor").value + " | " + s.querySelector("[data-acao=pg-confirma]").textContent })()')
+  conta('ficha: "Pagou tudo" abre o painel com o valor e o botao diz quanto, antes de gravar', /^297,00 \| Confirmar R\$\s297,00$/.test(armou) && (await salvas()).length === nSalvas0, armou)
+  await js2('document.querySelector("#cob-ficha [data-acao=pg-confirma]").click()')
   await espera(450)
   const pg = (await salvas()).slice(nSalvas0)
-  conta('ficha: confirmado, grava pago + valor + Pagos numa chamada so, com o "antes"',
-    pg.length === 1 && pg[0][0] === '9001' && pg[0][1].spg === 'Pago' && pg[0][1].valor_neg === 297 && pg[0][1].col === 'Pagos' && pg[0][1].antes && pg[0][1].antes.col === 'Cobrança', JSON.stringify(pg))
+  const hojeIso2 = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') })()
+  conta('ficha: confirmado, grava pago + valor + Pagos + o dia numa chamada so, com o "antes"',
+    pg.length === 1 && pg[0][0] === '9001' && pg[0][1].spg === 'Pago' && pg[0][1].valor_neg === 297 && pg[0][1].col === 'Pagos' && pg[0][1].pago_quando === hojeIso2 && pg[0][1].antes && pg[0][1].antes.col === 'Cobrança' && !pg[0][1].comment_add, JSON.stringify(pg))
   await js2('(() => { const t = document.querySelector("#cob-ficha .fx-com"); t.value = "prometeu pagar sexta"; document.querySelector("#cob-ficha [data-acao=comentar]").click() })()')
   await espera(450)
   const cm = (await salvas()).pop()
@@ -2475,38 +2490,39 @@ app.whenReady().then(async () => {
   conta('ficha: a dash recusou com "o pedido mudou": uma frase so, e a ficha rele o pedido sozinha', m409.msg === 'Não salvou: O pedido mudou desde que você abriu. Recarregue e tente de novo.' && m409.releu >= nLe409 + 1 && m409.nova, JSON.stringify(m409))
   await js2('window.__swCob.abreFicha("9001")')
   await espera(400)
-  // o pagamento parcial
-  conta('ficha: sem o rotulo "Valor recebido"; o campo, o "Marcar como pago" e o "Pagamento parcial" na mesma linha',
-    await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); const i = s.querySelector(".fx-valor-in"), a = s.querySelector("[data-acao=pago]"), b = s.querySelector("[data-acao=parcial]"); return !/Valor recebido/.test(s.textContent) && !!i && !!a && !!b && i.value === "297,00" && Math.abs(a.getBoundingClientRect().top - b.getBoundingClientRect().top) < 2 })()'))
+  // o pagamento parcial, pelo painel com icones (17/11/2026)
+  conta('ficha: sem o rotulo "Valor recebido"; os dois cartoes (Pagou tudo, Uma parte) lado a lado e o painel fechado',
+    await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); const a = s.querySelector("[data-acao=pg-modo][data-v=tudo]"), b = s.querySelector("[data-acao=pg-modo][data-v=parte]"); return !/Valor recebido/.test(s.textContent) && !!a && !!b && s.querySelector(".fx-pg").hidden && Math.abs(a.getBoundingClientRect().top - b.getBoundingClientRect().top) < 2 })()'))
   const nP0 = (await salvas()).length
-  await js2('(() => { document.querySelector("#cob-ficha .fx-valor-in").value = "297,00"; document.querySelector("#cob-ficha [data-acao=parcial]").click() })()')
+  await js2('(() => { document.querySelector("#cob-ficha [data-acao=pg-modo][data-v=parte]").click(); const i = document.querySelector("#cob-ficha .fx-pg-valor"); i.value = "297,00"; i.dispatchEvent(new Event("input", { bubbles: true })) })()')
   await espera(100)
-  const quita = await js2('document.querySelector("#cob-ficha .fx-msg").textContent')
-  conta('parcial: valor que quita o pedido nao e parcial (avisa e nao grava)', /quita o pedido/.test(quita) && (await salvas()).length === nP0, quita)
-  await js2('(() => { document.querySelector("#cob-ficha .fx-valor-in").value = "100"; document.querySelector("#cob-ficha [data-acao=parcial]").click() })()')
+  const quita = await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); return s.querySelector(".fx-pg-dica").textContent + " | " + s.querySelector("[data-acao=pg-confirma]").textContent + " | " + s.querySelector("[data-linha=prox]").hidden })()')
+  conta('parcial: valor que quita o pedido vira quitacao (avisa, o botao diz Confirmar e some o proximo), sem gravar', /^Esse valor quita o pedido\. \| Confirmar R\$\s297,00 \| true$/.test(quita) && (await salvas()).length === nP0, quita)
+  await js2('(() => { const i = document.querySelector("#cob-ficha .fx-pg-valor"); i.value = "100"; i.dispatchEvent(new Event("input", { bubbles: true })) })()')
   await espera(100)
-  const armouP = await js2('document.querySelector("#cob-ficha [data-acao=parcial]").textContent')
-  conta('parcial: o primeiro clique arma com o valor, sem gravar', /^Confirmar parcial de R\$\s100,00$/.test(armouP) && (await salvas()).length === nP0, armouP)
-  await js2('document.querySelector("#cob-ficha [data-acao=parcial]").click()')
+  const armouP = await js2('document.querySelector("#cob-ficha [data-acao=pg-confirma]").textContent')
+  conta('parcial: com 100 o botao diz "Registrar", sem gravar', /^Registrar R\$\s100,00$/.test(armouP) && (await salvas()).length === nP0, armouP)
+  await js2('document.querySelector("#cob-ficha [data-acao=pg-confirma]").click()')
   await espera(450)
   const gp = (await salvas()).slice(nP0)
-  conta('parcial: confirmado, grava pagamento_add {valor} com o "antes" e sem spg nem coluna (o pedido fica na fila)',
-    gp.length === 1 && gp[0][0] === '9001' && gp[0][1].pagamento_add && gp[0][1].pagamento_add.valor === 100 && !('spg' in gp[0][1]) && !('col' in gp[0][1]) && !('valor_neg' in gp[0][1]) && gp[0][1].antes && gp[0][1].antes.col === 'Cobrança', JSON.stringify(gp))
+  conta('parcial: confirmado, grava pagamento_add {valor, quando} e a anotacao, com o "antes" e sem spg nem coluna (o pedido fica na fila)',
+    gp.length === 1 && gp[0][0] === '9001' && gp[0][1].pagamento_add && gp[0][1].pagamento_add.valor === 100 && gp[0][1].pagamento_add.quando === hojeIso2 && !('spg' in gp[0][1]) && !('col' in gp[0][1]) && !('valor_neg' in gp[0][1]) && !('agend' in gp[0][1])
+      && gp[0][1].comment_add && /^Pagou R\$\s100,00 em/.test(gp[0][1].comment_add.tx) && gp[0][1].antes && gp[0][1].antes.col === 'Cobrança', JSON.stringify(gp))
   // a ficha de quem ja pagou uma parte (o 9004 vem do servidor com saldo 347 e uma parcela de 150)
   await js2('window.__swCob.abreFicha("9004")')
   await espera(400)
-  const fp = await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); return { txt: s.textContent.replace(/\\u00a0/g, " "), campo: s.querySelector(".fx-valor-in").value } })()')
-  conta('ficha com parcela: diz o que ja entrou e o que falta, lista a parcela com quem registrou, e o campo ja vem com o que falta',
-    /Já pagou R\$ 150,00 de R\$ 497,00 · faltam R\$ 347,00/.test(fp.txt) && /03\/11\/2026 · R\$ 150,00 · Haynan/.test(fp.txt) && fp.campo === '347,00', JSON.stringify(fp))
+  const fp = await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); return { txt: s.textContent.replace(/\u00a0/g, " "), parc: [...s.querySelectorAll(".fx-parcelas span")].map(x => x.title.replace(/\u00a0/g, " ")).join("|"), tile: s.querySelector("[data-acao=pg-modo][data-v=tudo]").textContent } })()')
+  conta('ficha com parcela: a barra diz o que ja entrou e o que falta, a parcela mostra quem registrou e o cartao vira "Quitou"',
+    /R\$ 150,00 de R\$ 497,00falta R\$ 347,00/.test(fp.txt) && /03\/11\/2026 · R\$ 150,00 · Haynan/.test(fp.parc) && fp.tile === 'Quitou', JSON.stringify(fp))
   const nQ0 = (await salvas()).length
-  await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
+  await js2('document.querySelector("#cob-ficha [data-acao=pg-modo][data-v=tudo]").click()')
   await espera(100)
-  const armouQ = await js2('document.querySelector("#cob-ficha [data-acao=pago]").textContent')
-  await js2('document.querySelector("#cob-ficha [data-acao=pago]").click()')
+  const armouQ = await js2('(() => { const s = document.querySelector("#cob-ficha [data-sec=pagamento]"); return s.querySelector(".fx-pg-valor").value + " | " + s.querySelector("[data-acao=pg-confirma]").textContent.replace(/\u00a0/g, " ") })()')
+  await js2('document.querySelector("#cob-ficha [data-acao=pg-confirma]").click()')
   await espera(450)
   const gq = (await salvas()).slice(nQ0)
-  conta('ficha com parcela: "Marcar como pago" confirma o resto, registra ele como parcela e fecha com o total (150 + 347 = 497)',
-    /Confirmar R\$\s347,00/.test(armouQ) && gq.length === 1 && gq[0][0] === '9004' && gq[0][1].pagamento_add && gq[0][1].pagamento_add.valor === 347 && gq[0][1].spg === 'Pago' && gq[0][1].valor_neg === 497 && gq[0][1].col === 'Pagos' && gq[0][1].antes.spg === 'Parcial', JSON.stringify({ armouQ, gq }))
+  conta('ficha com parcela: "Quitou" vem com o resto, confirma, registra ele como parcela e fecha com o total (150 + 347 = 497)',
+    armouQ === '347,00 | Confirmar R$ 347,00 · total R$ 497,00' && gq.length === 1 && gq[0][0] === '9004' && gq[0][1].pagamento_add && gq[0][1].pagamento_add.valor === 347 && gq[0][1].spg === 'Pago' && gq[0][1].valor_neg === 497 && gq[0][1].col === 'Pagos' && gq[0][1].antes.spg === 'Parcial', JSON.stringify({ armouQ, gq }))
   ponto = 'cobranca conversa'
 
   await js2('window.__swCob.fechaFicha(); document.querySelector(".cob-card[data-id=\'9004\'] .cob-zap").click()')

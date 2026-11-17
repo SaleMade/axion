@@ -3088,6 +3088,63 @@ ipcMain.handle('swp:cob-pedido', (_e, { phone }) => {
 })
 ipcMain.handle('swp:cob-salva', (_e, { id, patch }) => salvaCob(id, patch))
 ipcMain.handle('swp:cob-curto', (_e, { url, id }) => curtoCob(url, id))
+// O PRINT DO PAGAMENTO E DO COMENTARIO (17/11/2026, audio do Bryan: "nao da pra colar a imagem pelo
+// aplicativo, so pelo web"). Sobe pro MESMO lugar do comprovante da dash (/api/comprovante, R2) com o
+// login de quem esta no app, e devolve o link; a ficha grava o comentario com a imagem. So imagem, ate
+// 20 MB. Os bytes vem da pagina (arquivo ou Ctrl+V) ou da area de transferencia (sw:cob-cola-print).
+async function sobeCob(id, arq) {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const lid = String(id || '').trim()
+  if (!/^[\w.-]{1,40}$/.test(lid)) return { ok: false, erro: 'Pedido inválido.' }
+  const mime = String((arq && arq.mime) || '').toLowerCase()
+  if (!/^image\/(png|jpe?g|webp|gif)$/.test(mime)) return { ok: false, erro: 'Só imagem (PNG, JPG, WebP)' }
+  let corpo = null
+  try { corpo = Buffer.from(arq && arq.bytes ? arq.bytes : []) } catch (_) { corpo = null }
+  if (!corpo || !corpo.length) return { ok: false, erro: 'Imagem vazia' }
+  if (corpo.length > 20 * 1024 * 1024) return { ok: false, erro: 'Imagem muito grande (máximo 20 MB)' }
+  const nome = String((arq && arq.nome) || 'print.png').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-60)
+  try {
+    const r = await fetch(baseCob() + '/api/comprovante?lead=' + encodeURIComponent(lid) + '&nome=' + encodeURIComponent(nome), {
+      method: 'POST', headers: { ...authCrm(), 'content-type': mime }, body: corpo, signal: AbortSignal.timeout(60000),
+    })
+    ajustaRelogio(r)
+    let d = {}
+    try { d = await r.json() } catch (_) { d = {} }
+    if (!r.ok || !d.ok || !d.url) return { ok: false, erro: (d && d.error) || respostaRuim(r) }
+    anota('[cobranca] imagem do pedido ' + lid + ' enviada (' + Math.round(corpo.length / 1024) + ' KB)')
+    return { ok: true, url: String(d.url), mime: String(d.mime || mime) }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+}
+// AS FRASES PRONTAS (17/11/2026, o lapis que o Bryan pediu): grava a lista inteira pela rota da dash,
+// que decide quem pode (direcao e cobrador da casa).
+async function prontosCob(lista) {
+  if (!config.token) return { ok: false, erro: 'Entre de novo na dash.' }
+  const l = (Array.isArray(lista) ? lista : []).map((x) => String(x == null ? '' : x).trim().slice(0, 200)).filter(Boolean).slice(0, 60)
+  try {
+    const r = await fetch(baseCob() + '/api/coment-prontos', {
+      method: 'POST', headers: { ...authCrm(), 'content-type': 'application/json' }, body: JSON.stringify({ lista: l }), signal: AbortSignal.timeout(25000),
+    })
+    ajustaRelogio(r)
+    let d = {}
+    try { d = await r.json() } catch (_) { d = {} }
+    if (!r.ok || !d.ok) return { ok: false, erro: (d && d.error) || respostaRuim(r) }
+    return { ok: true, lista: Array.isArray(d.lista) ? d.lista : l }
+  } catch (_) { return { ok: false, erro: 'Não deu pra falar com a dash.' } }
+}
+function printDaAreaCob() {
+  try {
+    const img = clipboard.readImage()
+    if (!img || img.isEmpty()) return { ok: false, vazio: true }
+    const png = img.toPNG()
+    if (!png || !png.length) return { ok: false, vazio: true }
+    return { ok: true, bytes: new Uint8Array(png), mime: 'image/png', nome: 'print-' + Date.now() + '.png' }
+  } catch (e) { anota('[colar] ' + (e && e.message)); return { ok: false, erro: String((e && e.message) || 'não li a área de transferência') } }
+}
+ipcMain.handle('sw:cob-sobe', (_e, { id, arq }) => sobeCob(id, arq))
+ipcMain.handle('swp:cob-sobe', (_e, { id, arq }) => sobeCob(id, arq))
+ipcMain.handle('sw:cob-cola-print', () => printDaAreaCob())
+ipcMain.handle('sw:cob-prontos', (_e, { lista }) => prontosCob(lista))
+ipcMain.handle('swp:cob-prontos', (_e, { lista }) => prontosCob(lista))
 // A ABA AUTOMACOES do painel do cobrador (11/11/2026): o que cada mensagem automatica faz, se esta
 // ligada pra ESTA pessoa e o que saiu hoje. Ligar e desligar grava so a dela (a direcao, no "ver
 // como", grava a do cobrador que esta vendo: `de`). Quem decide o que sai continua sendo o servidor.
