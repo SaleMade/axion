@@ -474,7 +474,11 @@ function _carimbaPagoTs(lead, eraPago, tsPlataforma, opts) {
   const agora = _ehPago(lead);
   const real = Number(tsPlataforma) || 0;
   if (!agora) { if (lead.pago_ts) delete lead.pago_ts; if (lead.pago_ts_fonte) delete lead.pago_ts_fonte; return; }
-  if (!eraPago && !(opts && opts.semFechar)) _fechaFichaAoPagar(lead, real, opts && opts.who);
+  // `opts.quando` (17/11/2026): o dia que quem cobrou escolheu na tela ("Ontem", o calendario). Vale
+  // so pra marcacao na mao (sem data da plataforma) e nunca no futuro.
+  const quando = Number(opts && opts.quando) || 0;
+  const quandoOk = quando > 1.5e12 && quando <= Date.now() + 60000 ? quando : 0;
+  if (!eraPago && !(opts && opts.semFechar)) _fechaFichaAoPagar(lead, real || quandoOk, opts && opts.who);
   const atual = Number(lead.pago_ts) || 0;
   const temReal = atual > 1.5e12;
   if (real > 1.5e12) {
@@ -482,7 +486,23 @@ function _carimbaPagoTs(lead, eraPago, tsPlataforma, opts) {
     if (!temReal || real < atual) { lead.pago_ts = real; lead.pago_ts_fonte = 'plataforma'; }
     return;
   }
-  if (!eraPago || !temReal) { lead.pago_ts = Date.now(); lead.pago_ts_fonte = 'dash'; }
+  if (!eraPago || !temReal) { lead.pago_ts = quandoOk || Date.now(); lead.pago_ts_fonte = 'dash'; }
+}
+// O DIA EM QUE O CLIENTE PAGOU, escolhido na tela (17/11/2026, pedido do Bruno: o cobrador marca
+// "quando foi o pagamento" com Hoje, Ontem ou o calendario). 'AAAA-MM-DD' em hora de Brasilia vira o
+// meio-dia daquele dia; hoje vira agora (a hora certa). Dia no futuro, data que nao existe ou mais de
+// 120 dias atras devolvem 0, e quem chama usa agora.
+function _quandoPgMs(s) {
+  const m = String(s == null ? '' : s).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return 0;
+  const agora = Date.now();
+  const hojeBr = new Date(agora - 3 * 3600000);
+  if (+m[1] === hojeBr.getUTCFullYear() && +m[2] === hojeBr.getUTCMonth() + 1 && +m[3] === hojeBr.getUTCDate()) return agora;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3], 15, 0, 0);
+  const d = new Date(t);
+  if (!isFinite(t) || d.getUTCDate() !== +m[3] || d.getUTCMonth() !== +m[2] - 1) return 0;
+  if (t > agora || t < agora - 120 * 86400000) return 0;
+  return t;
 }
 // paid_at da Payt vem 'YYYY-MM-DD HH:MM:SS' no horario de Brasilia (sem fuso): soma 3h pra UTC.
 function _paidAtPayt(v) {
@@ -8152,14 +8172,17 @@ async function handleUpdateLead(req, env, leadId) {
         const _pv = Math.round((Number(patch.pagamento_add.valor) || 0) * 100) / 100;
         if (_pv > 0) {
           if (!Array.isArray(lead.pagamentos)) lead.pagamentos = [];
-          const _d = _agoraBR();
+          // O DIA EM QUE ELE PAGOU (17/11/2026): a tela manda `quando` ('AAAA-MM-DD', Hoje, Ontem ou o
+          // calendario). Sem ele, ou com dia invalido ou no futuro, e agora (ver _quandoPgMs).
+          const _msPg = _quandoPgMs(patch.pagamento_add.quando) || Date.now();
+          const _d = new Date(_msPg - 3 * 3600000);
           lead.pagamentos.push({
-            ts: Math.floor(Date.now() / 1000),
+            ts: Math.floor(_msPg / 1000),
             data: String(_d.getUTCDate()).padStart(2, '0') + '/' + String(_d.getUTCMonth() + 1).padStart(2, '0') + '/' + _d.getUTCFullYear(),
             valor: _pv, obs: String(patch.pagamento_add.obs || '').slice(0, 200), who: String(u.id),
             conta: _contaOk(patch.pagamento_add.conta) || undefined,
           });
-          lead.pagamentos = lead.pagamentos.slice(-60);
+          lead.pagamentos = lead.pagamentos.sort((a, b) => (Number(a && a.ts) || 0) - (Number(b && b.ts) || 0)).slice(-60);
           // Sem `spg` no patch, quem decide e a soma (o derivarStatus da dash): cobriu o valor, e Pago
           // (a transicao abaixo carimba a data, leva pra Pagos e limpa o retorno); senao, Parcial.
           // Duas parcelas de cobradores diferentes que juntas fecham a conta fechavam o pedido so pro app.
@@ -8178,7 +8201,10 @@ async function handleUpdateLead(req, env, leadId) {
     }
     // marcou/desmarcou pago na mao: a data e a de agora. Virou pago com parcela na ficha? A parcela do
     // resto entra em nome de quem marcou (ver _fechaFichaAoPagar); lista inteira junto = ficha e a verdade.
-    _carimbaPagoTs(lead, _eraPagoEd, 0, { who: String(u.id), semFechar: Array.isArray(patch.pagamentos) });
+    // O DIA DO PAGAMENTO escolhido na tela (17/11/2026): `pago_quando` no "pagou tudo", ou o `quando`
+    // da parcela que fechou a conta. So de quem cobra; sem escolha, e agora.
+    const _quandoPago = canManage ? (_quandoPgMs(patch.pago_quando) || (patch.pagamento_add && typeof patch.pagamento_add === 'object' ? _quandoPgMs(patch.pagamento_add.quando) : 0)) : 0;
+    _carimbaPagoTs(lead, _eraPagoEd, 0, { who: String(u.id), semFechar: Array.isArray(patch.pagamentos), quando: _quandoPago });
     // PAGO REGISTRADO SEM COLUNA (17/10/2026). O app do celular (e a ficha de pagamentos) marca o
     // pedido pago mandando so `spg`/`pagamentos`, sem `col`: o card ficava em Cobranca e o cobrador
     // ligaria cobrando quem ja pagou (caso da Lucinda: paga, entregue, parada em Cobranca). E a mesma
@@ -9723,7 +9749,10 @@ async function handleComentProntosSave(req, env) {
   // cobrador USAM a lista e nao mexem nela - o combinado e de quem responde pelo time.
   const _afl = noMundoAfiliado(u) || afiliadoSemVinculo(u);
   const _ehAfiliado = String(u.role || '').toLowerCase() === 'afiliado';
-  if (!isDirector(u) && !(_afl && _ehAfiliado)) return err('Sem permissão para editar os comentários prontos', 403);
+  // O COBRADOR DA CASA TAMBEM (17/11/2026, pedido do Bryan via Bruno: o lapis pra deixar a frase
+  // pronta no app). Ele e quem mais anota pedido; a lista continua uma so pra casa toda.
+  const _cobDaCasa = !_afl && _ehCobrador(u);
+  if (!isDirector(u) && !(_afl && _ehAfiliado) && !_cobDaCasa) return err('Sem permissão para editar os comentários prontos', 403);
   if (_afl && !aflDe(u)) return err('Cadastro de afiliado incompleto', 403);
 
   const body = await req.json().catch(() => ({}));
@@ -17197,9 +17226,12 @@ function _cobDetalhe(l, data, nomes, tagMap) {
     // OS COMENTARIOS JA COM O NOME DE QUEM ESCREVEU (o mais novo primeiro, como o estado guarda). O app
     // nao manda `who` ao comentar: o servidor carimba quem esta logado (_comentarioLimpo), e no "ver
     // como" da direcao isso e a direcao, nunca a pessoa do preview.
+    // `time` e `who` crus (17/11/2026): sao a chave do comment_set, o lapis de editar do app. `meu`
+    // (quem pode editar) entra na rota, que sabe quem pediu.
     comentarios: (Array.isArray(l.comments) ? l.comments : []).slice(0, 30).map((c) => ({
       quem: nomes[_cobTxt(c && c.who)] || _cobTxt(c && c.who), tx: _cobTxt(c && c.tx), quando: _cobTxt(c && c.time),
-      tipo: _cobTxt(c && c.kind), url: _cobTxt(c && c.url),
+      tipo: _cobTxt(c && c.kind), url: _cobTxt(c && c.url), mime: _cobTxt(c && c.mime),
+      time: _cobTxt(c && c.time), who: _cobTxt(c && c.who), editado: !!(c && c.editado),
     })),
   };
 }
@@ -19118,7 +19150,8 @@ async function handleSwWeb(req, env, path) {
     const sig = _cobAssina(corpo);
     const pediu = String(new URL(req.url).searchParams.get('sig') || '');
     if (pediu && pediu === sig) return json({ ok: true, igual: true, sig, agora: Date.now() });
-    return json({ ok: true, sig, agora: Date.now(), eu: String(u.id), cargo: String(u.role || '').toLowerCase(), pedidos, prontos, tags, cols: _COB_COLS, perda: _COB_PERDA, nums });
+    // podeProntos (17/11/2026): o lapis das frases prontas no app (direcao e cobrador da casa).
+    return json({ ok: true, sig, agora: Date.now(), eu: String(u.id), cargo: String(u.role || '').toLowerCase(), pedidos, prontos, podeProntos: !mundo && (manda || _ehCobrador(u)), tags, cols: _COB_COLS, perda: _COB_PERDA, nums });
   }
 
   // POST /api/swweb/cobranca/numero {phone, nk} — PASSAR O CLIENTE PRA ESTE NUMERO (14/11/2026, pedido do
@@ -19168,12 +19201,21 @@ async function handleSwWeb(req, env, path) {
     const prontos = Array.isArray(data && data.coment_prontos)
       ? data.coment_prontos.map((x) => String(x || '').trim()).filter(Boolean)
       : _COB_PRONTOS;
-    if (!achados.length) return json({ ok: true, pedidos: [], prontos });
+    // QUEM MEXE NAS FRASES PRONTAS (17/11/2026, pedido do Bryan via Bruno: "o lapizinho pra deixar a
+    // frase preparada"): a direcao e o cobrador da casa. A mesma regra do handleComentProntosSave.
+    const podeProntos = !mundo && (manda || _ehCobrador(u));
+    if (!achados.length) return json({ ok: true, pedidos: [], prontos, podeProntos });
     achados.sort((a, b) => (_cobCriadoTs(b) || 0) - (_cobCriadoTs(a) || 0));
     const nomes = await _cobNomes(env);
     const tagMap = _cobTagMap(data, mundo);
+    const pedidos = achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap));
+    // O LAPIS DO COMENTARIO (17/11/2026): o cobrador edita o que ELE escreveu; a direcao, qualquer um
+    // (como na dash).
+    for (const p of pedidos) for (const c of (p.comentarios || [])) c.meu = !!manda || (!!c.who && c.who === String(u.id));
     // O catalogo de tags vai junto: o painel ao lado da conversa so le esta rota (ver o quadro).
-    return json({ ok: true, pedidos: achados.slice(0, 5).map((l) => _cobDetalhe(l, data, nomes, tagMap)), prontos, tags: Object.values(tagMap) });
+    // ASSINADO (17/11/2026): a imagem do comentario (o comprovante colado) abre no navegador pelo link
+    // assinado; o link cru responde 403 desde o item 37.
+    return jsonAssinado(env, { ok: true, pedidos, prontos, podeProntos, tags: Object.values(tagMap) });
   }
 
   // GET /api/swweb/cobranca/contato?phone= — EM QUAL NUMERO DO COBRADOR ESSE CLIENTE JA FALOU
