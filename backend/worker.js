@@ -20191,7 +20191,9 @@ async function handleSwWeb(req, env, path) {
   if (req.method === 'GET' && path === '/api/swweb/auto') {
     const cfg = await _cobAutoCfg(env);
     if (!_cobAutoAlgum(cfg)) return json({ ok: true, itens: [], proxima: 300 });
-    const meus = await _cobAutoMeus(String(new URL(req.url).searchParams.get('nks') || '').split(','));
+    let meus = await _cobAutoMeus(String(new URL(req.url).searchParams.get('nks') || '').split(','));
+    // NUMERO RECEM PAREADO SO RECEBE (ver SWWEB_ESPERA_PAREADO_S). Aqui vale ate pro app antigo.
+    if (meus.length) { const esp = await _swwebEmEspera(env, meus); if (esp.size) meus = meus.filter((nk) => !esp.has(nk)); }
     if (!meus.length) return json({ ok: true, itens: [], proxima: 120 });
     const data = await _getDashData(env);
     let itens = [];
@@ -20813,7 +20815,10 @@ async function handleSwWeb(req, env, path) {
     // A LIBERACAO VIAJA JUNTO DO PROXY porque e o app que decide abrir, e ele ja pergunta isto aqui
     // antes de cada abertura. Mandar em rota separada daria duas idas e uma janela entre elas.
     const exc = excecoes[nk] || null;
-    return json({ ok: true, nk, proxy: px, excecao: exc ? { ate: exc.ate, por: exc.nome || '' } : null });
+    // A ESPERA DEPOIS DE CONECTAR viaja junto pelo mesmo motivo: o app pergunta isto antes de abrir, e
+    // o numero pareado no PC da direcao chega ao vendedor ja com a hora (ver SWWEB_ESPERA_PAREADO_S).
+    const livre = (await _swwebEmEspera(env, [nk])).get(nk) || 0;
+    return json({ ok: true, nk, proxy: px, excecao: exc ? { ate: exc.ate, por: exc.nome || '' } : null, livre, espera: SWWEB_ESPERA_PAREADO_S });
   }
 
   // POST /api/swweb/proxy — cadastra ou apaga o proxy de um numero. So a direcao: proxy errado
@@ -21111,6 +21116,9 @@ async function handleSwWeb(req, env, path) {
       espontaneo = 1;
     }
     await _scEnsureTables(env);
+    // O ESTADO DE ANTES, pra ver o pareamento (ver SWWEB_ESPERA_PAREADO_S).
+    let _antes = '';
+    try { const r0 = await env.DB.prepare('SELECT st FROM swweb_conn WHERE nk = ?').bind(nk).first(); _antes = String((r0 && r0.st) || ''); } catch (_) {}
     try {
       await env.DB.prepare(
         "INSERT INTO swweb_conn (nk, st, espontaneo, modo, info, queda, por, ts) VALUES (?,?,?,?,?,?,?,strftime('%s','now'))" +
@@ -21131,7 +21139,24 @@ async function handleSwWeb(req, env, path) {
     if (espontaneo && (st === 'caiu' || st === 'bloqueado')) {
       try { await _swwebAvisaQueda(env, nk, st, b); } catch (_) {}
     }
-    return json({ ok: true, nk, st });
+    // PAREOU AGORA: comeca a espera. `livre` (epoch s) volta em todo "pronto", pareado ou nao, e e
+    // por ele que o app sabe ate quando segurar os envios.
+    let livre = 0;
+    if (st === 'pronto') {
+      if ((b && b.pareou) || _antes === 'qr' || _antes === 'caiu' || _antes === 'bloqueado') {
+        const agoraP = Math.floor(Date.now() / 1000);
+        try {
+          await _swwebPareadoTabela(env);
+          await env.DB.prepare('INSERT INTO swweb_pareado (nk, em, por) VALUES (?,?,?) ON CONFLICT(nk) DO UPDATE SET em=excluded.em, por=excluded.por')
+            .bind(nk, agoraP, String(u.id)).run();
+          livre = agoraP + SWWEB_ESPERA_PAREADO_S;
+          console.log('SWWEB_PAREOU nk=' + nk + ' por=' + String(u.id) + ' antes=' + (_antes || '-') + ' app=' + ((b && b.pareou) ? 1 : 0));
+        } catch (e) { console.error('[swweb] pareado falhou: ' + String((e && e.message) || e)); }
+      } else {
+        livre = (await _swwebEmEspera(env, [nk])).get(nk) || 0;
+      }
+    }
+    return json({ ok: true, nk, st, livre, espera: SWWEB_ESPERA_PAREADO_S });
   }
 
   // GET /api/swweb/funis-feitos?fone=... — quais funis ja foram disparados PRA ESSE LEAD.
@@ -34534,6 +34559,45 @@ async function _swwebGravaLigacoes(env, ligs, u) {
       + ' dur=' + dur + ' desfecho=' + desf + (lg.video ? ' video' : '') + (e.velha ? ' velha' : '') + ' por=' + String((u && u.id) || ''));
   }
   if (st.length) await env.DB.batch(st);
+}
+
+// ESPERA DEPOIS DE CONECTAR (20/11/2026, pedido do Bruno: "esperar por 5 a 10 minutos. Eu acho que
+// 10 minutos talvez seria um periodo bom").
+//
+// O caso que levou a isso: o (49) 98893-1194 foi registrado de novo no celular dele, pareado pelo QR
+// no PC dele as 17:47, a sessao foi pra nuvem, o Guilherme abriu as 17:50:58 e o funil de abertura
+// saiu as 17:51:34. Um minuto depois a conta estava banida ("em analise" no celular). Conta que acabou
+// de ser registrada e ja sai mandando funil e o perfil que o WhatsApp mais bane.
+//
+// A REGRA: depois de um pareamento pelo QR, o numero fica SO RECEBENDO por SWWEB_ESPERA_PAREADO_S,
+// valendo em QUALQUER computador. Por isso a hora mora aqui e nao so no app: quem pareia (o Bruno) e
+// quem dispara (o vendedor) quase nunca sao a mesma maquina. Segura funil, item do painel e as
+// mensagens automaticas da cobranca. Digitar na mao continua livre.
+//
+// O QUE CONTA COMO PAREAMENTO: o app novo diz (`pareou` no POST /conexao, ele ve o QR de 4 em 4 s); o
+// app antigo nao diz, entao vale tambem a virada qr/caiu/bloqueado -> pronto que o servidor ve. As tres
+// sao tela de QR: so voltam a pronto com um QR lido. Reabrir um numero que ja estava conectado (de
+// manha, no PC de outro) nao e pareamento e nao espera nada.
+const SWWEB_ESPERA_PAREADO_S = 600;
+let _swwebPareadoOk = false;
+async function _swwebPareadoTabela(env) {
+  if (_swwebPareadoOk) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS swweb_pareado (nk TEXT PRIMARY KEY, em INTEGER, por TEXT)').run();
+  _swwebPareadoOk = true;
+}
+// Os numeros (chave de 10) que ainda estao na espera. Falhar a leitura solta: a espera e cuidado, e o
+// app tambem conta a dele.
+async function _swwebEmEspera(env, nks) {
+  const lista = [...new Set((nks || []).map(String).filter((x) => x.length === 10))];
+  const out = new Map();
+  if (!lista.length) return out;
+  try {
+    await _swwebPareadoTabela(env);
+    const r = await env.DB.prepare('SELECT nk, em FROM swweb_pareado WHERE em > ? AND nk IN (SELECT value FROM json_each(?))')
+      .bind(Math.floor(Date.now() / 1000) - SWWEB_ESPERA_PAREADO_S, JSON.stringify(lista)).all();
+    for (const x of ((r && r.results) || [])) out.set(String(x.nk), Number(x.em || 0) + SWWEB_ESPERA_PAREADO_S);
+  } catch (_) { /* sem a tabela, ninguem espera */ }
+  return out;
 }
 
 // Chamado pelo POST /api/swweb/conexao depois de gravar o estado. Devolve 'caiu' ou 'bloqueado'
