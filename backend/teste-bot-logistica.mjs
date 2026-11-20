@@ -34,6 +34,7 @@ const CODIGO = [
   entre('// ═══ GRUPO DA LOGISTICA (13/11/2026', 'function _botCfgPadrao() {'),
   entre('// ═══ GRUPO DA LOGISTICA: a varredura', '// ═══ BARBADINHO VIVO'),
   recorta('const _botIaEhTeste = ', '\n};\n'),
+  recorta('const _botIaEhSala = ', '\n};\n'),   // a sala da direcao (19/11/2026): a escuta e o grupo passam por ela
   recorta('const _botIaGrupoDe = ', '\n};\n'),
   recorta('function _botIaEscuta('),
 ].join('\n')
@@ -160,6 +161,9 @@ async function roda(codigo, quieto) {
     conta('mesmo gravado como grupo dos vendedores, nao e escutado nem respondido', !F._botIaEscuta(y).includes(G_LOG) && F._botIaGrupoDe(y, G_LOG) === '')
     const z = base(); z.logistica.ativo = false; z.ia.teste.id = G_LOG
     conta('com o aviso desligado o grupo continua fora (o grupo e dele)', !F._botIaEscuta(z).includes(G_LOG))
+    // a sala da direcao (19/11/2026) tambem nunca e o grupo da logistica: la o bot responderia com os valores da casa
+    const w = base(); w.ia.sala = { ativo: true, id: G_LOG, nome: 'Direcao' }
+    conta('mesmo gravado como sala da direcao, nao e escutado nem respondido', !F._botIaEscuta(w).includes(G_LOG) && F._botIaGrupoDe(w, G_LOG) === '')
   }
 
   secao('ao ligar: o que ja existe nao sai sozinho:')

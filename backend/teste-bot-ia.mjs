@@ -129,6 +129,13 @@ function monta(mundo) {
     const um = { results: [], meta: { changes: 1 } };
     // 10/11/2026: a oferta do "sim" vale so a primeira mensagem da pessoa depois dela; o link curto do pedido; o usuario
     // de quem pediu a acao (pro handleUpdateLead).
+    // 19/11/2026, o raio-x da operacao: quando saiu e quando chegou (five_orders), os leads (wa_lead), o cartao (cs_tx),
+    // o que o sistema tirou da roleta (pressel_num_log) e a mensagem anterior de quem marcou o bot sozinho.
+    if (/FROM five_orders WHERE shipped_ts >= \? OR delivered_ts >= \?/.test(sql)) return { results: (mundo.five || []).filter((x) => Number(x.shipped_ts) >= Number(a[0]) || Number(x.delivered_ts) >= Number(a[1])), meta: {} };
+    if (/FROM wa_lead WHERE ts >= \? AND ts < \?/.test(sql)) return { results: (mundo.walead || []).filter((x) => Number(x.ts) >= Number(a[0]) && Number(x.ts) < Number(a[1]) && String(x.src || '') !== 'deduzido'), meta: {} };
+    if (/FROM cs_tx WHERE origem='cartao' AND dia >= \?/.test(sql)) return { results: (mundo.cstx || []).filter((x) => x.origem === 'cartao' && String(x.dia) >= String(a[0])), meta: {} };
+    if (/FROM pressel_num_log WHERE por='sistema'/.test(sql)) return { results: (mundo.numlog || []).filter((x) => x.por === 'sistema' && x.acao === 'desliga' && Number(x.ts) >= Number(a[0]) && /caiu|bloquead/.test(String(x.por_nome || ''))).map((x) => ({ nk: x.nk })), meta: {} };
+    if (/SELECT texto FROM bot_chat WHERE jid=\? AND de_jid=\? AND msg_id<>\? AND ts>\?/.test(sql)) return { results: chat.filter((x) => x.jid === a[0] && x.de_jid === a[1] && x.msg_id !== a[2] && Number(x.ts) > Number(a[3]) && String(x.texto || '') !== '').sort(desc).slice(0, 1).map((x) => ({ texto: x.texto })), meta: {} };
     if (/FROM bot_chat WHERE jid=\? AND de_jid=\? AND ts>\? AND msg_id<>\?/.test(sql)) return { results: [{ n: chat.filter((x) => x.jid === a[0] && x.de_jid === a[1] && Number(x.ts) > Number(a[2]) && x.msg_id !== a[3]).length }], meta: {} };
     if (/SELECT code FROM short_links WHERE lead_id = \? AND url = \?/.test(sql)) { const x = curtos.find((c) => c.lead_id === String(a[0]) && c.url === String(a[1])); return { results: x ? [{ code: x.code }] : [], meta: {} }; }
     if (/INSERT INTO short_links/.test(sql)) { curtos.push({ code: a[0], url: a[1], created_at: a[2], lead_id: a[3], created_by: a[4] }); return um; }
@@ -326,7 +333,7 @@ function monta(mundo) {
     },
   };
   const nomes = Object.keys(deps);
-  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade, _botIaSemVocativo, BOT_IA_ASSUNTO_VENDA_RE, BOT_IA_GRITO_RE, _botIaTextoProblema, _botIaFichaCurta, _botIaChamouOutroPeloNome, BOT_IA_MARCA_OUTRO_RE, _botIaLinhaDoTempo, _botIaSoRiso, _botIaEscolheForma, _botIaTempero, _botIaRepete, _botIaFormaDe, _botIaMarcoAgora, BOT_IA_QUEM_MANDA_RE, _botIaVersaoOk, _botIaComMidia, _botIaCitouResposta, _botIaReacaoOk, BOT_IA_TOM_VEND, BOT_IA_TOM_COB, BOT_IA_CAIU, BOT_IA_CAIU_SEM_AVISO, BOT_IA_FESTA_REACOES, _botIaNumeroCaiu, _botIaFoneParecido, _botIaFoneFora, _botIaListaTipo, _botIaConfirma, _botIaFilaDe, _botIaListaTexto, _botIaOndeAparece, _botCobSituacao, _botDadosCob, _botTextoCobranca, _botIaMascaraNum, _botIaPendChave };');
+  const f = new Function(...nomes, CODIGO + '\n;return { _botCfgPadrao, _botNormaliza, _botIaPadrao, _botIaNormaliza, _botIaEscuta, _botIaQuem, _botIaFreio, _botIaChamar, _botIaLimpa, _botIaNorm, _botIaNumerosDe, _botIaAcharPedidos, _botIaPedidoTexto, _botIaResponder, _botIaMensagem, _botIaAck, _botIaFaxina, _botIaProvocaTick, _botIaSistema, _botCfgLer, _cobNomes, _cobTagMap, handleBotAgente, handleBotChat, handleBotIaTeste, BOT_IA_SEM_TEXTO, BOT_IA_MODELOS, _botIaGrupoDe, _botIaEhTeste, _botIaTesteTexto, _botIaTesteMudou, _botIaProvocaTeste, _botIaTextoSemMarca, BOT_IA_HORA, BOT_IA_DIA, BOT_IA_PESSOA_10MIN, BOT_IA_EXEMPLOS, BOT_IA_MARCADO, BOT_IA_NAO_SEI_QUEM, BOT_IA_MANUAL, _botIaManualPara, _botIaPseudo, _botIaNomeBonito, _botIaGemFora, _botMetaMes, _botMetaTxt, _botDados, _botIaPlacarTexto, META_MENSAL, BOT_IA_TOM_VELHOS, _botIaIntensidade, _botIaSemVocativo, BOT_IA_ASSUNTO_VENDA_RE, BOT_IA_GRITO_RE, _botIaTextoProblema, _botIaFichaCurta, _botIaChamouOutroPeloNome, BOT_IA_MARCA_OUTRO_RE, _botIaLinhaDoTempo, _botIaSoRiso, _botIaEscolheForma, _botIaTempero, _botIaRepete, _botIaFormaDe, _botIaMarcoAgora, BOT_IA_QUEM_MANDA_RE, _botIaVersaoOk, _botIaComMidia, _botIaCitouResposta, _botIaReacaoOk, BOT_IA_TOM_VEND, BOT_IA_TOM_COB, BOT_IA_CAIU, BOT_IA_CAIU_SEM_AVISO, BOT_IA_FESTA_REACOES, _botIaNumeroCaiu, _botIaFoneParecido, _botIaFoneFora, _botIaListaTipo, _botIaConfirma, _botIaFilaDe, _botIaListaTexto, _botIaOndeAparece, _botCobSituacao, _botDadosCob, _botTextoCobranca, _botIaMascaraNum, _botIaPendChave, _botSabePeriodo, _botSabeLinhas, _botSabeMov, _botSabeAgora, _botSabeBase, _botSabeTexto, _botSabeRelatorio, _botSabeListaEv, _botSabePedeRelatorio, _botSabeLiga, _botSabeAnuncio, _botSabeAnuncioDe, _botIaEhSala, BOT_SABE_GLOSSARIO };');
   return { api: f(...nomes.map((n) => deps[n])), env, cfgdb, chat, quem, fila, envios, chamadas, pushes, tetos, estado, mundo, gravacoes, curtos };
 }
 
@@ -2439,6 +2446,226 @@ const OFERTA = 'o telefone do cadastro termina em 0837 e o que vc mandou em 8373
   const cfg = cfgDe(m.api);
   await m.api._botIaResponder(m.env, cfg, { ...doBryan('@Barbadinho joga o Lazaro Andrade na minha dash'), grupo: 'cob' });
   conf(/Pedido\(s\) com esse nome ou número existem, mas são de outra pessoa: C\d+ \(fila de Haynan\)/.test(m.chamadas[0].user), 'pedido de outro cobrador: a IA diz de quem e');
+}
+
+// ══ 44. O RAIO-X DA OPERACAO (19/11/2026) ══════════════════════════════════════════════
+// O caso de verdade: o Heynan (direcao) no grupo dos cobradores perguntou "seria o total contando os pedidos enviados?",
+// "entao pq tem 72 que faltam cobrar?" e "chegaram quantos pedidos hoje?", e o bot chutou as tres porque nao tinha numero.
+titulo('44. O raio-x da operacao: movimento por periodo, a fila destrinchada, relatorio, lista e a sala da direcao');
+const SEG = (s) => Math.floor(ms(s) / 1000);
+// Uma operacao pequena, com um pedido em cada situacao. Hoje e quinta 05/11/2026, 11:00.
+const RX_LEADS = [
+  // cadastrados hoje: um esperando aprovacao, um ja aprovado
+  { id: 7001, nome: 'Alfa Um', cidade: 'Itu', uf: 'SP', col: 'A Enviar', orig: 'Manual', at: GUI, vl: 497, ts: hoje('09:00') },
+  { id: 7002, nome: 'Beta Dois', cidade: 'Itu', uf: 'SP', col: 'A Enviar', orig: 'Manual', aceito: true, aceito_em: '2026-11-05T13:00:00.000Z', at: KEVIN, vl: 297, ts: hoje('09:30'), five_id: 'PL-B2' },
+  // chegou no cliente HOJE (a data vem da transportadora) e esta na fila, sem retorno marcado
+  { id: 7003, nome: 'Gama Tres', cidade: 'Recife', uf: 'PE', col: 'Entregues', at: GUI, cob: BRYAN, vl: 497, ts: hb('01', '10:00'), five_id: 'PL-G3' },
+  // chegou ONTEM (so o historico diz), retorno pra amanha: em cobranca
+  { id: 7004, nome: 'Delta Quatro', cidade: 'Natal', uf: 'RN', col: 'Cobrança', at: GUI, cob: BRYAN, vl: 497, agend: '2026-11-06T09:00', ts: hb('01', '11:00'), hist: [{ from: 'Rota de Entrega', to: 'Entregue', time: '2026-11-04T18:00:00.000Z', who: 'five' }] },
+  // na agencia desde ontem, retorno vencido anteontem: atrasado
+  { id: 7005, nome: 'Epsilon Cinco', cidade: 'Belém', uf: 'PA', col: 'Retirada', at: KEVIN, cob: HAYNAN, vl: 497, agend: '2026-11-03T09:00', ts: hb('01', '12:00'), hist: [{ from: 'Enviado', to: 'Retirada', time: '04/11 10:00', who: 'five' }] },
+  // pago HOJE (cadastrado em outubro), pago ontem, e um pago que nasceu hoje
+  { id: 7006, nome: 'Zeta Seis', cidade: 'Itu', uf: 'SP', col: 'Pagos', spg: 'Pago', at: GUI, cob: BRYAN, vl: 497, cob_pct: 3, pago_ts: hoje('10:00'), ts: ms('2026-10-20T10:00:00-03:00') },
+  { id: 7007, nome: 'Eta Sete', cidade: 'Itu', uf: 'SP', col: 'Pagos', spg: 'Pago', at: KEVIN, cob: HAYNAN, vl: 297, cob_pct: 3, pago_ts: hb('04', '16:00'), ts: ms('2026-10-21T10:00:00-03:00') },
+  // a caminho: nao entra na fila
+  { id: 7008, nome: 'Teta Oito', cidade: 'Itu', uf: 'SP', col: 'Enviado', at: GUI, cob: BRYAN, vl: 497, ts: hb('03', '10:00'), five_id: 'PL-T8' },
+  { id: 7009, nome: 'Iota Nove', cidade: 'Itu', uf: 'SP', col: 'Requer Atenção', at: GUI, cob: BRYAN, vl: 497, ts: hb('02', '10:00') },
+  // perda de hoje, cancelado de hoje, reenvio sem cobranca, e o mundo do afiliado
+  { id: 7010, nome: 'Capa Dez', cidade: 'Itu', uf: 'SP', col: 'Frustrado', at: GUI, cob: BRYAN, vl: 497, ts: ms('2026-10-22T10:00:00-03:00'), hist: [{ from: 'Entregues', to: 'Frustrados', time: '05/11 08:00', who: BRYAN }] },
+  { id: 7011, nome: 'Lambda Onze', cidade: 'Itu', uf: 'SP', col: 'Cancelado', at: GUI, vl: 497, ts: hoje('08:00'), hist: [{ from: 'A Enviar', to: 'Cancelado', time: '05/11 08:30', who: 'dir' }] },
+  { id: 7012, nome: 'Mi Doze', cidade: 'Itu', uf: 'SP', col: 'Entregues', spg: 'Pago', tags: ['reenvio'], vl: 0, at: '', ts: hoje('07:00') },
+  { id: 7013, nome: 'Ni Afiliada', cidade: 'Itu', uf: 'SP', col: 'Entregues', at: GUI, afl: 'afl_x', vl: 497, ts: hoje('07:30') },
+];
+const RX_FIVE = [
+  { order_id: 'PL-G3', shipped_ts: SEG('2026-11-02T10:00:00-03:00'), delivered_ts: SEG('2026-11-05T09:40:00-03:00') },
+  { order_id: 'PL-T8', shipped_ts: SEG('2026-11-05T08:00:00-03:00'), delivered_ts: null },
+  { order_id: 'PL-B2', shipped_ts: null, delivered_ts: null },
+];
+// leads de hoje: 4 no numero do Guilherme, 1 no do Kevin; um 'deduzido' (venda por ligacao) nao conta; 2 de ontem
+const RX_WALEAD = [
+  ...[1, 2, 3, 4].map((i) => ({ inst: '', num: '5515988880001', ts: SEG('2026-11-05T0' + i + ':00:00-03:00'), src: 'code' })),
+  { inst: '', num: '5515977770001', ts: SEG('2026-11-05T09:00:00-03:00'), src: 'code' },
+  { inst: '', num: '5515988880001', ts: SEG('2026-11-05T09:30:00-03:00'), src: 'deduzido' },
+  { inst: '', num: '5515988880001', ts: SEG('2026-11-04T09:00:00-03:00'), src: 'code' }, { inst: '', num: '5515977770001', ts: SEG('2026-11-04T10:00:00-03:00'), src: 'code' },
+];
+const RX_CSTX = [
+  { origem: 'cartao', dia: '2026-11-05', valor: 300, sentido: 'saida', tipo: 'PURCHASE', status: 'PROCESSED', quem: 'DL*TIKTOK ADS SAO PAUL', categoria: 'Publicidade e Anuncios', centro: 'BM Nova - 01' },
+  { origem: 'cartao', dia: '2026-11-05', valor: 20, sentido: 'saida', tipo: 'IOF', status: 'PROCESSED', quem: '', categoria: '', centro: 'BM Nova - 01' },
+  { origem: 'cartao', dia: '2026-11-05', valor: 50, sentido: 'entrada', tipo: 'REFUND', status: 'PROCESSED', quem: 'TIKTOK ADS', categoria: 'Publicidade e Anuncios', centro: '' },
+  { origem: 'cartao', dia: '2026-11-05', valor: 999, sentido: 'saida', tipo: 'PURCHASE', status: 'CANCELED', quem: 'TIKTOK ADS', categoria: 'Publicidade e Anuncios', centro: '' },
+  { origem: 'cartao', dia: '2026-11-05', valor: 5000, sentido: 'entrada', tipo: 'LIMIT', status: 'PROCESSED', quem: '', categoria: 'Movimentações', centro: 'BM Nova - 01' },
+  { origem: 'cartao', dia: '2026-11-05', valor: 80, sentido: 'saida', tipo: 'PURCHASE', status: 'PROCESSED', quem: 'POSTO IPIRANGA', categoria: 'Combustível', centro: '' },
+  { origem: 'conta', dia: '2026-11-05', valor: 700, sentido: 'saida', tipo: 'PIX_OUT', status: 'PROCESSED', quem: 'TIKTOK', categoria: 'Publicidade e Anuncios', centro: '' },
+];
+const rxMundo = (extra) => ({ ...MUNDO, leads: JSON.parse(JSON.stringify(RX_LEADS)), tags: COB_TAGS, five: RX_FIVE, walead: RX_WALEAD, cstx: RX_CSTX, ...(extra || {}) });
+const RX_CFG = { pessoas: [...CFG_RAW.pessoas, { id: 'dir', nome: 'Heynan', fone: '5524992138665' }] };
+const doHeynan = (texto, extra) => ({ ...pacote({ jid: GC, de_jid: '5524992138665@s.whatsapp.net', de_fone: '5524992138665', de_nome: 'Heynan Dantas', texto, menciona: true, ...(extra || {}) }), grupo: 'cob' });
+{
+  // O PERIODO que a mensagem pede
+  const { api } = monta({});
+  const per = (t) => { const p = api._botSabePeriodo(t, RELOGIO.agora); return p ? p.de + '>' + p.ate : ''; };
+  conf(per('quantos chegaram hoje?') === '2026-11-05>2026-11-05' && per('e ontem') === '2026-11-04>2026-11-04' && per('anteontem') === '2026-11-03>2026-11-03', 'hoje, ontem e anteontem');
+  conf(per('como foi a semana passada?') === '2026-10-26>2026-11-01' && per('quantos pedidos essa semana') === '2026-11-02>2026-11-05', 'semana passada (segunda a domingo) e esta semana (de segunda ate hoje)');
+  conf(per('pagos no mês passado') === '2026-10-01>2026-10-31' && per('quantos pedidos no mês') === '2026-11-01>2026-11-05' && per('em setembro') === '2026-09-01>2026-09-30' && per('vendas de dezembro') === '2025-12-01>2025-12-31', 'mes passado, este mes, o mes pelo nome e o mes que ainda nao chegou (e o do ano passado)');
+  conf(per('de 28/10 a 02/11') === '2026-10-28>2026-11-02' && per('dia 30/10') === '2026-10-30>2026-10-30' && per('no dia 3') === '2026-11-03>2026-11-03' && per('do dia 1 ao dia 4') === '2026-11-01>2026-11-04', 'data com barra, faixa de datas, "dia 3" e "do dia 1 ao dia 4"');
+  conf(per('nos ultimos 15 dias') === '2026-10-22>2026-11-05' && per('quantos na segunda?') === '2026-11-02>2026-11-02' && per('de 01/11 a 20/11') === '2026-11-01>2026-11-05', 'ultimos 15 dias, o dia da semana que passou e a faixa que passa de hoje para em hoje');
+  conf(per('quantas vendas ate agora?') === '' && per('Até hj n entendi mt bem esses faltam a cobrar') === '' && per('bati o marco de 10') === '' && per('ele paga a segunda parcela') === '' && per('quantos pedidos?') === '', '"ate agora", "ate hj n entendi", o marco de comemoracao e a "segunda parcela" nao sao periodo');
+  conf(per('quantos pedidos desde o começo?') === '>2026-11-05', '"desde o comeco" e tudo');
+}
+{
+  // AS CONTAS, direto na base
+  const m = monta(rxMundo());
+  const cfg = cfgDe(m.api, RX_CFG);
+  const base = await m.api._botSabeBase(m.env, m.estado, RELOGIO.agora, null, true);
+  const h = base.mov.hoje, on = base.mov.ontem, a = base.agora;
+  conf(h.vendas === 2 && h.aguardando === 1 && h.cancelados === 1, 'pedidos de hoje: os 2 cadastrados (1 esperando aprovacao); cancelado, reenvio sem cobranca e afiliado nao contam, e o cancelado de hoje aparece em cancelados');
+  conf(h.aceitos === 1 && h.enviados === 1, 'aprovado hoje (aceito_em) e despachado hoje (a data da transportadora)');
+  conf(h.entregues === 1 && on.entregues === 1 && on.agencia === 1 && h.agencia === 0, 'chegou no cliente: hoje pela transportadora (delivered_ts), ontem pela entrada do card em Entregues; agencia ontem');
+  conf(h.pagos === 1 && h.pagosVl === 497 && on.pagos === 1 && Math.abs(h.comCob - 14.91) < 0.001, 'pagos pela data do pagamento, com o valor e a comissao do cobrador (reenvio sem cobranca nao e pago)');
+  conf(h.perdas === 1 && h.frustrados === 1, 'a perda conta no dia em que o card entrou na coluna');
+  conf((h.porAt[GUI] || {}).vendas === 1 && (h.porAt[KEVIN] || {}).vendas === 1 && (h.porCob[BRYAN] || {}).pagos === 1 && (on.porCob[HAYNAN] || {}).pagos === 1, 'a mesma conta por vendedor e por cobrador');
+  conf(a.fila.n === 3 && a.fila.entregues === 2 && a.fila.agencia === 1 && a.fila.combinado === 1 && a.fila.atrasado === 1 && a.fila.sem === 1 && a.fila.retAmanha === 1 && a.caminho === 2, 'a fila: 2 entregues + 1 na agencia; 1 com combinado (retorno amanha), 1 atrasado, 1 sem retorno; 2 a caminho de fora');
+  conf(a.etapas.aprovacao === 1 && a.etapas['A Enviar'] === 1 && a.etapas.Enviados === 1 && a.etapas['Requer Atenção'] === 1 && a.abertos === 7, 'o agora: cada pedido em aberto na etapa dele, o que espera aprovacao separado do A Enviar');
+  // a regra do resumo da cobranca e a mesma: se alguem mexer numa, este teste acusa
+  const d = await m.api._botDadosCob(m.env, DIA, cfg, 'diario', false, m.estado);
+  conf(d.geral.em_cobranca === a.fila.n && d.geral.combinados === a.fila.combinado && d.geral.atrasados === a.fila.atrasado && d.geral.pendentes === a.fila.n + a.caminho && d.geral.pedidos === h.pagos, 'a fila do raio-x e a do resumo da cobranca (Faltam cobrar, Em cobranca, Atrasados, A receber, Convertidos) sao o mesmo numero');
+  const v = await m.api._botDados(m.env, DIA, cfg, 'diario', false, m.estado);
+  conf(v.geral.pedidos === h.vendas, 'e os pedidos de hoje batem com o placar do resumo dos vendedores');
+  const mes = base.mov.mes, mp = base.mov.mesPassado;
+  // (o reenvio sem cobranca entra como pago na coorte, igual no app do celular: a taxa do bot e a da tela tem que ser a mesma)
+  conf(mes.coorte === 3 && mes.coortePagos === 1 && mp.coorte === 3 && mp.coortePagos === 2, 'taxa de pagamento = a coorte do app: cadastrados no periodo que ja terminaram (pago, entregue em cobranca, frustrado); a caminho, na agencia e cancelado ficam fora');
+  const an = await m.api._botSabeAnuncio(m.env, RELOGIO.agora - 5 * 86400000);
+  conf(an.ok && Math.abs(an.porDia['2026-11-05'] - 270) < 0.001, 'anuncio no cartao: compra na loja de anuncio + IOF do cartao de BM - estorno; cancelada, recarga de limite, outra loja e Pix da conta ficam fora');
+}
+{
+  // O TEXTO pros DADOS, por cargo e por lugar
+  const m = monta(rxMundo());
+  const cfg = cfgDe(m.api, RX_CFG);
+  const equipe = [{ id: GUI, nome: 'Guilherme', role: 'atendente' }, { id: KEVIN, nome: 'Kevin Marques', role: 'atendente' }, { id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador' }, { id: HAYNAN, nome: 'Haynan', role: 'cobrador' }, { id: 'dir', nome: 'Heynan Dantas', role: 'diretor' }];
+  const base = await m.api._botSabeBase(m.env, m.estado, RELOGIO.agora, m.api._botSabePeriodo('e ontem?', RELOGIO.agora), true);
+  const dir = { id: 'dir', nome: 'Heynan Dantas', role: 'diretor', chefe: true };
+  const noGrupo = m.api._botSabeTexto(base, { quem: dir, equipe, grupo: 'cob', reservado: false, cfg, explica: true });
+  conf(/Chegaram no cliente \(entregues na casa do cliente\): hoje 1 · ontem 1/.test(noGrupo) && /A mensagem fala de: ontem\./.test(noGrupo), 'direcao: o movimento por periodo, com "chegaram no cliente" e o periodo que a mensagem pediu');
+  conf(/FILA DA COBRANÇA \(é a linha "Faltam cobrar" do resumo\): 3 = 2 entregues ainda não pagos \+ 1 na agência dos Correios/.test(noGrupo) && /\(1 \+ 1 \+ 1 = 3\)/.test(noGrupo) && /NÃO entram: são 2 ainda a caminho/.test(noGrupo), 'a fila destrinchada: de onde vem cada pedido, a soma que fecha e o que nao entra');
+  conf(/Fila por cobrador[^\n]*Bryan 2 \(1, 0, 1\) · Haynan 1 \(0, 1, 0\)/.test(noGrupo) && /POR VENDEDOR/.test(noGrupo) && /POR COBRADOR/.test(noGrupo) && /- hoje: Guilherme 1 de 4 leads \(25%\) · Kevin 1 de 1 leads \(100%\)/.test(noGrupo), 'a direcao ve por cobrador e por vendedor (com os leads de cada um; o deduzido nao conta)');
+  conf(/"Faltam cobrar" = a fila/.test(noGrupo) && /NÃO é "falta chamar"/.test(noGrupo), 'perguntou o que e: entra o glossario das linhas do resumo do grupo');
+  conf(!/DINHEIRO/.test(noGrupo) && !/R\$/.test(noGrupo) && /valor da casa você só abre na sala da direção/.test(noGrupo), 'no grupo do time nao sai valor em reais nenhum, e os DADOS dizem onde o valor fica');
+  const reserv = m.api._botSabeTexto(base, { quem: dir, equipe, grupo: 'cob', reservado: true, cfg });
+  conf(/DINHEIRO/.test(reserv) && /Recebido[^\n]*hoje R\$ 497,00/.test(reserv) && /Anúncio pago no cartão[^\n]*hoje R\$ 270,00/.test(reserv) && /Custo por lead[^\n]*hoje R\$ 54,00/.test(reserv) && /Lucro[^\n]*NÃO está aqui/.test(reserv), 'em lugar reservado a direcao ve vendido, recebido, anuncio, custo por lead e que o lucro nao esta ali');
+  const comValor = m.api._botSabeTexto(base, { quem: dir, equipe, grupo: 'cob', reservado: false, cfg: { cobranca: { relatorio: { mostrar: { recebido: true, comissao: true } } } } });
+  conf(/Valor recebido pelos cobradores[^\n]*hoje Bryan R\$ 497,00/.test(comValor) && /Comissão dos cobradores[^\n]*hoje Bryan R\$ 14,91/.test(comValor) && !/DINHEIRO/.test(comValor), 'grupo dos cobradores: so repete o valor que o resumo de la ja mostra (recebido e comissao ligados na config)');
+  const cob = m.api._botSabeTexto(base, { quem: { id: BRYAN, nome: 'Bryan Amorim', role: 'cobrador', chefe: false }, equipe, grupo: 'cob', reservado: false, cfg });
+  conf(/A FILA DE BRYAN \(quem perguntou\): 2 = 2 entregues ainda não pagos \+ 0 na agência/.test(cob) && !/POR VENDEDOR/.test(cob) && !/R\$/.test(cob) && /isso é com a direção/.test(cob), 'cobrador: a casa em quantidade e a fila DELE com detalhe; nada por vendedor e nenhum valor');
+  const vend = m.api._botSabeTexto(base, { quem: { id: GUI, nome: 'Guilherme', role: 'atendente', chefe: false }, equipe, grupo: 'vend', reservado: true, cfg });
+  conf(/OS NÚMEROS DE GUILHERME/.test(vend) && /Pedidos que ele cadastrou: hoje 1 \(1 esperando aprovação\)/.test(vend) && /Leads que ele recebeu: hoje 4 \(25% viraram pedido\)/.test(vend) && !/POR COBRADOR/.test(vend) && !/R\$/.test(vend), 'vendedor: os numeros dele (pedidos, leads, entregues, pagos, taxa); nada por cobrador e nenhum valor, nem no Pergunte ao bot');
+}
+{
+  // NO CAMINHO DA MENSAGEM: a direcao no grupo dos cobradores (a conversa do Heynan)
+  const m = monta(rxMundo({ ia: [{ json: { leitura: 'pergunta da fila', responder: true, texto: 'são 3: 2 entregues e 1 na agência', avisar_direcao: 'número estranho' } }] }));
+  const cfg = cfgDe(m.api, RX_CFG);
+  let r = await m.api._botIaResponder(m.env, cfg, doHeynan('Até hj n entendi mt bem esses “faltam a cobrar” @Barbadinho seria o total contando os pedidos enviados?'));
+  const u = m.chamadas[0].user;
+  conf(r.acao === 'respondeu' && /RAIO-X DA OPERAÇÃO/.test(u) && /FILA DA COBRANÇA/.test(u) && /O QUE CADA LINHA DO RESUMO DA COBRANÇA CONTA/.test(u) && r.viu.includes('raio-x'), '"faltam a cobrar ... contando os pedidos enviados?" da direcao: o raio-x e o glossario vao pros DADOS (antes ia so o nome dos cobradores)');
+  conf(/^raio-x · /.test(r.motivo) && !/Nenhum pedido encontrado/.test(u) && !/Placar e fila ficaram de fora/.test(u), 'o motivo leva a marca do raio-x; nada de "nenhum pedido encontrado" nem de "placar ficou de fora" junto');
+  conf(/Heynan É da direção: nunca diga "já avisei a direção"/.test(u) && m.pushes.length === 0 && !r.alerta, 'a direcao contestando um numero nao e problema: a IA e avisada e o aviso que ela pedir NAO sai');
+  conf(/RAIO-X DA OPERAÇÃO: quando vier nos DADOS/.test(m.chamadas[0].system), 'o prompt ensina a responder pelo raio-x');
+}
+{
+  // quem contesta sem ponto de interrogacao continua com o raio-x, e nao cai na conta das seguidas
+  const DH = { jid: GC, de_jid: '5524992138665@s.whatsapp.net', de_nome: 'Heynan Dantas', grupo: 'cob' };
+  const chat = [
+    linhaChat({ ...DH, msg_id: 'h1', ts: agoraS() - 200, texto: 'pq tem 72?', acao: 'respondeu', resposta: 'são 72: 61 entregues e 11 na agência', motivo: 'raio-x · leu: pergunta da fila', chamadas: 1 }),
+    linhaChat({ ...DH, msg_id: 'h2', ts: agoraS() - 120, texto: 'incluindo preparando?', acao: 'respondeu', resposta: 'não, esses não entram', motivo: 'raio-x · leu: pergunta', chamadas: 1 }),
+  ];
+  const m = monta(rxMundo({ chat, ia: [{ json: { leitura: 'contesta a conta', responder: true, texto: 'os 5 que faltam são os sem retorno marcado' } }] }));
+  const cfg = cfgDe(m.api, RX_CFG);
+  const r = await m.api._botIaResponder(m.env, cfg, doHeynan('Da 67 pedidos contando atrasados e em cobrança', { menciona: false, marcado: false }));
+  conf(r.acao === 'respondeu' && m.chamadas.length === 1 && /RAIO-X DA OPERAÇÃO/.test(m.chamadas[0].user) && /O QUE CADA LINHA DO RESUMO/.test(m.chamadas[0].user), '"da 67 contando atrasados e em cobranca" logo depois de duas respostas: segue a conversa com o raio-x e o glossario (antes: "ja respondi essa pessoa 2 vezes")');
+  const m2 = monta(rxMundo({ chat: JSON.parse(JSON.stringify(chat)), ia: [JSON_OK] }));
+  const r2 = await m2.api._botIaResponder(m2.env, cfgDe(m2.api, RX_CFG), doHeynan('vou jantar agora', { menciona: false, marcado: false }));
+  conf(r2.acao === 'visto' && m2.chamadas.length === 0, 'a terceira mensagem seguida que nao e da conta continua de fora, sem IA');
+}
+{
+  // SO A MARCACAO: a pergunta e a mensagem de antes
+  const DH = { jid: GC, de_jid: '5524992138665@s.whatsapp.net', de_nome: 'Heynan Dantas', grupo: 'cob' };
+  const chat = [linhaChat({ ...DH, msg_id: 'p1', ts: agoraS() - 20, texto: 'Chegaram quantos pedidos hoje? @', acao: 'calado', resposta: '', chamadas: 1 })];
+  const m = monta(rxMundo({ chat, ia: [{ json: { leitura: 'quantos chegaram', responder: true, texto: 'hoje chegou 1 no cliente' } }] }));
+  const r = await m.api._botIaResponder(m.env, cfgDe(m.api, RX_CFG), doHeynan('@Barbadinho', { msg_id: 'p2' }));
+  conf(r.acao === 'respondeu' && /Mensagem de Heynan Dantas: "Chegaram quantos pedidos hoje\? @Barbadinho"/.test(m.chamadas[0].user) && /A mensagem fala de: hoje\./.test(m.chamadas[0].user), 'marcou o bot sozinho: a pergunta e a mensagem que ele mandou logo antes, e o raio-x vai junto');
+  const m2 = monta(rxMundo({ chat: [], ia: [JSON_OK] }));
+  await m2.api._botIaResponder(m2.env, cfgDe(m2.api, RX_CFG), doHeynan('@Barbadinho', { msg_id: 'p3' }));
+  conf(/Mensagem de Heynan Dantas: "@Barbadinho"/.test(m2.chamadas[0].user), 'sem mensagem antes, fica a marcacao sozinha (a resposta padrao de sempre)');
+}
+{
+  // quando o raio-x NAO entra
+  const m = monta(rxMundo({ ia: [JSON_OK] }));
+  const cfg = cfgDe(m.api, RX_CFG);
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho a Delta Quatro pagou?'));
+  conf(!/RAIO-X/.test(m.chamadas[0].user) && /Pedido (encontrado|PROVÁVEL)/.test(m.chamadas[0].user), 'pergunta de UM pedido achado pelo nome: so o pedido, sem raio-x');
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho esse cliente pagou mas reclamou pra caramba kkkk'));
+  conf(!/RAIO-X/.test(m.chamadas[1].user), 'zoeira com palavra de pedido e sem pergunta: sem raio-x');
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho quantos pedidos pagaram hoje?'));
+  conf(/RAIO-X/.test(m.chamadas[2].user) && /A FILA DE BRYAN/.test(m.chamadas[2].user) && !/Nenhum pedido encontrado/.test(m.chamadas[2].user), 'pergunta de quantidade do cobrador: o raio-x com a fila dele, sem "nenhum pedido encontrado"');
+  const g = pacote({ texto: '@Barbadinho quantos pedidos meus chegaram essa semana?', menciona: true });
+  await m.api._botIaResponder(m.env, cfg, g);
+  conf(/OS NÚMEROS DE GUILHERME/.test(m.chamadas[3].user) && /esta semana \(desde segunda, 02\/11\)/.test(m.chamadas[3].user), 'vendedor perguntando dos pedidos dele na semana: os numeros dele e o periodo pedido');
+  const t = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'cob', texto: 'quanto recebemos hoje?', quem_id: 'dir' }), m.env);
+  conf(/DINHEIRO/.test(t._json.contexto) && t._json.viu.some((x) => /^raio-x/.test(x)), 'Pergunte ao bot como a direcao e lugar reservado: o dinheiro entra');
+  conf(m.api._botIaLimpa('x'.repeat(2000), [], 1200).texto.length === 1200 && m.api._botIaLimpa('x'.repeat(2000), []).texto.length === 700, 'resposta com raio-x pode ir ate 1200 caracteres; as outras continuam em 700');
+}
+{
+  // RELATORIO e LISTA, sem IA
+  const { api } = monta({});
+  const rel = (t) => api._botSabePedeRelatorio(api._botIaNorm(t));
+  conf(rel('me manda o relatório de hoje') && rel('@Barbadinho resumo da semana') && rel('fechamento de ontem') && rel('qual o panorama da operação?'), 'pedido de relatorio');
+  conf(!rel('o resumo tá errado') && !rel('que horas sai o resumo do dia?') && !rel('como foi o dia?') && !rel('o que significa faltam cobrar no resumo do dia') && !rel('esse resumo do dia bate com a dash'), 'reclamar do resumo, perguntar a hora dele, o que ele significa ou se ele bate nao e pedir relatorio');
+  const ev = (t) => api._botSabeListaEv(api._botIaNorm(t));
+  conf(ev('quais chegaram hoje?') === 'entregue' && ev('quem pagou essa semana') === 'pago' && ev('me manda os despachados de ontem') === 'enviado' && ev('quais frustraram no mês') === 'perda' && ev('quais estão esperando aprovação') === 'aprovacao', 'lista por acontecimento: chegaram, pagaram, despachados, perdas, esperando aprovacao');
+  conf(ev('quantos chegaram hoje?') === '' && ev('de quem é o pedido que chegou') === '' && ev('quais vão chegar amanhã') === '' && ev('quem é o cara do momento?') === '' && ev('me passa o pix do cliente que pagou') === '', '"quantos" e numero, "de quem" e um pedido, "vao chegar" e outra lista, "me passa o pix do que pagou" e um pedido: nenhum e esta lista');
+  conf(api._botSabeLiga(api._botIaNorm('ta faltando pedido'), false, true) && !api._botSabeLiga(api._botIaNorm('bom trabalho hoje, pagaram bem'), false, true) && !api._botSabeLiga(api._botIaNorm('meu numero caiu?'), true, false) && api._botSabeLiga(api._botIaNorm('quantos numeros estao em uso?'), true, true), 'o raio-x liga com pergunta, pedido ou contestacao; elogio com palavra de pedido nao liga, nem pra direcao; "numero" so liga pra direcao');
+  const m = monta(rxMundo({ ia: [JSON_OK] }));
+  const cfg = cfgDe(m.api, RX_CFG);
+  let r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho me manda o relatório de hoje'));
+  conf(r.acao === 'respondeu' && m.chamadas.length === 0 && /^\*Operação · hoje \(05\/11\)\*/.test(r.resposta) && /Chegaram no cliente: 1 · Na agência pra retirar: 0/.test(r.resposta) && /Fila da cobrança: 3 \(2 entregues, 1 na agência\)/.test(r.resposta) && /Bryan: 1 pago · fila 2/.test(r.resposta) && !/R\$/.test(r.resposta) && /relatório \(hoje\), sem IA/.test(r.motivo), 'relatorio da direcao no grupo: sai do codigo, sem IA e sem valor em reais');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho resumo do dia'));
+  conf(/^\*Bryan · hoje \(05\/11\)\*/.test(r.resposta) && /Fila: 2 \(2 entregues, 0 na agência\)/.test(r.resposta) && !/Por vendedor/.test(r.resposta), 'relatorio do cobrador: so o dele');
+  const t = await m.api.handleBotIaTeste(req('/api/bot/ia/teste', { grupo: 'cob', texto: 'relatório de hoje', quem_id: 'dir' }), m.env);
+  conf(/Pagos: 1 · R\$ 497,00/.test(t._json.resposta) && /Anúncio no cartão: R\$ 270,00/.test(t._json.resposta) && /A receber: R\$/.test(t._json.resposta), 'o mesmo relatorio em lugar reservado traz os valores');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho quais chegaram hoje?'));
+  conf(m.chamadas.length === 0 && /^\*Chegaram no cliente · hoje: 1\*/.test(r.resposta) && /1\. Gama Tres · Recife\/PE · 09:40 · cobrador Bryan · vendedor Guilherme/.test(r.resposta), 'lista da direcao: quem chegou hoje, com a hora, o cobrador e o vendedor, sem IA');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho quais chegaram ontem?'));
+  conf(/Chegaram no cliente · ontem: 1/.test(r.resposta) && /Delta Quatro/.test(r.resposta), 'e a de ontem (a data que so o historico do card tem)');
+  r = await m.api._botIaResponder(m.env, cfg, { ...doBryan('@Barbadinho quais chegaram ontem?'), de_jid: '999000111222@lid', de_fone: '' }, { quem: { id: HAYNAN, nome: 'Haynan', role: 'cobrador', chefe: false } });
+  conf(/Chegaram no cliente · ontem \(sua fila\): nenhum\./.test(r.resposta), 'cobrador so ve os da fila dele');
+  r = await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho quem pagou hoje?'));
+  conf(/Pagaram hoje/.test(r.resposta) && /lista \(pagos\)/.test(r.motivo), '"quem pagou hoje" do cobrador continua sendo a lista da fila dele (a que ja existia)');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho quem pagou essa semana?'));
+  conf(/^\*Pagaram · esta semana[^\n]*: 2\*/.test(r.resposta) && /Zeta Seis/.test(r.resposta) && /Eta Sete/.test(r.resposta) && !/Mi Doze/.test(r.resposta), 'a direcao pedindo quem pagou na semana: todos os cobradores, sem o reenvio sem cobranca');
+}
+{
+  // A SALA DA DIRECAO
+  const GS = '120363400000000777@g.us';
+  const { api } = monta({});
+  const comSala = (extra) => cfgDe(api, { ...RX_CFG, ia: { ...CFG_RAW.ia, sala: { ativo: true, id: GS, nome: 'Direcao' }, ...(extra || {}) } });
+  const cfgS = comSala();
+  conf(cfgS.ia.sala.ativo && api._botIaEhSala(cfgS, GS) && api._botIaGrupoDe(cfgS, GS) === 'dir' && api._botIaEscuta(cfgS).includes(GS), 'sala da direcao ligada: e reconhecida, vira o grupo "dir" e o agente passa a escutar');
+  conf(api._botNormaliza({}, null).ia.sala.ativo === false && api._botIaEscuta(cfgDe(api)).length === 2, 'nasce desligada: sem escolher o grupo nada muda');
+  conf(!api._botNormaliza({ ...CFG_RAW, ia: { ...CFG_RAW.ia, sala: { ativo: true, id: GV } } }, null).ia.sala.ativo && !api._botNormaliza({ ...CFG_RAW, ia: { ...CFG_RAW.ia, sala: { ativo: true, id: GC } } }, null).ia.sala.ativo && !api._botNormaliza({ ...CFG_RAW, ia: { ...CFG_RAW.ia, sala: { ativo: true, id: 'abc' } } }, null).ia.sala.ativo, 'a sala nunca e o grupo dos vendedores nem o dos cobradores (la sairia valor na frente do time), e precisa ser um grupo de verdade');
+  conf(api._botNormaliza({ ia: { responde: { vend: true } } }, cfgS).ia.sala.id === GS, 'salvar outra parte da config nao apaga a sala');
+  const m = monta(rxMundo({ cfg: { ...CFG_RAW, ...RX_CFG, ia: { ...CFG_RAW.ia, sala: { ativo: true, id: GS, nome: 'Direcao' } } }, ia: [{ json: { leitura: 'quanto recebemos', responder: true, texto: 'hoje entrou R$ 497,00 em 1 pedido' } }] }));
+  const cfg = await m.api._botCfgLer(m.env, true);
+  const naSala = (o) => msg({ jid: GS, de_jid: '5524992138665@s.whatsapp.net', de_fone: '5524992138665', de_nome: 'Heynan Dantas', ...o });
+  let r = await m.api._botIaMensagem(m.env, cfg, naSala({ texto: 'quanto recebemos hoje?' }));
+  conf(r.ok && r.resposta === 'hoje entrou R$ 497,00 em 1 pedido' && m.chamadas.length === 1 && /Grupo: Sala da direção/.test(m.chamadas[0].user) && /DINHEIRO/.test(m.chamadas[0].user), 'na sala a direcao pergunta sem marcar e recebe com valor (os DADOS levam o dinheiro)');
+  conf(m.chat[m.chat.length - 1].grupo === 'dir' && !m.quem.some((q) => q.grupo === 'dir'), 'a linha fica como "dir" (fora da conta dos grupos do time) e o quem e quem nao e mexido');
+  r = await m.api._botIaMensagem(m.env, cfg, naSala({ texto: 'Bruno, vamos subir o orçamento amanhã?' }));
+  conf(r.resposta === '' && m.chamadas.length === 1, 'socio falando com o outro socio na sala: o bot fica de fora');
+  r = await m.api._botIaMensagem(m.env, cfg, naSala({ texto: 'kkkkk boa' }));
+  conf(r.resposta === '' && m.chamadas.length === 1, 'papo solto na sala tambem nao chama a IA');
+  r = await m.api._botIaMensagem(m.env, cfg, msg({ jid: GS, texto: '@Barbadinho quanto recebemos hoje?', menciona: true }));
+  conf(r.resposta === '' && m.chamadas.length === 1 && /sala da direção: quem escreveu não é da direção/.test(m.chat[m.chat.length - 1].motivo), 'quem nao e da direcao nao tem resposta na sala, nem marcando');
+  r = await m.api._botIaMensagem(m.env, cfg, naSala({ texto: 'me manda o relatório de ontem' }));
+  conf(/^\*Operação · ontem \(04\/11\)\*/.test(r.resposta) && /Pagos: 1 · R\$ 297,00/.test(r.resposta) && m.chamadas.length === 1, 'relatorio na sala: sem IA e com os valores');
 }
 
 console.log('\n' + (falhas.length ? 'FALHOU' : 'OK') + ': ' + ok + ' de ' + (ok + falhas.length) + ' conferencias');

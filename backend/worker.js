@@ -11782,7 +11782,7 @@ function _botLogConfere(b, cfg) {
   }
   if (rl && _botHoraOk(rl.de) && _botHoraOk(rl.ate) && _botMinutos(rl.ate) <= _botMinutos(rl.de)) return 'Na logística, o horário termina antes de começar.';
   const lg = L.grupo.id;
-  if (lg && (lg === cfg.grupo.id || lg === String((cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id) || '') || lg === String((cfg.ia && cfg.ia.teste && cfg.ia.teste.id) || ''))) {
+  if (lg && (lg === cfg.grupo.id || lg === String((cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id) || '') || lg === String((cfg.ia && cfg.ia.teste && cfg.ia.teste.id) || '') || lg === String((cfg.ia && cfg.ia.sala && cfg.ia.sala.id) || ''))) {
     return 'O grupo da logística não pode ser o mesmo dos vendedores, dos cobradores nem o grupo de teste.';
   }
   return '';
@@ -12034,6 +12034,8 @@ function _botNormaliza(raw, base) {
   if (o.ia.teste.id && (o.ia.teste.id === o.grupo.id || o.ia.teste.id === String((o.cobranca && o.cobranca.grupo && o.cobranca.grupo.id) || ''))) o.ia.teste.ativo = false;
   // ...nem o da logistica (13/11/2026): la o bot so manda o aviso do pedido do Ceara.
   if (o.ia.teste.id && o.ia.teste.id === o.logistica.grupo.id) o.ia.teste.ativo = false;
+  // A sala da direcao (19/11/2026) nunca e um dos outros: la sairiam os valores da casa na frente do time.
+  if (o.ia.sala.id && [o.grupo.id, String((o.cobranca && o.cobranca.grupo && o.cobranca.grupo.id) || ''), o.logistica.grupo.id, o.ia.teste.ativo ? o.ia.teste.id : ''].includes(o.ia.sala.id)) o.ia.sala.ativo = false;
   return o;
 }
 // O bloco da cobranca, mesmas regras do de cima: campo desconhecido e ignorado, campo invalido volta
@@ -13982,7 +13984,7 @@ const BOT_IA_COL_TXT = { 'A Enviar': 'a enviar (ainda não despachado)', 'Prepar
 const BOT_IA_ROLE_TXT = { atendente: 'vendedor', cobrador: 'cobrador', diretor: 'diretor', socio: 'sócio', produtor: 'produtor', gestor: 'gestor de tráfego', designer: 'designer' };
 
 function _botIaPadrao() {
-  return { responde: { vend: false, cob: false }, so_marcado: { vend: false, cob: true }, provoca: { ativo: false }, tom: { vend: BOT_IA_TOM_VEND, cob: BOT_IA_TOM_COB }, instrucoes: '', teste: { ativo: false, id: '', nome: '', como: 'cob', quem_id: '', por: '' } };
+  return { responde: { vend: false, cob: false }, so_marcado: { vend: false, cob: true }, provoca: { ativo: false }, tom: { vend: BOT_IA_TOM_VEND, cob: BOT_IA_TOM_COB }, instrucoes: '', teste: { ativo: false, id: '', nome: '', como: 'cob', quem_id: '', por: '' }, sala: { ativo: false, id: '', nome: '' } };
 }
 // Mescla o que veio com a base (a config gravada), campo por campo: invalido volta pra base.
 function _botIaNormaliza(raw, base) {
@@ -14014,9 +14016,33 @@ function _botIaNormaliza(raw, base) {
   o.teste.quem_id = _botTexto300(campo('quem_id') || '', 60).trim();
   o.teste.por = _botTexto300(campo('por') || '', 60).trim();
   o.teste.ativo = !!campo('ativo') && !!o.teste.id;
+  // SALA DA DIRECAO (19/11/2026, pedido do Bruno: "como se fosse nossa IA particular, para que a gente tire duvidas ali
+  // em relacao a nossa operacao"). Um grupo so dos socios com o bot: la ele responde a direcao sem precisar marcar, com a
+  // operacao inteira e os VALORES da casa (que nos grupos do time nao saem). Nada automatico vai pra la (resumo, festa,
+  // provocacao). Nunca e um dos grupos de verdade, o de teste nem o da logistica (ver _botNormaliza).
+  const rs = (r.sala && typeof r.sala === 'object') ? r.sala : {};
+  const bs = (b.sala && typeof b.sala === 'object') ? b.sala : {};
+  const campoS = (k) => (k in rs ? rs[k] : bs[k]);
+  const sid = String(campoS('id') || '').trim();
+  o.sala.id = _botJidGrupoOk(sid) ? sid : '';
+  o.sala.nome = _botTexto300(campoS('nome') || '', 80).trim();
+  o.sala.ativo = !!campoS('ativo') && !!o.sala.id;
   return o;
 }
 const _botIaJidOk = (v) => /^\d{5,20}@(s\.whatsapp\.net|lid)$/.test(String(v || ''));
+// A sala da direcao ligada, e que nao e nenhum outro grupo do bot.
+const _botIaEhSala = (cfg, jid) => {
+  if (!cfg || !cfg.ativo) return false;
+  const s = cfg.ia && cfg.ia.sala;
+  const j = String(jid || '');
+  if (!s || !s.ativo || !s.id || !j || s.id !== j) return false;
+  if (_botLogEhGrupo(cfg, j)) return false;
+  if (cfg.grupo && cfg.grupo.id === j) return false;
+  if (cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id === j) return false;
+  const t = cfg.ia && cfg.ia.teste;
+  if (t && t.ativo && t.id === j) return false;
+  return true;
+};
 // O grupo de teste ligado e que nao e nenhum dos dois de verdade.
 const _botIaEhTeste = (cfg, jid) => {
   if (!cfg || !cfg.ativo) return false;   // bot desligado: o agente nao escuta, entao o teste nao existe
@@ -14035,6 +14061,7 @@ const _botIaGrupoDe = (cfg, jid) => {
   if (cfg.grupo && cfg.grupo.id === j) return 'vend';
   if (cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id === j) return 'cob';
   if (_botIaEhTeste(cfg, j)) return cfg.ia.teste.como === 'vend' ? 'vend' : 'cob';
+  if (_botIaEhSala(cfg, j)) return 'dir';   // a sala da direcao: a linha fica como 'dir' e a resposta usa as regras de 'cob'
   return '';
 };
 const _botIaGrupoCfg = (cfg, g) => (g === 'cob' ? ((cfg.cobranca && cfg.cobranca.grupo) || {}) : (cfg.grupo || {}));
@@ -14049,6 +14076,8 @@ function _botIaEscuta(cfg) {
   if (ia.responde && ia.responde.cob && cfg.cobranca && cfg.cobranca.grupo && cfg.cobranca.grupo.id) out.push(String(cfg.cobranca.grupo.id));
   // O grupo de teste ligado tambem (independe do "Responder no grupo" dos de verdade).
   if (_botIaEhTeste(cfg, ia.teste && ia.teste.id) && !out.includes(String(ia.teste.id))) out.push(String(ia.teste.id));
+  // A sala da direcao ligada tambem.
+  if (_botIaEhSala(cfg, ia.sala && ia.sala.id) && !out.includes(String(ia.sala.id))) out.push(String(ia.sala.id));
   // O grupo da logistica NUNCA e escutado (13/11/2026), mesmo que alguem grave ele em outro lugar.
   return out.filter((j) => !_botLogEhGrupo(cfg, j));
 }
@@ -14247,8 +14276,8 @@ function _botIaJson(txt) {
   return t ? { responder: true, texto: t } : null;
 }
 // A SAIDA E PUBLICA: mascara telefone, CPF e link. Pegou algo que nao e id de pedido = fica calado.
-function _botIaLimpa(texto, idsOk) {
-  let t = String(texto || '').replace(/```[a-z]*\n?/gi, '').replace(/\*\*/g, '*').replace(/\s*[—–]\s*/g, ', ').replace(/[ \t]{2,}/g, ' ').replace(/\s+\n/g, '\n').trim().slice(0, 700);
+function _botIaLimpa(texto, idsOk, max) {
+  let t = String(texto || '').replace(/```[a-z]*\n?/gi, '').replace(/\*\*/g, '*').replace(/\s*[—–]\s*/g, ', ').replace(/[ \t]{2,}/g, ' ').replace(/\s+\n/g, '\n').trim().slice(0, max || 700);
   const ok = new Set((idsOk || []).map((x) => String(x)));
   let barrou = '';
   if (/https?:\/\/|www\.|wa\.me|bit\.ly|t\.me|\b[\w-]+\.(com|br|me|ly|net|shop|fun|site|app|io)\b/i.test(t)) barrou = 'link';
@@ -14805,13 +14834,21 @@ async function _botIaSemIa(env, cfg, b, c) {
   const anota = (mAnota && /\b(pedido|ficha|card|coment\w*|obs\w*|nota|anota\w*)\b/.test(_botIaNorm(mAnota[1]))) ? mAnota : null;
   const mPassa = anota ? null : c.textoBusca.match(BOT_IA_PASSA_RE);
   const tipoLista = (!anota && !mPassa && c.grupo === 'cob') ? _botIaListaTipo(tn) : '';
-  if (!anota && !mPassa && !tipoLista) return null;
+  // O RELATORIO e a LISTA POR ACONTECIMENTO (19/11/2026, ver "O BARBADINHO SABE DA OPERACAO"): saem do raio-x, sem IA.
+  const rel = !anota && !mPassa && _botSabePedeRelatorio(tn);
+  const ev = (!anota && !mPassa && !rel) ? _botSabeListaEv(tn) : '';
+  if (!anota && !mPassa && !tipoLista && !rel && !ev) return null;
   const st = await c.pegaSt();
   const quem = await c.pegaQuem();
   if (!quem.id) return null;   // a IA diz que nao sabe quem e
+  const equipe = quem.equipe || await _botEquipe(env);
+  if (rel || ev) {
+    const feito = await _botSabeSemIa(env, c, { st, quem, equipe, tn, rel, ev, tipoLista });
+    if (feito) return { acao: 'respondeu', responder: true, quem_id: quem.id, resposta: feito.resposta, motivo: feito.motivo };
+    if (!tipoLista) return null;
+  }
   const nomes = await _cobNomes(env);
   const tagMap = _cobTagMap(st, '');
-  const equipe = quem.equipe || await _botEquipe(env);
   const nomeEq = (id) => ((equipe.find((u) => u.id === String(id)) || {}).nome) || nomes[String(id)] || String(id);
   const out = { acao: 'respondeu', responder: true, quem_id: quem.id, resposta: '', motivo: '' };
   const seco = !!(c.o.teste || c.o.grupoTeste);   // teste: diz o que faria, sem mexer em nada
@@ -15483,6 +15520,14 @@ async function _botIaUltimaPraEle(env, jid, deJid) {
     return await env.DB.prepare("SELECT resposta, ts, motivo FROM bot_chat WHERE de_jid=? AND jid=? AND acao IN ('respondeu','pendente') AND ts>? ORDER BY id DESC LIMIT 1").bind(String(deJid), String(jid), Math.floor(Date.now() / 1000) - 1800).first();
   } catch (_) { return null; }
 }
+// A mensagem que a pessoa mandou logo antes desta no grupo (ate 3 min), ou ''. E a pergunta de quem marca o bot sozinho.
+async function _botIaMsgAnterior(env, jid, deJid, msgId) {
+  if (!jid || !deJid) return '';
+  try {
+    const r = await env.DB.prepare("SELECT texto FROM bot_chat WHERE jid=? AND de_jid=? AND msg_id<>? AND ts>? AND texto<>'' ORDER BY id DESC LIMIT 1").bind(String(jid), String(deJid), String(msgId || ''), Math.floor(Date.now() / 1000) - 180).first();
+    return String((r && r.texto) || '').trim();
+  } catch (_) { return ''; }
+}
 // Tira o NOME DE QUEM FALOU usado como chamamento: ", Guilherme!", ", Bruno, mas...", "Guilherme, ..." no comeco. O nome no
 // meio da frase ("o Bruno ajeita", "Guilherme tá com 9") e o de outra pessoa ficam. Acento e caixa nao escapam.
 function _botIaSemVocativo(texto, nome) {
@@ -15625,7 +15670,7 @@ const BOT_IA_SISTEMA = [
   'ZOEIRA: só brinca, como amigo no zap: curta (uma frase, no máximo duas), entra na brincadeira e devolve com graça. Sem placar, sem fila, sem venda e sem empurrão; venda só entra quando a própria brincadeira é sobre venda ou cliente ("esse cliente comprou mas é um desgraçado" -> "desgraçado mas comprando, tá perdoado"). Não fale o óbvio nem se explique ("sou um bot", "quem me cria é o Bruno", "isso é com o Bruno na dash"): brinque com a situação. Xingaram você de brincadeira (bot safado, fdp, vsf, corrompido, ladrão): é carinho do grupo; ria e devolva leve ("me xingou mas tá rindo, eu vi"), nunca devolva o xingamento, nunca peça respeito, nunca se diga chateado. Pode ter maldade de amigo: piada, mini historinha ("ouvi dizer que...", "contam por aí que...", "dizem que...") e duplo sentido leve. A piada você inventa na hora, sempre diferente: nunca repita uma que já saiu nas últimas mensagens do grupo nem copie os exemplos ao pé da letra. Zoeira não é busca: nunca responda "não vi isso nos pedidos". Não explique a piada.',
   '',
   'COMO ESCREVER (o jeito do grupo):',
-  '- Cada resposta de um tamanho, como numa conversa de verdade: muitas de 1 a 4 palavras, outras de uma frase; duas frases só quando precisa (até 3 em problema, pedido ambíguo, passo a passo do manual ou mini historinha). Sem título e sem negrito. Lista só no pedido ambíguo.',
+  '- Cada resposta de um tamanho, como numa conversa de verdade: muitas de 1 a 4 palavras, outras de uma frase; duas frases só quando precisa (até 3 em problema, pedido ambíguo, passo a passo do manual ou mini historinha; até 5 linhas curtas na resposta de vários números do raio-x ou quando explica uma conta). Sem título e sem negrito. Lista só no pedido ambíguo e na resposta de vários números.',
   '- Escreve como no zap: vc, pra, tá, hj, tb, msm (o "tu é foda" do grito da festa vale). Nunca travessão.',
   '- O nome de quem falou quase nunca: a sua resposta já sai citando a mensagem da pessoa. Na zoeira e na conversa, nunca; no dado e na festa, só de vez em quando, quando dá força ("falta só 1, Guilherme, bora"), e nunca em duas respostas seguidas. Nunca abra com "Oi, Fulano!" nem "Olá"; só cumprimente se a pessoa cumprimentou ("faaala!", "bom dia, gurizada").',
   '- Animação: vogal esticada (boaaa, boraaa, vamooo), CAIXA ALTA numa expressão curta, ponto de exclamação. Risada (kkk, kkkkkkkk, KKKKKK) só de vez em quando: a maioria das respostas vai sem e nunca duas seguidas. Em FESTA, solte; em ZOEIRA e DADO, um toque; em PROBLEMA, nada disso. Não comece duas respostas seguidas do mesmo jeito.',
@@ -15646,6 +15691,8 @@ const BOT_IA_SISTEMA = [
   '',
   'DADOS E SEGURANÇA (valem sempre):',
   '- Só afirme o que está nos DADOS desta mensagem. Não invente número, pedido, prazo, nome, regra ou procedimento. Se o dado não veio, diga que não consegue ver isso daqui.',
+  '- RAIO-X DA OPERAÇÃO: quando vier nos DADOS, é dele que sai a resposta de qualquer pergunta de número (quantos pedidos, quantos chegaram, saíram ou pagaram, a fila, leads, conversão, taxa de pagamento, por que deu tal número). O número primeiro e o período junto ("hoje chegaram 9 no cliente e 2 na agência"). Perguntaram o que uma linha do resumo conta, por que deu aquele número, ou disseram que a conta não bate: mostre a conta com as partes que estão no raio-x ("são 72: 60 entregues e 12 na agência; 64 têm combinado, 3 estão atrasados e 5 sem retorno") e explique com as suas palavras o que entra e o que não entra. Pediram vários números: até 5 linhas curtas, uma por número. Nunca diga que não consegue ver um número que está no raio-x; o que ele não traz, diga em uma frase o que falta. Não despeje o raio-x inteiro: só o que perguntaram, sem acrescentar outros números.',
+  '- Valor em reais da casa (faturamento, recebido, a receber, anúncio, custo, comissão): só o que vier escrito nos DADOS. Não veio: passe a quantidade e diga onde o valor fica, do jeito que os DADOS mandam.',
   '- Pedido AMBÍGUO: liste os candidatos em uma linha cada (código, cidade, situação) e pergunte qual é; nunca diga que um pedido ambíguo está pago.',
   '- Pedido PROVÁVEL (achado só pelo nome): responda no condicional, com o código e a cidade (ex: "se for C1 de Itu/SP, pagou em 05/11 no Pix").',
   '- Cliente vem como C1, C2 (o nome fica guardado no sistema e entra no lugar do código antes de a resposta sair). Escreva o código como se fosse o nome, sem artigo e sem ele/ela: "C1 pagou em 05/11", "o pedido de C1 tá em cobrança". Nunca invente nem peça o nome por causa do código. Rastreio vem como R1 (escreva R1) e número que a pessoa digitou chega só com o final: [número final 1234].',
@@ -15654,7 +15701,7 @@ const BOT_IA_SISTEMA = [
   '- Empurrão de venda ("bora buscar", "bora moer", "mete marcha", "o dia ainda não acabou") NÃO fecha toda resposta: só quando o assunto é venda ou cobrança, e nunca em duas respostas seguidas. Não termine as respostas sempre do mesmo jeito.',
   '- Número de WhatsApp: só o que os dados dizem, pelo final ("o final 4144"). Nunca diga "tá conectado" sem prova, e nunca use a falta de registro de queda pra desmentir quem disse que caiu.',
   '- Pessoa não identificada: não dê dado de pedido nem de número; diga que ainda não sabe quem é e que o Bruno precisa apresentar na dash (Bot de WhatsApp, Quem é quem).',
-  '- No grupo dos cobradores: pedido sempre em quantidade; nunca some valores de vários pedidos, nunca fale de comissão nem de total do dia. Valor de um pedido específico pode.',
+  '- No grupo dos cobradores: pedido sempre em quantidade; valor somado, comissão e total do dia só os que vierem escritos nos DADOS (nunca some por conta própria). Valor de um pedido específico pode.',
   '- No grupo dos cobradores, "de quem é" o pedido quer dizer de qual COBRADOR é a fila: responda o cobrador (o vendedor é só quem vendeu; diga junto se ajudar). Quem cadastrou não é quem cobra.',
   '- "Não aparece na minha dash", "sumiu", "não tá na minha fila", "joga ele na minha dash": a linha "Na dash de ..." dos DADOS já diz onde o pedido aparece e por que não aparece (esperando aprovação da direção, ainda não saiu pra entrega, é da fila de outro cobrador, já pago). Responda com ela, curto.',
   '- A linha "Telefone" dos DADOS: se o do cadastro é diferente do da mensagem, ou é de fora do Brasil, diga isso curto e por que atrapalha (a conversa do app não liga no pedido).',
@@ -15862,6 +15909,605 @@ function _botIaSistema(cfg, grupo) {
   return L.join('\n');
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// O BARBADINHO SABE DA OPERACAO (19/11/2026). Pedido do Bruno: "eu gostaria que o Barbadinho tivesse basicamente o
+// controle total da nossa dash e informacao total da nossa dash (...) responder literalmente qualquer pergunta sobre a
+// nossa operacao (...) pegar algum relatorio, fazer alguma resposta com metricas". Veio com a conversa do Heynan no grupo
+// dos cobradores na noite de 19/11: "seria o total contando os pedidos enviados?", "entao pq tem 72 que faltam cobrar?",
+// "chegaram quantos pedidos hoje?". O bot chutou as tres: pra quem e da DIRECAO os DADOS so levavam o nome dos
+// cobradores, sem numero nenhum; a explicacao das linhas do resumo so entrava com a frase exata ("faltam cobrar", e ele
+// escreveu "faltam a cobrar"); e pedido que chegou no cliente nao era dado em lugar nenhum.
+//
+// O RAIO-X: uma passada no blob vira uma linha por pedido da casa com a data de cada acontecimento (cadastrado,
+// aprovado, despachado, chegou no cliente, chegou na agencia, pago, perdido, cancelado). Em cima dela saem o MOVIMENTO
+// por periodo (hoje, ontem, 7 dias, mes e o periodo que a mensagem pedir), o AGORA (onde esta cada pedido em aberto), a
+// FILA DA COBRANCA destrinchada (o "Faltam cobrar" do resumo, parte por parte), a taxa de pagamento, leads, numeros e
+// anuncio. Vai tudo pros DADOS em texto: a IA so escolhe o numero e escreve. Relatorio e lista de nomes saem do codigo.
+// REGRAS (as mesmas do resto do bot e da dash; mexeu numa, confira aqui):
+//  - pedido = cadastrado no periodo, sem cancelado nem reenvio sem cobranca (o placar, _botDados); pago = pela data do
+//    pagamento (_botPagoMs); fila = Entregues + Retirar nos Correios nao pagos (_botDadosCob); taxa de pagamento = a
+//    coorte do app do celular (pages/app/periodo.js: cadastrados no periodo que ja terminaram);
+//  - "chegou no cliente" e o DELIVERED da transportadora (five_orders.delivered_ts, gravado uma vez so); sem ele, a
+//    primeira entrada do card em Entregues;
+//  - VALOR em reais da casa (vendido, recebido, a receber, anuncio, comissao) so em LUGAR RESERVADO: a sala da direcao, o
+//    grupo de teste e o Pergunte ao bot. Nos grupos do time vai a quantidade (o Bruno, 03/11: "nao quero mostrar tanto
+//    esses valores para os nossos cobradores"); o grupo dos cobradores so repete o valor que o resumo dele ja mostra;
+//  - por pessoa so pra direcao; vendedor e cobrador veem a casa em quantidade e os numeros deles com detalhe.
+// LUCRO nao entra: a conta da dash (custo, frete, taxa, imposto) sao uns 1.400 linhas no front; o bot diz onde olhar.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+const BOT_SABE_MATURADO = ['Entregues', 'Pagos', 'Frustrados', 'Devolvido com Reverso', 'Retornado', 'Roubos'];   // COLS_MATURADO do front
+const BOT_SABE_CAMINHO = ['Preparando', 'Enviados', 'Saiu para Entrega', 'Requer Atenção'];
+const BOT_SABE_JANELA_MS = 62 * 86400000;   // lead e anuncio linha a linha ate aqui; periodo mais velho so tem pedido
+const BOT_SABE_MESES = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const BOT_SABE_MESES_TXT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const BOT_SABE_WD = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
+const BOT_SABE_ETAPAS = [['aprovacao', 'esperando aprovação da direção'], ['A Enviar', 'a enviar'], ['Preparando', 'preparando'], ['Enviados', 'enviados, em trânsito'], ['Saiu para Entrega', 'saiu pra entrega'], ['Requer Atenção', 'requer atenção (a entrega não deu certo)'], ['Retirar nos Correios', 'na agência dos Correios esperando o cliente retirar'], ['Entregues', 'entregues esperando pagamento']];
+const _botSabeSemAcento = (s) => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const _botSabeDiaDe = (ms) => new Date(Number(ms) - BOT_BRT_MS).toISOString().slice(0, 10);   // o dia de Brasilia, AAAA-MM-DD
+const _botSabeIniDia = (dia) => _botInicioDia(dia) * 1000;
+const _botSabeCurto = (dia) => String(dia).slice(8, 10) + '/' + String(dia).slice(5, 7);
+
+// O PERIODO que a mensagem pede: { ini, fim (exclusivo), rot, de, ate } ou null (ai valem os de sempre). Data que ainda nao
+// chegou e do ano passado; periodo que passa de hoje para em hoje.
+function _botSabePeriodo(cru, agoraMs) {
+  const t = ' ' + _botSabeSemAcento(cru).replace(/[^a-z0-9\/\s-]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  const hoje = _botSabeDiaDe(agoraMs);
+  const ano = Number(hoje.slice(0, 4)), mes = Number(hoje.slice(5, 7));
+  const p2 = (n) => String(Number(n)).padStart(2, '0');
+  const mais = (n) => _botDiaMais(hoje, n);
+  const P = (de, ate, rot) => {
+    if (!_botDiaOk(de) || !_botDiaOk(ate) || de > ate || de > hoje) return null;
+    if (ate > hoje) ate = hoje;
+    return { ini: _botSabeIniDia(de), fim: _botSabeIniDia(_botDiaMais(ate, 1)), rot: rot || (de === ate ? 'dia ' + _botSabeCurto(de) : _botSabeCurto(de) + ' a ' + _botSabeCurto(ate)), de, ate };
+  };
+  const data = (d, m, a) => {
+    const y = a ? (String(a).length <= 2 ? 2000 + Number(a) : Number(a)) : ano;
+    const s = y + '-' + p2(m) + '-' + p2(d);
+    return (!a && s > hoje) ? (y - 1) + '-' + p2(m) + '-' + p2(d) : s;
+  };
+  let m;
+  // "10/11 a 15/11", "de 10/11 ate 15/11"
+  if ((m = t.match(/ (\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))? (?:a|ate|ao|e|-) (?:o )?(?:dia )?(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))? /))) {
+    const de = data(m[1], m[2], m[3] || m[6]);
+    let ate = de.slice(0, 4) + '-' + p2(m[5]) + '-' + p2(m[4]);
+    if (ate < de) ate = (Number(de.slice(0, 4)) + 1) + ate.slice(4);
+    const r = P(de, ate); if (r) return r;
+  }
+  // "do dia 10 ao dia 15", "dia 10 a 15/11"
+  if ((m = t.match(/ dia (\d{1,2}) (?:a|ate|ao) (?:o )?(?:dia )?(\d{1,2})(?:\/(\d{1,2}))? /))) {
+    const de = data(m[1], m[3] || mes);
+    const r = P(de, de.slice(0, 8) + p2(m[2])); if (r) return r;
+  }
+  if ((m = t.match(/ (\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))? /))) { const d = data(m[1], m[2], m[3]); const r = P(d, d); if (r) return r; }
+  if ((m = t.match(/ dia (\d{1,2}) /))) {
+    let d = hoje.slice(0, 8) + p2(m[1]);
+    if (d > hoje) d = new Date(Date.UTC(ano, mes - 2, Number(m[1]), 12)).toISOString().slice(0, 10);
+    const r = P(d, d); if (r) return r;
+  }
+  if (/ (anteontem|antes de ontem) /.test(t)) return P(mais(-2), mais(-2), 'anteontem (' + _botSabeCurto(mais(-2)) + ')');
+  if (/ ontem /.test(t)) return P(mais(-1), mais(-1), 'ontem');
+  if (/ (hoje|hj) /.test(t) && !/ ate (hoje|hj) /.test(t)) return P(hoje, hoje, 'hoje');
+  const sem = _botSemanaDe(hoje);
+  if (/ semana (passada|anterior) | ultima semana /.test(t)) { const de = _botDiaMais(sem.inicio, -7), ate = _botDiaMais(de, 6); return P(de, ate, 'semana passada (' + _botSabeCurto(de) + ' a ' + _botSabeCurto(ate) + ')'); }
+  if (/ (essa|esta|nessa|nesta|dessa|desta|da|na|a) semana | semana atual | semanal /.test(t)) return P(sem.inicio, hoje, 'esta semana (desde segunda, ' + _botSabeCurto(sem.inicio) + ')');
+  const dia1 = hoje.slice(0, 8) + '01';
+  if (/ mes (passado|anterior) | ultimo mes /.test(t)) { const ate = _botDiaMais(dia1, -1), de = ate.slice(0, 8) + '01'; return P(de, ate, 'mês passado (' + BOT_SABE_MESES_TXT[Number(de.slice(5, 7)) - 1] + ')'); }
+  if (/ (esse|este|nesse|neste|desse|deste|do|no|o) mes | mes atual | mensal /.test(t)) return P(dia1, hoje, 'mês de ' + BOT_SABE_MESES_TXT[mes - 1]);
+  if ((m = t.match(/ (\d{1,3}) dias /)) && Number(m[1]) >= 2 && Number(m[1]) <= 120) { const n = Number(m[1]); return P(mais(-(n - 1)), hoje, 'últimos ' + n + ' dias'); }
+  for (let i = 0; i < 12; i++) {
+    // "marco" tambem e o marco de comemoracao do grupo: o mes so vale com "em", "de" ou "mes de" antes
+    const re = i === 2 ? / (em|de|no mes de|mes de) marco / : new RegExp(' ' + BOT_SABE_MESES[i] + ' ');
+    if (!re.test(t)) continue;
+    const y = (i + 1) <= mes ? ano : ano - 1;
+    const de = y + '-' + p2(i + 1) + '-01';
+    const prox = i === 11 ? (y + 1) + '-01-01' : y + '-' + p2(i + 2) + '-01';
+    const r = P(de, _botDiaMais(prox, -1), BOT_SABE_MESES_TXT[i] + (y !== ano ? ' de ' + y : '')); if (r) return r;
+  }
+  // dia da semana: o ultimo que passou (hoje conta). "segunda parcela", "segunda vez" nao e dia.
+  if ((m = t.match(/ (domingo|segunda|terca|quarta|quinta|sexta|sabado)(?:[ -]feira)? (passad[oa] )?/)) && !/ segunda (parcela|vez|via|opcao|tentativa|compra|chance|mao|dose|caixa) /.test(t)) {
+    const wd = BOT_SABE_WD.indexOf(m[1]);
+    let volta = (_botWd(hoje) - wd + 7) % 7;
+    if (m[2] && volta === 0) volta = 7;
+    const d = mais(-volta);
+    return P(d, d, BOT_DIAS_SEMANA[wd] + (volta === 0 ? ' (hoje)' : ' (' + _botSabeCurto(d) + ')'));
+  }
+  if (/ (esse|este|nesse|neste|no|do) ano /.test(t)) return P(ano + '-01-01', hoje, 'este ano');
+  // "ate agora" e "ate hoje" nao entram: no grupo e "hoje ate agora" e "ate hj n entendi" (a mensagem do Heynan em 19/11)
+  if (/ (desde o (comeco|inicio)|desde sempre|todo o periodo|de sempre|historico|ao todo) /.test(t)) return { ini: 0, fim: _botSabeIniDia(mais(1)), rot: 'desde o começo', de: '', ate: hoje };
+  return null;
+}
+
+// A entrada do card numa coluna pelo historico: a primeira (`primeira`) ou a ultima. 0 = o historico nao tem (pedido
+// encerrado guarda so os ultimos movimentos, ver _trimBlobData).
+function _botSabeEntrou(l, colId, primeira) {
+  let t0 = 0;
+  for (const h of (Array.isArray(l && l.hist) ? l.hist : [])) {
+    const para = String((h && h.to) || ''), de = String((h && h.from) || '');
+    if ((_BOT_COL_ALIAS[para] || para) !== colId || (_BOT_COL_ALIAS[de] || de) === colId) continue;
+    const t = _botParseHora(h && h.time);
+    if (!t) continue;
+    if (primeira) return t;
+    t0 = t;
+  }
+  return t0;
+}
+// UMA LINHA POR PEDIDO DA CASA, com a data (ms) de cada acontecimento; 0 = ainda nao aconteceu ou nao da pra saber.
+// `five` = Map order_id -> { shipped_ts, delivered_ts } (segundos), de _botSabeFive.
+function _botSabeLinhas(st, five, agoraMs) {
+  const hojeIni = _botIaDiaIni(agoraMs);
+  const tagsComb = _botCobTagsCombinado(st);
+  const ms = (v) => { const n = Number(v) || 0; return n > 1e12 ? n : n * 1000; };
+  const out = [];
+  for (const l of (Array.isArray(st && st.leads) ? st.leads : [])) {
+    if (!l || l.id == null || l.afl) continue;        // o mundo do afiliado nao entra
+    const criado = _botCriadoMs(l);
+    if (!criado) continue;
+    const col = _botColDe(l);
+    const f = (five && l.five_id) ? five.get(String(l.five_id)) : null;
+    const pago = _botPago(l);
+    const cancelado = col === 'Cancelado sem Custo';
+    const perda = (!cancelado && _BOT_COB_PERDA.includes(col)) ? col : '';
+    out.push({
+      l, id: String(l.id), at: String(l.at || ''), cob: String(l.cob || ''), col, criado,
+      vl: _botValorLead(l), pago, pagoVl: pago ? _botTotalPago(l) : 0, saldo: _botSaldoCob(l), comCob: pago ? _botComissaoCob(l) : 0,
+      cancelado, perda, semCob: _reenvioSemCobranca(l), aguardando: _botManualNaoAceito(l),
+      aceitoMs: l.aceito ? (Date.parse(String(l.aceito_em || '')) || 0) : 0,
+      enviadoMs: (f && ms(f.shipped_ts)) || _botSabeEntrou(l, 'Enviados', true),
+      entregueMs: (f && ms(f.delivered_ts)) || _botSabeEntrou(l, 'Entregues', true) || (String(l.ship || '').toUpperCase() === 'DELIVERED' ? ms(l.ship_ts) : 0),
+      agenciaMs: _botSabeEntrou(l, 'Retirar nos Correios', true),
+      pagoMs: pago ? _botPagoMs(l) : 0,
+      fimMs: (perda || cancelado) ? _botSabeEntrou(l, col, false) : 0,
+      sit: _botCobSituacao(l, hojeIni, tagsComb), agend: _botIaAgendMs(l),
+    });
+  }
+  return out;
+}
+const _botSabeZero = () => ({ vendas: 0, vendasVl: 0, aguardando: 0, aceitos: 0, enviados: 0, entregues: 0, agencia: 0, pagos: 0, pagosVl: 0, comCob: 0, perdas: 0, frustrados: 0, devolvidos: 0, roubos: 0, cancelados: 0, coorte: 0, coortePagos: 0 });
+// O MOVIMENTO de um periodo [ini, fim): cada pedido conta no dia em que a coisa aconteceu. porAt e porCob trazem a mesma
+// conta por vendedor e por cobrador. A coorte e a da taxa de pagamento do app: cadastrado no periodo e ja terminado.
+function _botSabeMov(linhas, ini, fim) {
+  const m = { ..._botSabeZero(), porAt: {}, porCob: {} };
+  const no = (t) => t > 0 && t >= ini && t < fim;
+  for (const r of linhas) {
+    const a = m.porAt[r.at] || (m.porAt[r.at] = _botSabeZero()), c = m.porCob[r.cob] || (m.porCob[r.cob] = _botSabeZero());
+    const soma = (k, n) => { m[k] += n; a[k] += n; c[k] += n; };
+    if (no(r.criado)) {
+      if (!r.cancelado && !r.semCob) { soma('vendas', 1); soma('vendasVl', r.vl); if (r.aguardando) soma('aguardando', 1); }
+      if (r.pago || BOT_SABE_MATURADO.includes(r.col)) { soma('coorte', 1); if (r.pago) soma('coortePagos', 1); }
+    }
+    if (no(r.aceitoMs)) soma('aceitos', 1);
+    if (no(r.enviadoMs)) soma('enviados', 1);
+    if (no(r.entregueMs)) soma('entregues', 1);
+    if (no(r.agenciaMs)) soma('agencia', 1);
+    if (r.pago && !r.semCob && no(r.pagoMs)) { soma('pagos', 1); soma('pagosVl', r.pagoVl); soma('comCob', r.comCob); }
+    if (r.perda && no(r.fimMs)) { soma('perdas', 1); soma(r.perda === 'Frustrados' ? 'frustrados' : r.perda === 'Roubos' ? 'roubos' : 'devolvidos', 1); }
+    if (r.cancelado && no(r.fimMs)) soma('cancelados', 1);
+  }
+  return m;
+}
+const _botSabeFilaZero = () => ({ n: 0, vl: 0, entregues: 0, agencia: 0, combinado: 0, atrasado: 0, sem: 0, retHoje: 0, retAmanha: 0, retDepois: 0, soCombinado: 0 });
+// O AGORA: onde esta cada pedido em aberto e a fila da cobranca destrinchada (a mesma conta do resumo, _botDadosCob).
+function _botSabeAgora(linhas, agoraMs) {
+  const hojeIni = _botIaDiaIni(agoraMs), amanha = hojeIni + 86400000, depois = amanha + 86400000;
+  const a = { etapas: {}, abertos: 0, fila: _botSabeFilaZero(), filaPorCob: {}, idade: [0, 0, 0, 0], caminho: 0, caminhoVl: 0, caminhoPorCob: {} };
+  for (const r of linhas) {
+    if (r.pago || r.cancelado || r.perda || r.semCob) continue;
+    a.abertos++;
+    const et = r.aguardando ? 'aprovacao' : r.col;
+    a.etapas[et] = (a.etapas[et] || 0) + 1;
+    if (_BOT_COB_FILA.includes(r.col)) {
+      for (const f of [a.fila, a.filaPorCob[r.cob] || (a.filaPorCob[r.cob] = _botSabeFilaZero())]) {
+        f.n++; f.vl += r.saldo;
+        if (r.col === 'Entregues') f.entregues++; else f.agencia++;
+        if (r.sit === 'combinado') {
+          f.combinado++;
+          if (!isNaN(r.agend) && r.agend >= hojeIni) { if (r.agend < amanha) f.retHoje++; else if (r.agend < depois) f.retAmanha++; else f.retDepois++; }
+          else f.soCombinado++;
+        } else if (r.sit === 'atrasado') f.atrasado++;
+        else f.sem++;
+      }
+      const desde = r.col === 'Entregues' ? r.entregueMs : r.agenciaMs;
+      if (desde > 0) { const dias = Math.floor((agoraMs - desde) / 86400000); a.idade[dias <= 3 ? 0 : dias <= 7 ? 1 : dias <= 15 ? 2 : 3]++; }
+    } else if (BOT_SABE_CAMINHO.includes(r.col)) { a.caminho++; a.caminhoVl += r.saldo; a.caminhoPorCob[r.cob] = (a.caminhoPorCob[r.cob] || 0) + 1; }
+  }
+  return a;
+}
+// Quando o pedido saiu e quando chegou, da transportadora (segundos, gravados uma vez na virada do status).
+async function _botSabeFive(env, desdeMs) {
+  const m = new Map();
+  try {
+    const s = Math.max(0, Math.floor(desdeMs / 1000));
+    const r = await env.DB.prepare('SELECT order_id, shipped_ts, delivered_ts FROM five_orders WHERE shipped_ts >= ? OR delivered_ts >= ?').bind(s, s).all();
+    for (const x of ((r && r.results) || [])) m.set(String(x.order_id), x);
+  } catch (_) {}
+  return m;
+}
+// OS LEADS (conversas novas) desde `desdeMs`, cada um com o vendedor que recebeu. E a regra do resumo (_botDados): dono do
+// numero na Contingencia, senao o numero oficial, senao a instancia; so vendedor ativo da casa; 'deduzido' nao e conversa.
+async function _botSabeLeads(env, st, desdeMs, agoraMs) {
+  const out = { ok: false, desde: desdeMs, linhas: [] };
+  try {
+    const ok = new Set((await _botVendedores(env)).map((v) => v.id));
+    const dono = {};
+    for (const c of (Array.isArray(st && st.chips) ? st.chips : [])) { const n8 = _bot8(c && c.num); if (n8 && c && c.at && ok.has(String(c.at))) dono[n8] = String(c.at); }
+    try {
+      const rn = await env.DB.prepare("SELECT display_phone, at_id FROM wa_api_numbers WHERE at_id IS NOT NULL AND at_id<>''").all();
+      for (const x of ((rn && rn.results) || [])) { const n8 = _bot8(x.display_phone); if (n8 && !dono[n8] && ok.has(String(x.at_id))) dono[n8] = String(x.at_id); }
+    } catch (_) {}
+    const rl = await env.DB.prepare("SELECT inst, num, ts FROM wa_lead WHERE ts >= ? AND ts < ? AND COALESCE(src,'') <> 'deduzido'").bind(Math.floor(desdeMs / 1000), Math.floor(agoraMs / 1000) + 60).all();
+    for (const x of ((rl && rl.results) || [])) {
+      const n8 = _bot8(x.num);
+      let at = n8 && dono[n8] ? dono[n8] : '';
+      if (!at) { const a = _atFromInst(x.inst); if (ok.has(a)) at = a; }
+      if (!at) { const mm = String(x.inst || '').match(/_(\d{8})$/); if (mm && dono[mm[1]]) at = dono[mm[1]]; }
+      if (at) out.linhas.push({ t: Number(x.ts) * 1000, at });
+    }
+    out.ok = true;
+  } catch (_) {}
+  return out;
+}
+// Leads de um periodo (de um vendedor, ou da casa). null = o periodo comeca antes do que foi lido.
+function _botSabeLeadsDe(base, p, at) {
+  const ld = base.leads;
+  if (!ld || !ld.ok || p.ini < ld.desde - 1000) return null;
+  let n = 0;
+  for (const x of ld.linhas) if (x.t >= p.ini && x.t < p.fim && (!at || x.at === at)) n++;
+  return n;
+}
+// O ANUNCIO PAGO NO CARTAO, por dia (ContaSimples, cs_tx): compra em loja de anuncio, categoria Publicidade ou centro de BM;
+// estorno desconta; compra cancelada e recarga de limite ficam fora. E a regra padrao da dash (lib/conta-simples.js) sem os
+// ajustes feitos a mao la: serve pra custo por lead e por pedido, nao e fechamento.
+const BOT_SABE_ADS_LOJA = /tiktok|facebk|facebook|meta ?ads|google ?ads|ads\.google|kwai/i;
+const BOT_SABE_ADS_CAT = /publicidade|anuncio/;
+const BOT_SABE_ADS_CENTRO = /\bbm\b|tiktok|meta ads/;
+async function _botSabeAnuncio(env, desdeMs) {
+  const out = { ok: false, desde: desdeMs, porDia: {} };
+  try {
+    const r = await env.DB.prepare("SELECT dia, valor, sentido, tipo, status, quem, categoria, centro FROM cs_tx WHERE origem='cartao' AND dia >= ?").bind(_botSabeDiaDe(desdeMs)).all();
+    for (const t of ((r && r.results) || [])) {
+      if (/CANCEL|REJECT|EXPIR|DENIED|SUMIU/i.test(String(t.status || ''))) continue;
+      if (/^LIMIT/i.test(String(t.tipo || ''))) continue;
+      if (!(BOT_SABE_ADS_LOJA.test(String(t.quem || '')) || BOT_SABE_ADS_CAT.test(_botSabeSemAcento(t.categoria)) || BOT_SABE_ADS_CENTRO.test(_botSabeSemAcento(t.centro)))) continue;
+      const d = String(t.dia || '');
+      out.porDia[d] = (out.porDia[d] || 0) + (Number(t.valor) || 0) * (String(t.sentido || '') === 'entrada' ? -1 : 1);
+    }
+    out.ok = true;
+  } catch (_) {}
+  return out;
+}
+function _botSabeAnuncioDe(base, p) {
+  const an = base.anuncio;
+  if (!an || !an.ok || p.ini < an.desde - 1000) return null;
+  const de = _botSabeDiaDe(p.ini), ate = _botSabeDiaDe(p.fim - 1);
+  let v = 0;
+  for (const d in an.porDia) if (d >= de && d <= ate) v += an.porDia[d];
+  return Math.max(0, v);
+}
+// A BASE de uma resposta: os periodos (os de sempre mais o pedido na mensagem), as linhas, o movimento de cada um e o agora.
+async function _botSabeBase(env, st, agoraMs, pedido, comDinheiro) {
+  const hoje = _botSabeDiaDe(agoraMs);
+  const hojeIni = _botSabeIniDia(hoje), amanhaIni = hojeIni + 86400000;
+  const dia1 = hoje.slice(0, 8) + '01';
+  const pers = [
+    { k: 'hoje', rot: 'hoje', ini: hojeIni, fim: amanhaIni },
+    { k: 'ontem', rot: 'ontem', ini: hojeIni - 86400000, fim: hojeIni },
+    { k: '7d', rot: 'últimos 7 dias', ini: hojeIni - 6 * 86400000, fim: amanhaIni },
+    { k: 'mes', rot: 'mês de ' + BOT_SABE_MESES_TXT[Number(hoje.slice(5, 7)) - 1], ini: _botSabeIniDia(dia1), fim: amanhaIni },
+  ];
+  let foco = null;
+  if (pedido) {
+    foco = pers.find((p) => p.ini === pedido.ini && p.fim === pedido.fim) || null;
+    if (!foco) { foco = { k: 'pedido', rot: pedido.rot, ini: pedido.ini, fim: pedido.fim }; pers.push(foco); }
+  }
+  const fimAnt = _botDiaMais(dia1, -1), iniAnt = fimAnt.slice(0, 8) + '01';
+  const mesPassado = { k: 'mesPassado', rot: 'mês passado (' + BOT_SABE_MESES_TXT[Number(iniAnt.slice(5, 7)) - 1] + ')', ini: _botSabeIniDia(iniAnt), fim: _botSabeIniDia(dia1) };
+  const janela = agoraMs - BOT_SABE_JANELA_MS;
+  const desde = Math.max(Math.min(...pers.map((p) => p.ini)), janela);
+  const [five, leads, anuncio] = await Promise.all([
+    _botSabeFive(env, Math.min(janela, ...pers.map((p) => p.ini))),
+    _botSabeLeads(env, st, desde, agoraMs),
+    comDinheiro ? _botSabeAnuncio(env, desde) : Promise.resolve(null),
+  ]);
+  const linhas = _botSabeLinhas(st, five, agoraMs);
+  const mov = { mesPassado: _botSabeMov(linhas, mesPassado.ini, mesPassado.fim) };
+  for (const p of pers) mov[p.k] = _botSabeMov(linhas, p.ini, p.fim);
+  return { agoraMs, hoje, pers, foco, mesPassado, linhas, mov, agora: _botSabeAgora(linhas, agoraMs), leads, anuncio };
+}
+
+// QUANDO O RAIO-X ENTRA: a mensagem fala da operacao E tem cara de pergunta ou de pedido (o que nao e pergunta continua
+// sem numero, como a zoeira ja era: "esse cliente pagou mas reclamou kkk" nao puxa placar nenhum).
+const BOT_SABE_ASSUNTO_RE = /\b(pedidos?|vendas?|vend(eu|emos|eram|i|idos?)|cadastr\w*|aprov\w*|aceit\w*|despach\w*|envi\w*|sai(u|ram|ndo)|cheg(ou|aram|ando|a|am)|entreg\w*|receb\w*|pag(o|os|ou|aram|amentos?|a|am|ando)|cobr\w*|fila|falt\w*|atras\w*|retir\w*|agencia|correios|frustr\w*|devol\w*|retorn\w*|roub\w*|cancel\w*|leads?|convers\w*|taxa|metas?|trafego|anuncios?|invest\w*|gast\w*|custos?|cpa|cpl|roas|fatur\w*|lucro|receita|ticket|comiss\w*|relatorio|resumo|raio ?x|metricas?|operacao|transito|caminho|pendentes?|abertos?|parados?|total|aprovacao)\b/;
+const BOT_SABE_QUER_RE = /\b(quant[oa]s?|qual|quais|quem|como|cade|onde|quando|por ?que|pq|total|totais|tem|teve|tiveram|deu|foram|seria|inclu\w*|contando|conta|significa|me (fala|diz|passa|manda|mostra|da|ve)|manda|mostra|passa|puxa|lista|relatorio|resumo|numeros?)\b/;
+// Quem contesta a conta ("ta faltando pedido", "da 67", "nao bate") segue a conversa mesmo sem ponto de interrogacao.
+const BOT_SABE_CONTESTA_RE = /\b(\d+ pedidos?|faltando|nao bate|nao fecha|estranh\w*|errad\w*|zoad\w*|contando|deveria|diferenc\w*)\b/;
+const BOT_SABE_EXPLICA_RE = /\b(o que (e|eh|significa|quer dizer|conta|entra|sao)|significa|quer dizer|como (e|eh|foi) (calculad|contad|feit)\w*|como (conta|calcula|chega)|inclu\w*|contando|entra[m]? (n|em)|por ?que|pq|estranh\w*|errad\w*|nao bate|nao fecha|faltando|zoad\w*|diferenc\w*|entend\w*)\b/;
+const BOT_SABE_DINHEIRO_RE = /\b(fatur\w*|lucro|receita|valor(es)?|reais|dinheiro|grana|quanto (entrou|vendemos|recebemos|gastamos|faturamos|foi gasto|deu)|invest\w*|gast\w*|custos?|cpa|cpl|roas|ticket|comiss\w*|a receber|trafego|anuncios?)\b/;
+// "numero" e "chip" so ligam pra direcao (o retrato dos numeros da casa): "meu numero caiu?" do vendedor ja tem resposta propria.
+const _botSabeLiga = (tn, pergunta, chefe) => (BOT_SABE_ASSUNTO_RE.test(tn) || (chefe && /\b(numeros?|chips?)\b/.test(tn))) && (pergunta || BOT_SABE_QUER_RE.test(tn) || BOT_SABE_CONTESTA_RE.test(tn));
+// Palavra de CONTA: com ela o raio-x entra mesmo quando a busca achou um pedido pelo nome ("quantos pedidos do Bryan pagaram?").
+const BOT_SABE_CONTA_RE = /\b(quant[oa]s?|total|totais|numeros?|taxa|fila|falt\w*|por ?que|pq|relatorio|resumo|leads?|convers\w*|metricas?|soma|somando)\b/;
+
+// O que cada linha do resumo do grupo conta (so entra quando perguntam o que e, por que deu ou dizem que nao bate).
+const BOT_SABE_GLOSSARIO = {
+  cob: 'O QUE CADA LINHA DO RESUMO DA COBRANÇA CONTA: "Convertidos hoje" = pedidos da fila da pessoa que foram marcados como pagos hoje (conta o dia do pagamento, não o da venda). "Comissão" = a parte do cobrador sobre o que foi pago no dia. "Faltam cobrar" = a fila: pedido que o cliente já recebeu (ou que está na agência dos Correios) e ainda não foi marcado como pago; NÃO é "falta chamar": quem já foi chamado continua nela até pagar. "Em cobrança" = os da fila que têm combinado (retorno marcado de hoje em diante, parcela paga ou etiqueta de parcial ou devolução). "Atrasados" = os da fila com retorno vencido num dia anterior e sem combinado. Os que não estão em nenhum dos dois são os SEM RETORNO marcado, por isso Em cobrança + Atrasados costuma dar menos que Faltam cobrar. "A receber" = a fila mais os pedidos que ainda estão a caminho (preparando, enviados, saiu pra entrega, requer atenção). "Geral" = a casa inteira, inclusive pedido sem cobrador. Fila, em cobrança e atrasados são o retrato da hora em que o resumo saiu.',
+  vend: 'O QUE CADA LINHA DO RESUMO DOS VENDEDORES CONTA: "Pedidos" = os cadastrados no dia (cancelado não conta; o que ainda espera aprovação conta). "Leads" = conversas novas nos números do vendedor. "Conversão" = quantos % dos leads viraram pedido. "Pagos hoje (pedidos anteriores)" = pedido de outro dia que foi pago hoje. "Esperando aprovação" = pedidos de hoje que a direção ainda não aceitou. "Meta do mês" = pedidos do dia 1 até hoje e quanto falta pra próxima faixa.',
+};
+
+// O RAIO-X EM TEXTO, pros DADOS. c = { quem, equipe, grupo, reservado, cfg, explica, numeros }
+function _botSabeTexto(base, c) {
+  const quem = c.quem || {};
+  const chefe = !!quem.chefe;
+  const equipe = Array.isArray(c.equipe) ? c.equipe : [];
+  const nome = (id) => { const u = equipe.find((x) => x.id === String(id)); return u ? _botIaPrimeiro(u.nome) : ''; };
+  const pers = base.pers, mov = base.mov, a = base.agora;
+  const vends = equipe.filter((u) => u.role === 'atendente'), cobs = equipe.filter((u) => u.role === 'cobrador');
+  const vendasVend = (m) => vends.reduce((s, u) => s + ((m.porAt[u.id] || {}).vendas || 0), 0);
+  const cada = (f) => pers.map((p) => p.rot + ' ' + f(mov[p.k], p)).join(' · ');
+  const pct = (n, d) => (d > 0 ? Math.round(n * 100 / d) + '%' : '');
+  const taxa = (m) => (m && m.coorte ? Math.round(m.coortePagos * 100 / m.coorte) + '% (' + m.coortePagos + ' pagos de ' + m.coorte + ' que já terminaram)' : 'nenhum pedido terminou ainda');
+  const filaTxt = (f) => f.n + ' = ' + f.entregues + ' entregues ainda não pagos + ' + f.agencia + ' na agência dos Correios';
+  const sitTxt = (f) => f.combinado + ' "Em cobrança"' + (f.combinado ? ' (têm combinado: ' + [f.retHoje ? f.retHoje + ' com retorno pra hoje' : '', f.retAmanha ? f.retAmanha + ' pra amanhã' : '', f.retDepois ? f.retDepois + ' pra depois de amanhã' : '', f.soCombinado ? f.soCombinado + ' só com parcela paga ou etiqueta de parcial ou devolução' : ''].filter(Boolean).join(', ') + ')' : '') + ', ' + f.atrasado + ' "Atrasados" (o retorno venceu num dia anterior e ninguém remarcou) e ' + f.sem + ' sem retorno marcado';
+  const etapasTxt = (ag) => BOT_SABE_ETAPAS.map(([k, r]) => r + ' ' + (ag.etapas[k] || 0)).join(' · ');
+  const L = [];
+  L.push('RAIO-X DA OPERAÇÃO (a casa inteira, sem afiliado; lido do sistema agora, ' + _botIaHoraTxt(base.agoraMs) + '). É a fonte de toda pergunta de número: responda com o número daqui e diga o período. Não some por conta própria, não estime e não invente o que não está escrito.');
+  if (base.foco) L.push('A mensagem fala de: ' + base.foco.rot + '.');
+  L.push('MOVIMENTO (cada pedido conta no dia em que a coisa aconteceu):');
+  L.push('- Pedidos cadastrados (são as vendas; cancelado não conta): ' + cada((m) => m.vendas + (m.aguardando ? ' (' + m.aguardando + ' esperando aprovação)' : '')));
+  L.push('- Aprovados pela direção: ' + cada((m) => m.aceitos));
+  L.push('- Despachados (saíram do estoque pra transportadora): ' + cada((m) => m.enviados));
+  L.push('- Chegaram no cliente (entregues na casa do cliente): ' + cada((m) => m.entregues));
+  L.push('- Chegaram na agência dos Correios (o cliente precisa retirar): ' + cada((m) => m.agencia));
+  L.push('- Pagos (contam no dia em que o pagamento foi registrado): ' + cada((m) => m.pagos));
+  L.push('- Perdas (frustrado, devolvido, retornado ou roubo): ' + cada((m) => m.perdas));
+  L.push('- Cancelados: ' + cada((m) => m.cancelados));
+  if (base.leads && base.leads.ok) L.push('- Leads novos (conversas que chegaram nos números dos vendedores): ' + cada((m, p) => { const n = _botSabeLeadsDe(base, p); return n == null ? 'sem dado' : n + (n > 0 ? ' (' + pct(vendasVend(m), n) + ' viraram pedido)' : ''); }));
+  L.push('AGORA (pedidos em aberto, cada um na etapa em que está): ' + etapasTxt(a) + '. Total em aberto: ' + a.abertos + '.');
+  L.push('FILA DA COBRANÇA (é a linha "Faltam cobrar" do resumo): ' + filaTxt(a.fila) + '. Entra todo pedido que o cliente já recebeu (ou que está na agência) e ainda não foi marcado como pago. Preparando, enviados, saiu pra entrega e requer atenção NÃO entram: são ' + a.caminho + ' ainda a caminho. Dos ' + a.fila.n + ' da fila: ' + sitTxt(a.fila) + ' (' + a.fila.combinado + ' + ' + a.fila.atrasado + ' + ' + a.fila.sem + ' = ' + a.fila.n + '). Chamar o cliente ou marcar retorno NÃO tira o pedido da fila, só passa pra "Em cobrança": ele só sai quando é marcado como pago ou vira perda.');
+  const cobIds = Object.keys(a.filaPorCob).sort((x, y) => a.filaPorCob[y].n - a.filaPorCob[x].n);
+  if (cobIds.length) L.push('Fila por cobrador (total: em cobrança, atrasados, sem retorno): ' + cobIds.map((id) => { const f = a.filaPorCob[id]; return (nome(id) || (id ? 'outro' : 'sem cobrador')) + ' ' + f.n + ' (' + f.combinado + ', ' + f.atrasado + ', ' + f.sem + ')'; }).join(' · ') + '.');
+  L.push('Há quanto tempo os pedidos estão na fila: até 3 dias ' + a.idade[0] + ' · de 4 a 7 dias ' + a.idade[1] + ' · de 8 a 15 dias ' + a.idade[2] + ' · mais de 15 dias ' + a.idade[3] + '.');
+  L.push('TAXA DE PAGAMENTO (a mesma do app: dos pedidos cadastrados no período, só os que já terminaram, isto é, pago, entregue em cobrança, frustrado, devolvido ou roubo; os que ainda estão a caminho ficam de fora): ' + pers[3].rot + ' ' + taxa(mov.mes) + ' · ' + base.mesPassado.rot + ' ' + taxa(mov.mesPassado) + (base.foco && base.foco.k === 'pedido' ? ' · ' + base.foco.rot + ' ' + taxa(mov.pedido) : '') + '.');
+  // por pessoa: hoje, ontem, o mes e o periodo da mensagem
+  const pp = [pers[0], pers[1], pers[3]];
+  if (base.foco && !pp.includes(base.foco)) pp.push(base.foco);
+  const pri = _botIaPrimeiro(quem.nome) || 'quem perguntou';
+  if (chefe) {
+    L.push('POR VENDEDOR (pedidos cadastrados e, dos leads que recebeu, quantos % viraram pedido):');
+    for (const p of pp) {
+      const m = mov[p.k];
+      const outros = m.vendas - vendasVend(m);
+      L.push('- ' + p.rot + ': ' + vends.map((u) => { const v = (m.porAt[u.id] || {}).vendas || 0; const n = _botSabeLeadsDe(base, p, u.id); return _botIaPrimeiro(u.nome) + ' ' + v + (n == null ? '' : ' de ' + n + ' leads' + (n > 0 ? ' (' + pct(v, n) + ')' : '')); }).join(' · ') + (outros > 0 ? ' · cadastrados por outra pessoa (cobrador ou direção) ' + outros : ''));
+    }
+    L.push('POR COBRADOR (pedidos pagos, pela data do pagamento, na fila de cada um):');
+    for (const p of pp) {
+      const m = mov[p.k];
+      const resto = m.pagos - cobs.reduce((s, u) => s + ((m.porCob[u.id] || {}).pagos || 0), 0);
+      L.push('- ' + p.rot + ': ' + cobs.map((u) => _botIaPrimeiro(u.nome) + ' ' + ((m.porCob[u.id] || {}).pagos || 0)).join(' · ') + (resto > 0 ? ' · sem cobrador ou no nome da direção ' + resto : ''));
+    }
+  } else if (quem.role === 'cobrador') {
+    const f = a.filaPorCob[quem.id] || _botSabeFilaZero();
+    L.push('A FILA DE ' + pri.toUpperCase() + ' (quem perguntou): ' + filaTxt(f) + '. Desses: ' + sitTxt(f) + '. Ainda a caminho pra fila dele: ' + (a.caminhoPorCob[quem.id] || 0) + '.');
+    L.push('Pagos na fila de ' + pri + ' (os convertidos dele): ' + cada((m) => (m.porCob[quem.id] || {}).pagos || 0) + '.');
+    L.push('Chegaram no cliente, da fila de ' + pri + ': ' + cada((m) => (m.porCob[quem.id] || {}).entregues || 0) + '.');
+  } else if (quem.role === 'atendente') {
+    const meu = (m) => m.porAt[quem.id] || _botSabeZero();
+    const ag = _botSabeAgora(base.linhas.filter((r) => r.at === quem.id), base.agoraMs);
+    L.push('OS NÚMEROS DE ' + pri.toUpperCase() + ' (quem perguntou):');
+    L.push('- Pedidos que ele cadastrou: ' + cada((m) => meu(m).vendas + (meu(m).aguardando ? ' (' + meu(m).aguardando + ' esperando aprovação)' : '')));
+    if (base.leads && base.leads.ok) L.push('- Leads que ele recebeu: ' + cada((m, p) => { const n = _botSabeLeadsDe(base, p, quem.id); return n == null ? 'sem dado' : n + (n > 0 ? ' (' + pct(meu(m).vendas, n) + ' viraram pedido)' : ''); }));
+    L.push('- Pedidos dele que chegaram no cliente: ' + cada((m) => meu(m).entregues));
+    L.push('- Pedidos dele que foram pagos: ' + cada((m) => meu(m).pagos));
+    L.push('- Taxa de pagamento dos pedidos dele: ' + pers[3].rot + ' ' + taxa(meu(mov.mes)) + ' · ' + base.mesPassado.rot + ' ' + taxa(meu(mov.mesPassado)) + '.');
+    L.push('- Pedidos dele em aberto agora: ' + etapasTxt(ag) + '.');
+  }
+  // DINHEIRO: tudo em lugar reservado; no grupo dos cobradores, so o que o resumo de la ja mostra
+  if (chefe && c.reservado) {
+    const an = (p) => _botSabeAnuncioDe(base, p);
+    L.push('DINHEIRO (você está num lugar reservado da direção, pode falar valor):');
+    L.push('- Vendido (o valor dos pedidos cadastrados): ' + cada((m) => _botBRL(m.vendasVl)));
+    L.push('- Recebido (o valor dos pedidos pagos, pela data do pagamento): ' + cada((m) => _botBRL(m.pagosVl)));
+    L.push('- Ticket médio dos pagos: ' + cada((m) => (m.pagos ? _botBRL(m.pagosVl / m.pagos) : 'sem pago')));
+    L.push('- A receber agora: ' + _botBRL(a.fila.vl + a.caminhoVl) + ' em ' + (a.fila.n + a.caminho) + ' pedidos (' + _botBRL(a.fila.vl) + ' na fila da cobrança e ' + _botBRL(a.caminhoVl) + ' ainda a caminho).');
+    if (base.anuncio && base.anuncio.ok) {
+      L.push('- Anúncio pago no cartão (TikTok e parecidos, do ContaSimples; o cartão é cobrado em blocos, então o valor de um dia só engana: prefira 7 dias ou o mês): ' + cada((m, p) => { const v = an(p); return v == null ? 'sem dado' : _botBRL(v); }));
+      L.push('- Custo por lead (anúncio dividido pelos leads): ' + cada((m, p) => { const v = an(p), n = _botSabeLeadsDe(base, p); return (v == null || !n) ? 'sem dado' : _botBRL(v / n); }));
+      L.push('- Custo por pedido cadastrado (anúncio dividido pelos pedidos): ' + cada((m, p) => { const v = an(p); return (v == null || !m.vendas) ? 'sem dado' : _botBRL(v / m.vendas); }));
+      L.push('- Custo por pedido pago: ' + cada((m, p) => { const v = an(p); return (v == null || !m.pagos) ? 'sem dado' : _botBRL(v / m.pagos); }));
+    }
+    L.push('- Comissão dos cobradores sobre o que foi pago: ' + [pers[0], pers[3]].map((p) => p.rot + ' ' + (cobs.map((u) => _botIaPrimeiro(u.nome) + ' ' + _botBRL((mov[p.k].porCob[u.id] || {}).comCob || 0)).join(', ') || 'nenhum cobrador')).join(' · ') + '.');
+    L.push('- Lucro, custo do produto, frete, taxa e imposto: essa conta NÃO está aqui. Se pedirem, diga que o lucro fechado fica em Financeiro, na tela Gestão da dash, e passe o que você tem (vendido, recebido e anúncio).');
+  } else {
+    const mcob = ((c.cfg && c.cfg.cobranca && c.cfg.cobranca.relatorio && c.cfg.cobranca.relatorio.mostrar) || {});
+    if (c.grupo === 'cob' && (chefe || quem.role === 'cobrador') && (mcob.recebido || mcob.comissao)) {
+      const quais = chefe ? cobs : cobs.filter((u) => u.id === quem.id);
+      if (mcob.recebido) L.push('Valor recebido pelos cobradores (o resumo deste grupo já mostra): ' + [pers[0], pers[1]].map((p) => p.rot + ' ' + quais.map((u) => _botIaPrimeiro(u.nome) + ' ' + _botBRL((mov[p.k].porCob[u.id] || {}).pagosVl || 0)).join(', ')).join(' · ') + '.');
+      if (mcob.comissao) L.push('Comissão dos cobradores (o resumo deste grupo já mostra): ' + [pers[0], pers[1]].map((p) => p.rot + ' ' + quais.map((u) => _botIaPrimeiro(u.nome) + ' ' + _botBRL((mov[p.k].porCob[u.id] || {}).comCob || 0)).join(', ')).join(' · ') + '.');
+    }
+    L.push('VALOR EM REAIS DA CASA (faturamento, total recebido, a receber, anúncio, custo, lucro, comissão de outra pessoa): não está nestes dados de propósito. ' + (chefe ? 'Se pedirem, passe a quantidade e diga que valor da casa você só abre na sala da direção (o grupo só dos sócios com você) ou no Pergunte ao bot da dash.' : 'Se pedirem, diga que isso é com a direção.'));
+  }
+  if (c.numeros) L.push(c.numeros);
+  if (c.explica) L.push(BOT_SABE_GLOSSARIO[c.grupo === 'cob' ? 'cob' : 'vend'] + (c.sala ? '\n' + BOT_SABE_GLOSSARIO[c.grupo === 'cob' ? 'vend' : 'cob'] : ''));
+  return L.join('\n');
+}
+// OS NUMEROS DE WHATSAPP DA CASA em uma linha (so pra direcao): quantos em uso e aquecendo por vendedor e o que o sistema
+// tirou da roleta hoje por queda ou bloqueio (pressel_num_log, por = 'sistema').
+async function _botSabeNumeros(env, st, equipe, agoraMs) {
+  try {
+    const fora = _foraIdsDe(st), emUso = _emUsoIdsDe(st), aquec = _aquecIdsDe(st);
+    const por = {};
+    let uso = 0, aq = 0, fo = 0;
+    for (const c of (Array.isArray(st && st.chips) ? st.chips : [])) {
+      if (!c || !c.num || c.afl || !c.at || /^ccol_/i.test(String(c.at))) continue;
+      const u = (equipe || []).find((x) => x.id === String(c.at));
+      if (!u) continue;
+      const p = por[u.id] || (por[u.id] = { nome: _botIaPrimeiro(u.nome), uso: 0, aq: 0 });
+      const w = String(c.wa_st || '').toLowerCase();
+      if (c.st === 'banido' || fora.has(w)) { fo++; continue; }
+      if (_chipAquecendo(c, aquec)) { p.aq++; aq++; } else if (_chipEmUso(c, emUso)) { p.uso++; uso++; }
+    }
+    let caidos = [];
+    try {
+      const r = await env.DB.prepare("SELECT DISTINCT nk FROM pressel_num_log WHERE por='sistema' AND acao='desliga' AND ts >= ? AND (por_nome LIKE '%caiu%' OR por_nome LIKE '%bloquead%')").bind(Math.floor(_botIaDiaIni(agoraMs) / 1000)).all();
+      caidos = ((r && r.results) || []).map((x) => String(x.nk || '').slice(-4)).filter(Boolean);
+    } catch (_) {}
+    return 'NÚMEROS DE WHATSAPP DA CASA agora: ' + uso + ' em uso, ' + aq + ' em aquecimento, ' + fo + ' fora da roleta (banido, restrito ou sem WhatsApp). Por pessoa (em uso, aquecendo): ' + (Object.values(por).filter((p) => p.uso || p.aq).map((p) => p.nome + ' ' + p.uso + ', ' + p.aq).join(' · ') || 'nenhum') + '. Tirados da roleta pelo sistema hoje por queda ou bloqueio: ' + (caidos.length ? caidos.length + ' (finais ' + caidos.slice(0, 12).join(', ') + ')' : 'nenhum') + '.';
+  } catch (_) { return ''; }
+}
+
+// ── RELATORIO, sem IA: "me manda o relatorio de hoje", "resumo da semana", "fechamento de ontem" ──
+const BOT_SABE_REL_RE = /\b(relatorio|raio ?x|fechamento|balanco|panorama|visao geral|resumao|resumo geral|resumo (do|da|de|dessa|desse|deste|desta) (dia|hoje|hj|ontem|semana|mes|operacao|casa|tudo)|numeros (do|da|de|dessa|desse) (dia|hoje|hj|ontem|semana|mes|operacao|casa))\b/;
+const BOT_SABE_REL_PEDE_RE = /\b(manda|mande|me da|me passa|passa|quero|queria|gera|gerar|puxa|puxar|faz|faca|cade|mostra|mostre|envia|solta|traz|me ve|preciso|qual|como (ta|esta|foi|ficou|anda))\b/;
+const BOT_SABE_REL_NAO_RE = /\b(errad\w*|estranh\w*|nao bate|zoad\w*|bug\w*|que horas|quando sai|nao (saiu|veio|chegou)|o que (e|eh|significa))\b/;
+// Pedir e ter o verbo ("me manda", "quero", "cade") ou ser so o nome dele ("resumo do dia", "relatorio de ontem").
+const _botSabePedeRelatorio = (tn) => BOT_SABE_REL_RE.test(tn) && !BOT_SABE_REL_NAO_RE.test(tn) && (BOT_SABE_REL_PEDE_RE.test(tn) || tn.split(' ').length <= 4);
+function _botSabeRelatorio(base, c, p) {
+  const quem = c.quem || {};
+  const equipe = Array.isArray(c.equipe) ? c.equipe : [];
+  const vends = equipe.filter((u) => u.role === 'atendente'), cobs = equipe.filter((u) => u.role === 'cobrador');
+  const m = base.mov[p.k], a = base.agora;
+  const pct = (n, d) => (d > 0 ? Math.round(n * 100 / d) + '%' : '');
+  const taxa = (x) => (x && x.coorte ? Math.round(x.coortePagos * 100 / x.coorte) + '% (' + x.coortePagos + ' de ' + x.coorte + ')' : 'ainda sem pedido terminado');
+  const quando = p.rot + (p.k === 'hoje' ? ' (' + _botSabeCurto(base.hoje) + ')' : p.k === 'ontem' ? ' (' + _botSabeCurto(_botDiaMais(base.hoje, -1)) + ')' : '');
+  const L = [];
+  const pri = _botIaPrimeiro(quem.nome);
+  if (quem.chefe) {
+    const leads = _botSabeLeadsDe(base, p);
+    const vv = vends.reduce((s, u) => s + ((m.porAt[u.id] || {}).vendas || 0), 0);
+    L.push('*Operação · ' + quando + '*');
+    L.push('Pedidos cadastrados: ' + m.vendas + (m.aguardando ? ' (' + m.aguardando + ' esperando aprovação)' : '') + (c.reservado ? ' · ' + _botBRL(m.vendasVl) : ''));
+    L.push('Aprovados: ' + m.aceitos + ' · Despachados: ' + m.enviados);
+    L.push('Chegaram no cliente: ' + m.entregues + ' · Na agência pra retirar: ' + m.agencia);
+    L.push('Pagos: ' + m.pagos + (c.reservado ? ' · ' + _botBRL(m.pagosVl) : ''));
+    L.push('Perdas: ' + m.perdas + ' · Cancelados: ' + m.cancelados);
+    if (leads != null) L.push('Leads: ' + leads + (leads > 0 ? ' · ' + pct(vv, leads) + ' viraram pedido' : ''));
+    if (c.reservado && base.anuncio && base.anuncio.ok) {
+      const v = _botSabeAnuncioDe(base, p);
+      if (v != null) L.push('Anúncio no cartão: ' + _botBRL(v) + (leads ? ' · ' + _botBRL(v / leads) + ' por lead' : '') + (m.vendas ? ' · ' + _botBRL(v / m.vendas) + ' por pedido' : ''));
+    }
+    L.push('');
+    L.push('*Por vendedor*');
+    for (const u of vends) { const v = (m.porAt[u.id] || {}).vendas || 0; const n = _botSabeLeadsDe(base, p, u.id); L.push(_botIaPrimeiro(u.nome) + ': ' + _botPlural(v, 'pedido', 'pedidos') + (n == null ? '' : ' · ' + _botPlural(n, 'lead', 'leads') + (n > 0 ? ' (' + pct(v, n) + ')' : ''))); }
+    if (m.vendas - vv > 0) L.push('Cadastrados por outra pessoa: ' + (m.vendas - vv));
+    L.push('');
+    L.push('*Por cobrador*');
+    for (const u of cobs) { const x = m.porCob[u.id] || {}; const f = a.filaPorCob[u.id] || _botSabeFilaZero(); L.push(_botIaPrimeiro(u.nome) + ': ' + _botPlural(x.pagos || 0, 'pago', 'pagos') + (c.reservado ? ' · ' + _botBRL(x.pagosVl || 0) : '') + ' · fila ' + f.n); }
+    L.push('');
+    L.push('*Agora*');
+    L.push('Esperando aprovação ' + (a.etapas.aprovacao || 0) + ' · A enviar ' + (a.etapas['A Enviar'] || 0) + ' · Preparando ' + (a.etapas.Preparando || 0));
+    L.push('Em trânsito ' + (a.etapas.Enviados || 0) + ' · Saiu pra entrega ' + (a.etapas['Saiu para Entrega'] || 0) + ' · Requer atenção ' + (a.etapas['Requer Atenção'] || 0));
+    L.push('Fila da cobrança: ' + a.fila.n + ' (' + a.fila.entregues + ' entregues, ' + a.fila.agencia + ' na agência)');
+    L.push(a.fila.combinado + ' em cobrança · ' + a.fila.atrasado + ' atrasados · ' + a.fila.sem + ' sem retorno');
+    if (c.reservado) L.push('A receber: ' + _botBRL(a.fila.vl + a.caminhoVl) + ' em ' + (a.fila.n + a.caminho) + ' pedidos');
+    L.push('Taxa de pagamento do mês: ' + taxa(base.mov.mes));
+  } else if (quem.role === 'cobrador') {
+    const x = m.porCob[quem.id] || _botSabeZero(), f = a.filaPorCob[quem.id] || _botSabeFilaZero();
+    L.push('*' + (pri || 'Cobrança') + ' · ' + quando + '*');
+    L.push('Pagos na sua fila: ' + (x.pagos || 0));
+    L.push('Chegaram no cliente: ' + (x.entregues || 0));
+    L.push('');
+    L.push('*Agora*');
+    L.push('Fila: ' + f.n + ' (' + f.entregues + ' entregues, ' + f.agencia + ' na agência)');
+    L.push(f.combinado + ' em cobrança · ' + f.atrasado + ' atrasados · ' + f.sem + ' sem retorno');
+    L.push('Retorno pra hoje: ' + f.retHoje + ' · A caminho: ' + (a.caminhoPorCob[quem.id] || 0));
+  } else {
+    const x = m.porAt[quem.id] || _botSabeZero();
+    const n = _botSabeLeadsDe(base, p, quem.id);
+    const ag = _botSabeAgora(base.linhas.filter((r) => r.at === quem.id), base.agoraMs);
+    L.push('*' + (pri || 'Vendas') + ' · ' + quando + '*');
+    L.push('Pedidos cadastrados: ' + x.vendas + (x.aguardando ? ' (' + x.aguardando + ' esperando aprovação)' : ''));
+    if (n != null) L.push('Leads: ' + n + (n > 0 ? ' · ' + pct(x.vendas, n) + ' viraram pedido' : ''));
+    L.push('Chegaram no cliente: ' + x.entregues + ' · Pagos: ' + x.pagos);
+    L.push('');
+    L.push('*Seus pedidos agora*');
+    L.push('Esperando aprovação ' + (ag.etapas.aprovacao || 0) + ' · A enviar ' + (ag.etapas['A Enviar'] || 0) + ' · Em trânsito ' + ((ag.etapas.Preparando || 0) + (ag.etapas.Enviados || 0) + (ag.etapas['Saiu para Entrega'] || 0)));
+    L.push('Entregues esperando pagamento ' + (ag.etapas.Entregues || 0) + ' · Na agência ' + (ag.etapas['Retirar nos Correios'] || 0) + ' · Requer atenção ' + (ag.etapas['Requer Atenção'] || 0));
+    L.push('Taxa de pagamento do mês: ' + taxa((base.mov.mes.porAt[quem.id]) || null));
+  }
+  return L.join('\n');
+}
+
+// ── LISTA POR ACONTECIMENTO, sem IA: "quais chegaram hoje", "quem pagou ontem", "quais foram despachados essa semana" ──
+// O tipo que a mensagem pede ('' = nao e isso). O texto vem normalizado (_botIaNorm).
+function _botSabeListaEv(tn) {
+  const t = ' ' + String(tn || '') + ' ';
+  if (/\bquant[oa]s?\b/.test(t) || /\bde quem\b/.test(t)) return '';
+  // "me manda os que chegaram" e lista; "me passa o pix do cliente que pagou" nao e (precisa do "os", "as" ou "todos")
+  if (!(BOT_IA_LISTA_FORTE_RE.test(t) || /\b(quais|quem|nomes?)\b/.test(t) || /\b(manda|mande|mostra|mostre|passa|passe|me da|puxa)\b[^.?!]{0,20}\b(os|as|todos|todas)\b/.test(t))) return '';
+  if (/\b(cheg(ou|aram)|entregues?|entregaram|receberam|recebeu)\b/.test(t) && !/\b(vai|vao) (chegar|receber)\b/.test(t)) return 'entregue';
+  if (/\b(sairam|despachad\w*|enviados|enviaram|postad\w*)\b/.test(t) && !/\b(pra|para) entrega\b/.test(t)) return 'enviado';
+  if (/\b(pagaram|pagou|pagos)\b/.test(t)) return 'pago';
+  if (/\b(frustr\w*|devolv\w*|devoluc\w*|retornad\w*|roub\w*|perdas?|perdid\w*)\b/.test(t)) return 'perda';
+  if (/\bcancel\w*\b/.test(t)) return 'cancelado';
+  if (/\b(esperando|aguardando) aprovacao\b/.test(t)) return 'aprovacao';
+  if (/\brequer atencao\b/.test(t)) return 'atencao';
+  if (/\b(cadastrad\w*|vendid\w*|pedidos (de|do|da|dessa|desse|deste|desta) (hoje|hj|ontem|semana|mes|dia))\b/.test(t)) return 'criado';
+  return '';
+}
+const BOT_SABE_EV = {
+  entregue: { t: 'Chegaram no cliente', k: 'entregueMs' }, enviado: { t: 'Despachados', k: 'enviadoMs' }, pago: { t: 'Pagaram', k: 'pagoMs' },
+  perda: { t: 'Perdas', k: 'fimMs' }, cancelado: { t: 'Cancelados', k: 'fimMs' }, criado: { t: 'Pedidos cadastrados', k: 'criado' },
+  aprovacao: { t: 'Esperando aprovação da direção', k: '' }, atencao: { t: 'Em requer atenção', k: '' },
+};
+// O texto da lista. Cada um ve os dele (vendedor pelos pedidos que cadastrou, cobrador pela fila); a direcao ve todos.
+function _botSabeListaTexto(base, c, ev, p) {
+  const quem = c.quem || {};
+  const equipe = Array.isArray(c.equipe) ? c.equipe : [];
+  const nome = (id) => { const u = equipe.find((x) => x.id === String(id)); return u ? _botIaPrimeiro(u.nome) : ''; };
+  const E = BOT_SABE_EV[ev];
+  const meu = (r) => quem.chefe || (quem.role === 'cobrador' ? (!r.cob || r.cob === quem.id) : r.at === quem.id);
+  const no = (t) => t > 0 && t >= p.ini && t < p.fim;
+  let rs = base.linhas.filter(meu);
+  if (ev === 'aprovacao') rs = rs.filter((r) => r.aguardando && !r.cancelado);
+  else if (ev === 'atencao') rs = rs.filter((r) => r.col === 'Requer Atenção' && !r.pago);
+  else if (ev === 'pago') rs = rs.filter((r) => r.pago && !r.semCob && no(r.pagoMs));
+  else if (ev === 'perda') rs = rs.filter((r) => r.perda && no(r.fimMs));
+  else if (ev === 'cancelado') rs = rs.filter((r) => r.cancelado && no(r.fimMs));
+  else if (ev === 'criado') rs = rs.filter((r) => !r.cancelado && !r.semCob && no(r.criado));
+  else rs = rs.filter((r) => no(r[E.k]));
+  const tk = E.k || 'criado';
+  rs.sort((x, y) => (y[tk] || 0) - (x[tk] || 0));
+  const estado = !E.k;
+  const tit = E.t + (estado ? ' agora' : ' · ' + p.rot) + (quem.chefe ? '' : quem.role === 'cobrador' ? ' (sua fila)' : ' (seus pedidos)');
+  if (!rs.length) return tit + ': nenhum.';
+  const umDia = p.fim - p.ini <= 86400000;
+  const MAX = 25;
+  const L = ['*' + tit + ': ' + rs.length + '*'];
+  rs.slice(0, MAX).forEach((r, i) => {
+    const ex = [];
+    if (!estado && r[tk]) ex.push(umDia ? _botIaHM(r[tk]) : _botIaDDMM(r[tk]));
+    if (ev === 'perda') ex.push(String(BOT_IA_COL_TXT[r.col] || r.col).replace(/ \(perda\)/, ''));
+    if (quem.chefe || quem.role === 'atendente') { const n = nome(r.cob); if (n && ev !== 'criado' && ev !== 'aprovacao') ex.push('cobrador ' + n); }
+    if (quem.chefe || quem.role === 'cobrador') { const n = nome(r.at); if (n) ex.push('vendedor ' + n); }
+    L.push((i + 1) + '. ' + _botIaLinhaLista(r.l, ex.join(' · ')));
+  });
+  if (rs.length > MAX) L.push('e mais ' + (rs.length - MAX));
+  return L.join('\n');
+}
+// O que o raio-x responde sem IA: o relatorio do periodo e a lista por acontecimento. null = nao e com ele (segue o fluxo).
+async function _botSabeSemIa(env, c, x) {
+  const quem = x.quem, equipe = x.equipe;
+  const agoraMs = Date.now();
+  const reservado = !!(c.o.teste || c.o.grupoTeste || c.o.sala);
+  const per = _botSabePeriodo(c.textoBusca, agoraMs);
+  if (x.rel) {
+    const base = await _botSabeBase(env, x.st, agoraMs, per, !!quem.chefe && reservado);
+    const p = base.foco || base.pers[0];
+    return { resposta: _botSabeRelatorio(base, { quem, equipe, grupo: c.grupo, reservado }, p), motivo: 'relatório (' + p.rot + '), sem IA' };
+  }
+  // telefone ou CPF na mensagem e pergunta de UM pedido: segue pra IA
+  if (/\d{8,}/.test(_botSoDigitos(c.textoBusca))) return null;
+  // a fila do cobrador ja tem lista propria (com a hora e o combinado): "quem pagou hoje" dele, e a de UM cobrador pelo nome
+  if (x.tipoLista) {
+    const diaSo = !per || per.rot === 'hoje' || per.rot === 'ontem';
+    if (x.ev === 'pago' && !quem.chefe && diaSo) return null;
+    if (quem.chefe && equipe.some((u) => u.role === 'cobrador' && u.id !== quem.id && (' ' + x.tn + ' ').includes(' ' + _botIaNorm(u.nome).split(' ')[0] + ' '))) return null;
+  }
+  const hojeIni = _botIaDiaIni(agoraMs);
+  const p = per || { ini: hojeIni, fim: hojeIni + 86400000, rot: 'hoje' };
+  const five = await _botSabeFive(env, Math.min(p.ini, agoraMs - BOT_SABE_JANELA_MS));
+  return { resposta: _botSabeListaTexto({ linhas: _botSabeLinhas(x.st, five, agoraMs) }, { quem, equipe }, x.ev, p), motivo: 'lista (' + x.ev + ', ' + p.rot + '), sem IA' };
+}
+
 // ─── O CAMINHO INTEIRO de uma mensagem (tambem e o do "Pergunte ao bot") ───
 // b = { grupo, jid, msg_id, de_jid, de_fone, de_nome, texto, tipo, menciona, responde, citado, ts }
 // opts = { teste: true (sem freio, sem visto, sem aviso, sem gravar pendente), quem: {id,nome,role} ja resolvido }
@@ -15870,6 +16516,12 @@ async function _botIaResponder(env, cfg, b, opts) {
   const grupo = b.grupo;
   const ia = cfg.ia || _botIaPadrao();
   const res = { acao: 'calado', resposta: '', motivo: '', modelo: '', ms: 0, chamadas: 0, alerta: 0, viu: [], responder: false, quem_id: '', reacao: '' };
+  // SO A MARCACAO, sem mais nada (19/11/2026: o Heynan perguntou "Chegaram quantos pedidos hoje? @", ficou sem resposta e
+  // mandou so "@Barbadinho"; a IA respondeu no vazio): a pergunta e a mensagem que a pessoa mandou logo antes (ate 3 min).
+  if (!o.teste && b.jid && b.de_jid && b.menciona && !String(b.texto || '').replace(/@\S*/g, ' ').replace(/[^\p{L}\p{N}]/gu, '')) {
+    const ant = (await _botIaMsgAnterior(env, b.jid, b.de_jid, b.msg_id)).replace(/@\S*/g, ' ').replace(/\s+/g, ' ').trim();
+    if (ant.replace(/[^\p{L}\p{N}]/gu, '').length >= 3) b = { ...b, texto: ant + ' @Barbadinho' };
+  }
   const texto = _botTexto300(b.texto, 1000).trim();
   // Busca de pedido e detectores olham o texto SEM as marcacoes ("@Barbadinho", "@Guilherme"): nome de
   // quem foi marcado nao e nome de cliente. O numero do vendedor (pedido da direcao) olha o texto inteiro.
@@ -15924,6 +16576,10 @@ async function _botIaResponder(env, cfg, b, opts) {
   // o bot respondeu ha menos de 3 min e escreve de novo, sem marcar, continua a conversa. A IA decide. Desde 09/11 so a
   // conversa de verdade: a frase do numero caido e a reacao nao abrem conversa (_botIaEmConversa).
   if (!modo && !o.teste && b.de_jid && b.jid && await _botIaEmConversa(env, b.jid, b.de_jid)) modo = 'conversa';
+  // NA SALA DA DIRECAO (19/11/2026) pergunta ou pedido sobre a operacao e com o bot, mesmo sem marcar: a sala existe pra
+  // isso. O resto (os socios conversando entre si) segue a regra de sempre.
+  const tnOper = _botIaNorm(textoBusca);
+  if (!modo && o.sala && BOT_SABE_ASSUNTO_RE.test(tnOper) && (pergunta || BOT_SABE_QUER_RE.test(tnOper))) modo = 'chamado';
   if (!modo) { res.acao = 'visto'; res.motivo = 'não era pra mim'; return res; }
   // FALANDO COM OUTRA PESSOA (ver _botIaMarcouOutroHaPouco): sem marcar o bot nem chamar ele pelo nome, quem marcou ou
   // chamou outra pessoa esta falando com ela. Vale pro problema, pra festa, pra conversa e pra quem citou o bot.
@@ -15942,6 +16598,8 @@ async function _botIaResponder(env, cfg, b, opts) {
   let _st = null, _quem = null;
   const pegaSt = async () => _st || (_st = await _getDashData(env));
   const pegaQuem = async () => _quem || (_quem = o.quem || await _botIaQuem(env, cfg, await pegaSt(), b.de_jid, b.de_fone));
+  // SALA DA DIRECAO: so quem e da direcao tem resposta la (mais alguem no grupo nao abre dado nenhum).
+  if (o.sala) { const qs = await pegaQuem(); if (!qs.chefe) { res.acao = 'visto'; res.quem_id = qs.id || ''; res.motivo = 'sala da direção: quem escreveu não é da direção'; return res; } }
   // 2a. NUMERO CAIU (ver BOT_IA_CAIU): uma frase curta e o aviso de verdade pra direcao, sem IA e sem freio (nao gasta
   // cota). So quem marcou o bot e PERGUNTOU ("@Barbadinho meu numero caiu?") vai pra IA, que ve os numeros dele. Quem
   // contou e da direcao: fica de fora (e quem resolve).
@@ -15973,7 +16631,8 @@ async function _botIaResponder(env, cfg, b, opts) {
   // fora, sem gastar IA. Festa, pergunta e mensagem com o nome do bot nao entram na conta de seguidas.
   if (!marcado && !o.teste) {
     if (_botIaSoRiso(texto)) { res.acao = 'visto'; res.motivo = 'só risada ou ok'; return res; }
-    if (modo !== 'festa' && !pergunta && !b.menciona && b.de_jid && b.jid) {
+    // Quem contesta a conta ("ta faltando pedido", "da 67 contando atrasados") segue a conversa: nao entra nas seguidas.
+    if (modo !== 'festa' && !pergunta && !b.menciona && b.de_jid && b.jid && !BOT_SABE_CONTESTA_RE.test(tnOper)) {
       const seg = await _botIaSeguidas(env, b.jid, b.de_jid);
       if (seg >= BOT_IA_SEGUIDAS_MAX) {
         if (o.reage && /[kK]{3,}|😂|🤣/u.test(texto) && sorte < 0.5) { res.acao = 'respondeu'; res.responder = true; res.reacao = '😂'; res.resposta = '(reagiu com 😂)'; res.motivo = 'reação (já tinha respondido ' + seg + ' vezes seguidas)'; return res; }
@@ -16031,7 +16690,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   }
   const akey = o.teste ? null : await getAIKey(env, 'anthropic');
   if (!o.teste) {
-    const freio = await _botIaFreio(env, grupo, b.de_jid, akey ? 'anthropic' : 'gemini', b.jid, !!o.grupoTeste);
+    const freio = await _botIaFreio(env, grupo, b.de_jid, akey ? 'anthropic' : 'gemini', b.jid, !!o.grupoTeste || !!o.sala);
     if (freio) { res.motivo = freio; return res; }
   }
   // 4. Quem perguntou e o contexto (o blob e lido UMA vez e passado adiante)
@@ -16053,11 +16712,13 @@ async function _botIaResponder(env, cfg, b, opts) {
   const fecha = async () => { if (pendNovo && res.responder && String(res.resposta || '').indexOf('responde *sim*') >= 0) await _botIaPendGrava(env, b.jid, b.de_jid, pendNovo); return res; };
   const pushOk = o.teste ? false : await _botIaPushPossivel(env);
   const cab = [
-    'Grupo: ' + (grupo === 'cob' ? 'Cobradores' : 'Vendedores') + (g.nome ? ' (' + g.nome + ')' : '') + '. Agora: ' + _botDiaSemana(dia) + ' ' + _botDataBR(dia) + ' ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + ' (Brasília).',
+    'Grupo: ' + (o.sala ? 'Sala da direção (reservada: só os sócios e você). Aqui pode falar valor em reais e o número de qualquer pessoa, e o tom é direto: o número primeiro, zoeira só se brincarem com você' : (grupo === 'cob' ? 'Cobradores' : 'Vendedores') + (g.nome ? ' (' + g.nome + ')' : '')) + '. Agora: ' + _botDiaSemana(dia) + ' ' + _botDataBR(dia) + ' ' + String(agoraBR.getUTCHours()).padStart(2, '0') + ':' + String(agoraBR.getUTCMinutes()).padStart(2, '0') + ' (Brasília).',
     'Quem perguntou: ' + (quem.id ? quem.nome + ' (' + (BOT_IA_ROLE_TXT[quem.role] || quem.role) + (quem.chefe ? ', da direção' : '') + ')' : 'desconhecido (nome no WhatsApp: ' + (b.de_nome || '?') + ')') + '.',
     'Equipe: ' + equipe.map((u) => u.nome + ' (' + (BOT_IA_ROLE_TXT[u.role] || u.role) + ')').join(', ') + '.',
     'aviso_entregue: ' + (pushOk ? 'true' : 'false') + '.',
     ...(quem.id && _botIaLimpoCom(quem.nome) ? ['Com ' + quem.nome.split(' ')[0] + ' a festa e a zoeira são LIMPAS: sem palavrão, sem duplo sentido e sem piada de sexo.'] : []),
+    // A DIRECAO PERGUNTANDO (19/11/2026: "Mas ta zoado" do Heynan ganhou "ja avisei a direcao pra dar uma olhada").
+    ...(quem.chefe ? [quem.nome.split(' ')[0] + ' É da direção: nunca diga "já avisei a direção" pra quem é da direção. Pergunta de número, ou dizer que um número está estranho, errado ou que não bate, NÃO é problema pra avisar ninguém: deixe avisar_direcao vazio, mostre a conta parte por parte pelo RAIO-X e diga qual parte olhar. Só defeito de verdade (app, número caído, pedido travado) vai em avisar_direcao, e aí o aviso chega no outro sócio.'] : []),
   ];
   // ASSUNTO DE NUMERO (06/11 noite, pedido do Bruno: "as vezes eu quero que ele apenas brinque (...) nao precisa, em toda
   // resposta, puxar o gancho de vendas"): o placar e a mesa so entram nos DADOS quando a mensagem (ou a mensagem citada)
@@ -16065,6 +16726,13 @@ async function _botIaResponder(env, cfg, b, opts) {
   // ve ele nao cita (so o aviso nao bastou: "vc tem q ser bolsonarista" virou "comemorar os seus 9 pedidos hj").
   const temDigitos = /\d{8,}/.test(textoBusca.replace(/\D/g, ''));
   const quemManda = BOT_IA_QUEM_MANDA_RE.test(textoBusca);
+  // O RAIO-X (19/11/2026, ver "O BARBADINHO SABE DA OPERACAO"): entra na pergunta de numero da operacao, na conversa que
+  // segue uma resposta com ele (ate 10 min: "ta faltando pedido", "da 67 contando atrasados") e na pergunta que cita uma
+  // mensagem com numero (o resumo do dia).
+  const ultima = await _botIaUltimaPraEle(env, b.jid, b.de_jid);
+  const seguindoRaioX = !!(ultima && agora - Number(ultima.ts) < 600 && /raio-x/.test(String(ultima.motivo || '')) && (BOT_SABE_ASSUNTO_RE.test(tnOper) || BOT_SABE_CONTESTA_RE.test(tnOper)));
+  const sabeLiga = !!quem.id && modo !== 'festa' && (_botSabeLiga(tnOper, pergunta, quem.chefe) || seguindoRaioX || (!!b.citado && (pergunta || BOT_SABE_QUER_RE.test(tnOper)) && BOT_SABE_ASSUNTO_RE.test(_botIaNorm(String(b.citado)))));
+  let raioX = false;
   const assuntoNumero = modo === 'festa' || quemManda || BOT_IA_ASSUNTO_VENDA_RE.test(textoBusca) || (!!b.citado && BOT_IA_ASSUNTO_VENDA_RE.test(String(b.citado)));
   let nomes = null, tagMap = null;
   let nHojeQuem = null;   // o numero do dia de quem escreveu (vendas ou pedidos que voltaram), pro aviso do numero dito
@@ -16090,6 +16758,13 @@ async function _botIaResponder(env, cfg, b, opts) {
         viu.push('disse ' + nDito + ', placar ' + nHojeQuem);
       }
     }
+    // Na sala da direcao a pergunta pode ser do numero de WhatsApp de um vendedor (no grupo dos vendedores isso ja vem acima).
+    if (o.sala && BOT_IA_NUMERO_RE.test(textoProb)) {
+      try {
+        const alvo = (equipe.find((u) => u.role === 'atendente' && (' ' + tnOper + ' ').includes(' ' + _botIaNorm(u.nome).split(' ')[0] + ' ')) || {}).id;
+        if (alvo) { const un = (equipe.find((u) => u.id === alvo) || {}).nome; D.push(await _botIaNumerosDe(env, st, alvo, un)); viu.push('números de ' + un); }
+      } catch (_) {}
+    }
     // Pedidos: quando o texto fala de pedido, traz telefone/CPF/id, ou e o grupo dos cobradores (la
     // quase toda pergunta e sobre um pedido). O "nenhum pedido" so entra quando a pessoa pediu um.
     let busca = null;
@@ -16105,9 +16780,23 @@ async function _botIaResponder(env, cfg, b, opts) {
       if (busca.foraDoEscopo.length) {
         D.push('Pedido(s) com esse nome ou número existem, mas são de outra pessoa: ' + busca.foraDoEscopo.map((l) => ps.cliente(l) + ' (' + (grupo === 'cob' ? 'fila de ' + ((nomes || {})[String(l.cob)] || 'outro cobrador') : 'vendedor ' + ((nomes || {})[String(l.at)] || 'outro')) + ')').join('; ') + '.'); viu.push('pedido de outra pessoa');
       }
-      if (!busca.blocos.length && !busca.foraDoEscopo.length && falaDePedido && (busca.termos.length || temDigitos)) {
+      // (pergunta de numero da operacao sem pedido achado nao e busca que falhou: quem responde e o raio-x, logo abaixo)
+      if (!busca.blocos.length && !busca.foraDoEscopo.length && falaDePedido && (busca.termos.length || temDigitos) && !(sabeLiga && !temDigitos)) {
         D.push('Nenhum pedido encontrado com o nome ou o número da mensagem (no escopo de quem perguntou).'); viu.push('nenhum pedido');
       }
+    }
+    // O RAIO-X DA OPERACAO. Fica de fora quando a pergunta e de UM pedido: telefone ou CPF na mensagem, ou pedido achado
+    // pelo nome sem palavra de conta ("quantos", "total", "taxa", "fila", "por que").
+    if (sabeLiga && !temDigitos && (seguindoRaioX || BOT_SABE_CONTA_RE.test(tnOper) || !(busca && (busca.blocos.length || busca.foraDoEscopo.length)))) {
+      try {
+        const agoraMs = Date.now();
+        const reservado = !!(o.teste || o.grupoTeste || o.sala);
+        const base = await _botSabeBase(env, st, agoraMs, _botSabePeriodo(textoBusca, agoraMs), quem.chefe && reservado);
+        const numeros = (quem.chefe && BOT_IA_NUMERO_RE.test(textoProb)) ? await _botSabeNumeros(env, st, equipe, agoraMs) : '';
+        D.push(_botSabeTexto(base, { quem, equipe, grupo, reservado, cfg, sala: !!o.sala, numeros, explica: seguindoRaioX || BOT_SABE_EXPLICA_RE.test(tnOper) }));
+        viu.push('raio-x' + (base.foco ? ' (' + base.foco.rot + ')' : ''));
+        raioX = true;
+      } catch (e) { viu.push('raio-x falhou: ' + String((e && e.message) || e).slice(0, 60)); }
     }
     // UM PEDIDO NA MAO (10/11/2026), certo ou provavel, no escopo de quem perguntou: o que vai embaixo da resposta pelo
     // codigo (link, ultima anotacao, a oferta de trocar o telefone) e a resposta pronta pra quando a IA cair.
@@ -16169,10 +16858,9 @@ async function _botIaResponder(env, cfg, b, opts) {
       D.push('A comemoração automática do marco ' + mAgora.n + ' de ' + String(quem.nome || '').split(' ')[0] + ' ' + (mAgora.quando === 'acabou de sair' ? 'acabou de sair no grupo' : 'vai sair no grupo agora') + ': não grite junto nem repita o número; responda com 1 a 4 palavras.');
     }
   }
-  if (quem.id && !assuntoNumero) { D.push('Placar e fila ficaram de fora (a mensagem não pergunta do número do dia): responda só o que falaram, sem citar placar, fila ou meta e sem empurrão de venda (nada de bora buscar, bora moer).'); viu.push('sem placar'); }
+  if (quem.id && !assuntoNumero && !raioX) { D.push('Placar e fila ficaram de fora (a mensagem não pergunta do número do dia): responda só o que falaram, sem citar placar, fila ou meta e sem empurrão de venda (nada de bora buscar, bora moer).'); viu.push('sem placar'); }
   // A ULTIMA RESPOSTA pra essa pessoa (ate 30 min): o nome dela ja saiu? ja teve festa? (06/11 noite: "+1" ganhou o
   // gritao e, um minuto depois, "bati as 10, to liberado pro jiu jitsu" ganhou o MESMO gritao, com o nome de novo.)
-  const ultima = await _botIaUltimaPraEle(env, b.jid, b.de_jid);
   const nomeQuem = quem.id ? String(quem.nome || '') : String(b.de_nome || '').replace(/^[^\p{L}]+/u, '');
   const pNome = _botIaNorm(nomeQuem).split(' ')[0];
   const nomeNaUltima = !!(ultima && pNome.length >= 3 && (' ' + _botIaNorm(ultima.resposta) + ' ').includes(' ' + pNome + ' '));
@@ -16180,7 +16868,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     D.push('Você acabou de comemorar com ' + (nomeQuem.split(' ')[0] || 'essa pessoa') + ' (há ' + Math.max(1, Math.round((agora - Number(ultima.ts)) / 60)) + ' min: "' + ps.texto(String(ultima.resposta || '').slice(0, 140)) + '"). Não repita a festa, o grito nem o número: responda curto só o que é novo na mensagem.');
     viu.push('já comemorou com ' + (nomeQuem.split(' ')[0] || 'a pessoa'));
   }
-  const manual = _botIaManualPara(textoProb, grupo);
+  const manual = _botIaManualPara(textoProb, o.sala ? '' : grupo);
   if (manual.length) {
     D.push('MANUAL (como fazer, conferido no sistema; use o item que for a dúvida, com as suas palavras):\n' + manual.map((x) => '- ' + x.t + ': ' + x.r).join('\n'));
     viu.push('manual: ' + manual.map((x) => x.t).join(', '));
@@ -16207,7 +16895,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   // 5. A IA (ate duas rodadas, dentro do orcamento). Dado e problema com a temperatura mais firme; zoeira mais solta.
   const t0 = Date.now();
   res.contexto = montaUser('').slice(0, 8000);
-  const firme = BOT_IA_PROBLEMA_RE.test(textoProb) || idsOk.length > 0 || manual.length > 0 || (assuntoNumero && pergunta && !quemManda);
+  const firme = raioX || BOT_IA_PROBLEMA_RE.test(textoProb) || idsOk.length > 0 || manual.length > 0 || (assuntoNumero && pergunta && !quemManda);
   let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS, temperatura: firme ? 0.7 : 1 });
   res.chamadas = 1;
   res.modelo = ch.modelo; res.ms = ch.ms; res.tentativas = ch.tentativas || [];
@@ -16247,7 +16935,8 @@ async function _botIaResponder(env, cfg, b, opts) {
   // fica na linha, pra conferir depois por que ela respondeu aquilo.
   const leitura = String(j.leitura || '').replace(/\s+/g, ' ').trim().slice(0, 120);
   if (leitura) viu.push('leu: ' + leitura);
-  const comLeitura = (m) => String(leitura ? (m ? m + ' · ' : '') + 'leu: ' + leitura : (m || '')).slice(0, 200);
+  // 'raio-x' no motivo e o que faz a mensagem seguinte da mesma pessoa continuar com o raio-x (seguindoRaioX).
+  const comLeitura = (m) => String((raioX ? 'raio-x · ' : '') + (leitura ? (m ? m + ' · ' : '') + 'leu: ' + leitura : (m || ''))).slice(0, 200);
   // A FORMA (ver _botIaEscolheForma): so fora de dado e problema.
   const serio = firme || res.chamadas > 1 || !!String(j.avisar_direcao || '').trim() || viu.some((v) => /^(números de|sem identificação|pedido de outra pessoa|nenhum pedido)/.test(v));
   const festaTom = modo === 'festa' || festaMsg;
@@ -16264,7 +16953,7 @@ async function _botIaResponder(env, cfg, b, opts) {
     if (esc.texto) bruto = esc.texto;
   }
   if (!bruto && quer) bruto = String(j.curta || j.minima || '').trim();
-  const limpo = _botIaLimpa(ps.restaura(bruto), idsOk);
+  const limpo = _botIaLimpa(ps.restaura(bruto), idsOk, raioX ? 1200 : 0);
   // A IA calou ou escreveu dado pessoal, mas tem pedido na mao e chamaram o bot: a resposta pronta do pedido (10/11/2026).
   if ((!quer || !limpo.texto || limpo.barrou) && (marcado || modo === 'chamado') && (pronta || anexos.length)) {
     res.resposta = [pronta, ...anexos].filter(Boolean).join('\n\n'); res.responder = true; res.acao = 'respondeu';
@@ -16289,7 +16978,8 @@ async function _botIaResponder(env, cfg, b, opts) {
   res.motivo = comLeitura(res.motivo);
   // 6. Aviso a direcao
   const avisar = ps.restaura(String(j.avisar_direcao || '')).trim();
-  if (avisar && !o.teste) {
+  if (avisar && quem.chefe && raioX) { /* a direcao perguntando ou contestando um numero: nao e problema pra avisar ninguem */ }
+  else if (avisar && !o.teste) {
     res.alerta = 1;
     try { await _botIaAvisar(env, grupo, quem, b.de_nome, texto, avisar, cfg, o.grupoTeste ? (String((cfg.ia && cfg.ia.teste && cfg.ia.teste.por) || '') || '-') : ''); } catch (_) {}
   } else if (avisar) res.alerta = 1;
@@ -16314,11 +17004,14 @@ async function _botIaMensagem(env, cfg, b, extra) {
   // Quem e quem se preenche sempre (so quem/quando, sem texto). No grupo de teste nao: la quem escreve
   // conta como a pessoa escolhida na tela.
   const grupoTeste = _botIaEhTeste(cfg, b.jid);
-  if (!grupoTeste) try {
+  // SALA DA DIRECAO: a linha e 'dir'; a resposta sai pelas regras do grupo dos cobradores (busca de pedido e lista de
+  // todo mundo), com a sala ligada (valores, raio-x inteiro, so a direcao tem resposta).
+  const sala = grupo === 'dir';
+  if (!grupoTeste && !sala) try {
     await env.DB.prepare('INSERT INTO bot_quem (grupo, de_jid, fone, nome, ultimo_ts, n) VALUES (?,?,?,?,?,1) ON CONFLICT(grupo, de_jid) DO UPDATE SET fone=CASE WHEN excluded.fone<>\'\' THEN excluded.fone ELSE bot_quem.fone END, nome=excluded.nome, ultimo_ts=excluded.ultimo_ts, n=bot_quem.n+1')
       .bind(grupo, deJid || ('nome:' + _botIaNorm(deNome)), deFone, deNome, agora).run();
   } catch (_) {}
-  if (!grupoTeste && !ia.responde[grupo]) return { ok: true, ignorar: true };
+  if (!grupoTeste && !sala && !ia.responde[grupo]) return { ok: true, ignorar: true };
   const msgId = _botTexto300(b.msg_id, 80).trim();
   if (!msgId) return { ok: true, ignorar: true };
   const ts = Number(b.ts) || agora;
@@ -16338,7 +17031,7 @@ async function _botIaMensagem(env, cfg, b, extra) {
     const u = equipe.find((e) => e.id === String(ia.teste.quem_id || ia.teste.por || ''));
     quemTeste = u ? { id: u.id, nome: u.nome, role: u.role, chefe: u.role === 'diretor' || u.role === 'socio', equipe } : { id: '', nome: '', role: '', chefe: false, equipe };
   }
-  const r = await _botIaResponder(env, cfg, { ...b, texto: textoMsg, citado: citadoMsg, grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste, reage } : { reage });
+  const r = await _botIaResponder(env, cfg, { ...b, texto: textoMsg, citado: citadoMsg, grupo: sala ? 'cob' : grupo, de_jid: deJid, de_fone: deFone, de_nome: deNome }, grupoTeste ? { grupoTeste: true, quem: quemTeste, reage } : sala ? { sala: true, reage } : { reage });
   if (r.acao === 'visto') {
     // Calado de proposito (falando com outra pessoa): o motivo fica na linha, pra conferir depois.
     if (r.motivo && r.motivo !== 'não era pra mim') { try { await env.DB.prepare('UPDATE bot_chat SET motivo=? WHERE id=?').bind(_botTexto300(r.motivo, 200), chatId).run(); } catch (_) {} }
