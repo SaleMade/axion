@@ -27,6 +27,9 @@ const iniLog = src.indexOf('let _comentLogOk = false;');
 const fimLog = src.indexOf('\n// COMENTARIO NAO PRECISA REESCREVER O BLOB INTEIRO', iniLog);
 if (iniLog < 0 || fimLog < 0) { console.error('NAO ACHEI o _comentLogStmt no worker.js'); process.exit(1); }
 const fonteLog = src.slice(iniLog, fimLog);
+// A TRAVA DO PEDIDO DO COLEGA (19/11/2026): a de verdade, recortada do worker.
+const mSoVe = src.match(/function _soVePedido\([\s\S]*?\r?\n\}\r?\n/);
+if (!mSoVe) { console.error('NAO ACHEI a _soVePedido no worker.js'); process.exit(1); }
 
 // ── guardas de forma: o que nao pode voltar ───────────────────────────────────────────────────
 ok(/json_set\(data, '\$\.leads\[" \+ idx \+ "\]\.comments'|json_set\(data, '" \+ caminho \+ "\.comments'/.test(fonte)
@@ -50,6 +53,9 @@ const monta = (leads, { mudaIndice = false, semJsonEach = false, mentirNaConfere
     + 'const afiliadoSemVinculo = (u) => u.role === "afiliado" && !u.afiliado_id;\n'
     + 'const noMundoAfiliado = (u) => !!u.afiliado_id;\n'
     + 'const aflDe = (u) => String(u.afiliado_id || "");\n'
+    + 'const isDirector = (u) => u && ["diretor", "socio", "produtor"].includes(u.role);\n'
+    + 'const _SO_VER_PEDIDO = "so ver";\n'
+    + mSoVe[0] + '\n'
     + 'const _comentarioLimpo = (c, u) => ({ who: String((c && c.who) || u.id), tx: String((c && c.tx) || ""), time: String((c && c.time) || "01/01 00:00") });\n'
     + fonteLog + '\n' + fonte + '\nreturn _comentarioRapido;';
   const fn = new Function(mod)();
@@ -82,7 +88,7 @@ const monta = (leads, { mudaIndice = false, semJsonEach = false, mentirNaConfere
               const i = estado.leads.findIndex((l) => String(l.id) === String(b[0]));
               if (i < 0) return null;
               const l = estado.leads[i];
-              return { idx: i, afl: String(l.afl || ''), coments: JSON.stringify(l.comments || []) };
+              return { idx: i, afl: String(l.afl || ''), at: String(l.at || ''), coments: JSON.stringify(l.comments || []) };
             }
             return null;
           },
@@ -119,6 +125,8 @@ const LEADS = [
   { id: '100', afl: '', comments: [{ who: 'a', tx: 'velho', time: '01/01 10:00' }] },
   { id: '200', afl: 'afl_x', comments: [] },
   { id: '300', afl: '' },
+  { id: '500', afl: '', at: 'atendente_a', comments: [] },
+  { id: '600', afl: '', at: 'atendente_b', comments: [{ who: 'atendente_b', tx: 'dele', time: '02/01 10:00' }] },
 ];
 const DIRETOR = { id: 'dir', role: 'diretor' };
 const COBRADOR = { id: 'atendente_k1s0gl', role: 'cobrador' };
@@ -243,6 +251,29 @@ const DO_AFILIADO = { id: 'at_afl', role: 'atendente', afiliado_id: 'afl_x' };
   const m = monta(LEADS);
   const r = await m.fn(m.env, DIRETOR, '100', { comment_add: { tx: 'mais um' } });
   ok(r && r.__ok && r.corpo.comentarios === 2, 'a resposta diz quantos comentarios o pedido tem agora');
+}
+
+// ── 11. o vendedor ve o quadro da equipe, mas so mexe no pedido DELE (19/11/2026) ────────────
+{
+  const VENDEDOR = { id: 'atendente_a', role: 'atendente' };
+  const m = monta(LEADS);
+  const r = await m.fn(m.env, VENDEDOR, '500', { comment_add: { tx: 'no meu' } });
+  ok(r && r.__ok && r.corpo.ok !== false && m.ver() && m.ver().idx === 3, 'o vendedor comenta no pedido dele');
+  const m2 = monta(LEADS);
+  const r2 = await m2.fn(m2.env, VENDEDOR, '600', { comment_add: { tx: 'no do colega' } });
+  ok(r2 && r2.corpo && r2.corpo.ok === false && r2.corpo.error === 'so ver' && !m2.ver() && m2.chamadas() === 0, 'no pedido do colega o comentario e recusado e nada grava');
+  const m3 = monta(LEADS);
+  const r3 = await m3.fn(m3.env, VENDEDOR, '600', { comment_del: { who: 'atendente_b', time: '02/01 10:00' } });
+  ok(r3 && r3.corpo && r3.corpo.ok === false && m3.estado.leads[4].comments.length === 1, 'nem apaga o comentario do colega');
+  const m4 = monta(LEADS);
+  const r4 = await m4.fn(m4.env, VENDEDOR, '300', { comment_add: { tx: 'sem dono' } });
+  ok(r4 && r4.corpo && r4.corpo.ok === false && !m4.ver(), 'pedido sem vendedor tambem e so leitura pra ele');
+  const m5 = monta(LEADS);
+  const r5 = await m5.fn(m5.env, COBRADOR, '600', { comment_add: { tx: 'cobrando' } });
+  ok(r5 && r5.__ok && r5.corpo.ok !== false && m5.ver(), 'o cobrador continua comentando em qualquer pedido da casa');
+  const m6 = monta(LEADS);
+  const r6 = await m6.fn(m6.env, DIRETOR, '600', { comment_add: { tx: 'direcao' } });
+  ok(r6 && r6.__ok && r6.corpo.ok !== false && m6.ver(), 'e a direcao tambem');
 }
 
 console.log('');
