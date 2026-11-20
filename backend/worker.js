@@ -6951,6 +6951,48 @@ async function handleGetState(req, env) {
   return jsonAssinado(env, { data: { ..._vis, team, ...(conexoes ? { conexoes } : {}), ...(_vendoComo ? { __como: _vendoComo } : {}) }, version: row.version, updated_at: row.updated_at, updated_by: row.updated_by, min_version: MIN_APP_VERSION, ...(blob ? { blob } : {}) });
 }
 
+// ══ O QUADRO DA EQUIPE PRO VENDEDOR (19/11/2026, pedido do Bruno) ══════════════════════════
+//
+// "Eu gostaria que meus vendedores conseguissem ver todo o Kanban por completo (...) vai ter uma
+// opcao de filtrar ou nao (...) Claro, eles nao vao poder mexer ou editar nada dos outros." Os
+// vendedores se confundiam com leads e pagamentos e precisavam abrir o pedido do colega: passar uma
+// informacao pra ele, conferir se saiu certo.
+//
+// POR QUE UMA ROTA PROPRIA, E NAO SOLTAR O /api/state: desde 06/10 o GET do estado entrega ao
+// atendente so os pedidos dele (_stateVisivel), e as outras telas dele (Meu Painel, Cadastro de
+// Pedidos, o app, a comissao) foram escritas contando com isso. Soltar la faria essas telas
+// contarem o pedido do colega como dele. Aqui so o Kanban pede, e so quando ele escolhe ver os outros.
+//
+// O QUE VAI: os pedidos da CASA que nao sao dele (de colega e sem vendedor). Pedido de afiliado
+// nunca (isolamento casa x afiliado, o mesmo corte do handleGetState). Respeita a janela de entrada
+// (ve_desde). SO LEITURA: o handleUpdateLead e o _comentarioRapido recusam quem nao e dono, diretor
+// nem cobrador (_SO_VER_PEDIDO), e o POST do estado ja devolvia do banco o card de outro dono.
+async function handleKanbanEquipe(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) return err('Sem permissão', 403);
+  if (ROLE_SO_CAMPANHA.includes(String(u.role || '').toLowerCase())) return err('Sem permissão', 403);
+  const r = await _dashRawAtual(env);
+  if (!r) return json({ ok: true, leads: [], version: 0 });
+  let data;
+  try { data = JSON.parse(r.raw); } catch (_) { data = {}; }
+  const meu = String(u.id || '');
+  const corte = _veDesde(u);
+  const leads = (Array.isArray(data.leads) ? data.leads : []).filter((l) => l && typeof l === 'object'
+    && !l.afl && String(l.at || '') !== meu && !(corte && _antesDoCorte(l.data, corte)));
+  return jsonAssinado(env, { ok: true, leads, version: r.version });
+}
+// O recado de quem tenta gravar no pedido de outra pessoa (handleUpdateLead e _comentarioRapido).
+const _SO_VER_PEDIDO = 'Este pedido é de outro vendedor. Você pode ver, mas não pode mexer.';
+// Quem pode gravar num pedido da casa: diretor, cobrador ou o dono (vendedor do pedido). O mundo do
+// afiliado tem regra propria (o `owns` do handleUpdateLead conta o afiliado como dono do mundo dele).
+function _soVePedido(u, at) {
+  if (!u || isDirector(u)) return false;
+  if (noMundoAfiliado(u) || afiliadoSemVinculo(u)) return false;
+  if (String(u.role || '').toLowerCase() === 'cobrador') return false;
+  return String(at || '') !== String(u.id || '');
+}
+
 // Pedido de plataforma (Five/PayLog) que ainda nao tem `col_plat`: a coluna em que ele esta ANTES
 // do primeiro arrasto manual e a ultima que a plataforma decidiu. So vale pra quem tem dono na
 // plataforma (five_id); pedido so nosso nao recebe webhook de etapa.
@@ -7627,6 +7669,7 @@ async function _comentarioRapido(env, u, leadId, patch) {
     try {
       row = await env.DB.prepare(
         "SELECT j.key AS idx, COALESCE(json_extract(j.value,'$.afl'),'') AS afl,"
+        + " COALESCE(json_extract(j.value,'$.at'),'') AS at,"
         + " COALESCE(json_extract(j.value,'$.comments'),'[]') AS coments"
         + " FROM dashboard_state s, json_each(json_extract(s.data,'$.leads')) j"
         + " WHERE s.id = 1 AND CAST(json_extract(j.value,'$.id') AS TEXT) = ?"
@@ -7637,6 +7680,9 @@ async function _comentarioRapido(env, u, leadId, patch) {
     // NUNCA de outro mundo: sem isto o afiliado comentaria em pedido da casa.
     if (afiliadoSemVinculo(u)) return err('Lead não encontrado', 404);
     if (noMundoAfiliado(u) && String(row.afl || '') !== aflDe(u)) return err('Lead não encontrado', 404);
+    // E NUNCA NO PEDIDO DO COLEGA (19/11/2026): o vendedor passou a ver o quadro da equipe
+    // (handleKanbanEquipe) e so pode ler o que nao e dele.
+    if (_soVePedido(u, row.at)) return json({ ok: false, error: _SO_VER_PEDIDO }, 403);
     const idx = Number(row.idx);
     if (!isFinite(idx) || idx < 0 || Math.floor(idx) !== idx) return null;   // indice estranho: nao monto SQL com ele
     let lista = [];
@@ -7963,6 +8009,11 @@ async function handleUpdateLead(req, env, leadId) {
     // segunda metade o afiliado abria o proprio pedido e nao conseguia anotar nada (o lead.at e o
     // vendedor, nunca ele).
     const owns = String(lead.at) === String(u.id) || (noMundoAfiliado(u) && String(lead.afl || '') === aflDe(u));
+    // SO VER O PEDIDO DO COLEGA (19/11/2026). Desde que o vendedor ve o quadro da equipe
+    // (handleKanbanEquipe) ele abre pedido que nao e dele. Etiqueta e comentario eram campo livre de
+    // qualquer login (nao passavam pelo `owns`): sem esta trava ele etiquetaria e comentaria o pedido
+    // do colega. Quem nao e dono, diretor nem cobrador nao grava nada aqui.
+    if (_soVePedido(u, lead.at)) return json({ ok: false, error: _SO_VER_PEDIDO }, 403);
     // O QUE FOR RECUSADO VOLTA NA RESPOSTA. Antes os campos sem permissão eram descartados em
     // silêncio e o endpoint respondia 200 ok: a tela dava "Lead salvo", o valor continuava na frente
     // dele (edição otimista) e só no F5 seguinte voltava tudo. Isso é a queixa do Bruno de "edito e
@@ -39718,6 +39769,7 @@ export default {
       // state sync
       if (req.method === 'GET'   && path === '/api/state')   return handleGetState(req, env);
       if (req.method === 'GET'   && path === '/api/state/pulso') return handleStatePulso(req, env);
+      if (req.method === 'GET'   && path === '/api/kanban/equipe') return handleKanbanEquipe(req, env);
       if (req.method === 'POST'  && path === '/api/state/trim')  return handleStateTrim(req, env);
       if ((req.method === 'GET' || req.method === 'POST') && path === '/api/state/arquivo') return handleStateArquivo(req, env);
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
