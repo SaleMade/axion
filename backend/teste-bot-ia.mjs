@@ -2589,6 +2589,11 @@ const doHeynan = (texto, extra) => ({ ...pacote({ jid: GC, de_jid: '552499213866
   conf(/RAIO-X/.test(u) && /semana passada \(26\/10 a 01\/11\)/.test(u) && /esta semana \(desde segunda, 02\/11\)/.test(u), '"como foi a semana passada comparada com essa?": o raio-x entra (pergunta geral com periodo) com as DUAS semanas lado a lado');
   r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: '@Barbadinho como foi teu fim de semana?', menciona: true }));
   conf(!/RAIO-X/.test(m.chamadas[3].user), '"como foi teu fim de semana?" e papo: sem raio-x');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho qual a fila do Haynan e a do Bryan?'));
+  conf(m.chamadas.length === 5 && /Fila por cobrador[^\n]*Bryan 4 \(1, 0, 3\) · Haynan 1 \(0, 1, 0\)/.test(m.chamadas[4].user), 'a direcao perguntando a fila de DOIS cobradores: vai pra IA com os numeros dos dois (antes saia a lista de nomes do primeiro)');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho me manda a lista do Bryan'));
+  conf(m.chamadas.length === 5 && /Fila de Bryan/.test(r.resposta), 'a lista de UM cobrador pelo nome continua saindo do codigo');
+  conf(m.tetos[0] === 10000 && m.chamadas[0].body.generationConfig.temperature === 0.4, 'com o raio-x o primeiro modelo ganha 10 s e a temperatura desce (e numero, nao zoeira)');
 }
 {
   // quem contesta sem ponto de interrogacao continua com o raio-x, e nao cai na conta das seguidas

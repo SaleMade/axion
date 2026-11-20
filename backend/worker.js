@@ -14232,7 +14232,8 @@ async function _botIaChamar(env, system, user, o) {
     if (tentou >= maxM || resta() < 1500) break;
     tentou++;
     // Ainda tem outro modelo pra tentar: teto curto, pra sobrar tempo pra ele.
-    const tetoM = (tentou < maxM && k < ordemM.length - 1) ? BOT_IA_MODELO_1_MS : BOT_IA_MODELO_MS;
+    // (com o raio-x nos DADOS o pedido e maior e o melhor modelo passava dos 7 s: `teto1Ms` da mais folga pra ele)
+    const tetoM = (tentou < maxM && k < ordemM.length - 1) ? (Number(opts.teto1Ms) || BOT_IA_MODELO_1_MS) : BOT_IA_MODELO_MS;
     const corpo = {
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -14901,6 +14902,9 @@ async function _botIaSemIa(env, cfg, b, c) {
   const aceitos = await _cobAceitos(env);
   const cobs = aceitos.map((a) => ({ id: String(a.id), nome: nomeEq(a.id), direcao: !!a.direcao }));
   const nomeado = cobs.find((x) => { const p = _botIaNorm(x.nome).split(' ')[0]; return p.length >= 3 && x.id !== quem.id && (' ' + tn + ' ').includes(' ' + p + ' '); });
+  // A direcao perguntando de DOIS cobradores de uma vez ("qual a fila do Haynan e a do Bryan?", 19/11/2026) quer os
+  // numeros dos dois, nao a lista de nomes do primeiro: segue pra IA, que responde com o raio-x.
+  if (quem.chefe && cobs.filter((x) => { const p = _botIaNorm(x.nome).split(' ')[0]; return p.length >= 3 && (' ' + tn + ' ').includes(' ' + p + ' '); }).length >= 2) return null;
   let alvo = null;
   if (nomeado) {
     if (!quem.chefe) { out.resposta = 'a fila de ' + _botIaPrimeiro(nomeado.nome) + ' é com ele. a sua eu te mando: me pede "minha lista"'; out.motivo = 'lista de outro cobrador: só a direção vê'; return out; }
@@ -15885,7 +15889,7 @@ const BOT_IA_MANUAL = [
  {"t": "Cliente sem condição de pagar tudo", "q": "o cliente disse que nao tem condicao de pagar tudo agora, vai mandar em duas vezes", "k": ["sem condicao", "nao tem condicao", "duas vezes", "2 vezes", "em 2x", "2x", "metade agora", "uma parte agora", "paga depois", "so consegue dia", "so consegue pagar"], "r": "Combina o que ele consegue e registra: o que já entrou vai em Pagamento parcial na ficha (o pedido fica na cobrança com o que falta) e marca o retorno pro dia que ele prometeu. É assim que o resumo sabe que tem combinado e não conta como atrasado (a tag Pagamento Parcial também vale). Desconto ou valor fora da tabela é com o Heynan.", "g": "cob"},
  {"t": "Cliente não quer mais o produto", "q": "o lead nao quer mais o produto e nao vai retirar", "k": ["nao quer mais", "nao vai retirar", "nao quer o produto", "quer devolver", "vai devolver", "devolucao", "desistiu"], "r": "Tenta reverter primeiro: o pedido já está com ele e é pago na entrega. Não quer mesmo? Avisa aqui com o nome ou o telefone, marcando o Heynan ou o Bruno. Com o ok da direção, leva o pedido pra Devolvido (é uma das frustrações que o cobrador pode marcar) e põe a tag Devolução.", "g": "cob", "so": "cob"},
  {"t": "Editar anotação do pedido", "q": "da pra alterar o comentario que eu escrevi no pedido?", "k": ["alterar o comentario", "editar o comentario", "mudar o comentario", "apagar o comentario", "comentario errado", "alterar comentario", "editar comentario", "editar a anotacao"], "r": "Dá: no pedido, o comentário tem a caneta pra editar e a lixeira pra apagar. Também dá pra me pedir aqui, com dois pontos: anota no pedido do Fulano: o texto. Eu anoto no pedido certo."},
- {"t": "O que o Barbadinho faz", "q": "barbadinho, o que voce consegue fazer pra me ajudar?", "k": ["o que voce faz", "o que vc faz", "o que voce consegue", "o que vc consegue", "como voce ajuda", "como vc ajuda", "pra que serve", "me ajudar", "todas as minhas duvidas"], "r": "Me marca com o nome ou o telefone do cliente que eu digo se pagou, de quem é a fila, onde está a entrega e por que o pedido não aparece na sua dash. Me pede o link de pagamento ou de rastreio que eu mando aqui. Me pede a lista que eu passo a sua fila na ordem da Agenda (quem escreveu, retorno vencido, hoje, sem retorno). Escreve anota no pedido do Fulano: o texto, que eu anoto. Telefone errado no cadastro eu troco se vc responder sim. Dúvida de como usar a dash e o app eu também respondo."}
+ {"t": "O que o Barbadinho faz", "q": "barbadinho, o que voce consegue fazer pra me ajudar?", "k": ["o que voce faz", "o que vc faz", "o que voce consegue", "o que vc consegue", "como voce ajuda", "como vc ajuda", "pra que serve", "me ajudar", "todas as minhas duvidas"], "r": "Me marca com o nome ou o telefone do cliente que eu digo se pagou, de quem é a fila, onde está a entrega e por que o pedido não aparece na sua dash. Me pede o link de pagamento ou de rastreio que eu mando aqui. Me pede a lista que eu passo a sua fila na ordem da Agenda (quem escreveu, retorno vencido, hoje, sem retorno). Escreve anota no pedido do Fulano: o texto, que eu anoto. Telefone errado no cadastro eu troco se vc responder sim. Número da operação eu também passo, de hoje, ontem, da semana, do mês ou do dia que vc disser: quantos pedidos foram cadastrados, aprovados, despachados, quantos chegaram no cliente, quantos pagaram, a fila da cobrança parte por parte, leads e taxa de pagamento. Me pede o relatório de hoje (ou de ontem, da semana) que eu mando inteiro, e quais chegaram hoje ou quem pagou na semana que eu mando os nomes. Dúvida de como usar a dash e o app eu também respondo."}
 ];
 const BOT_IA_QUEM_RESOLVE = "QUEM RESOLVE (quando não dá pra resolver por aqui):\n- Bruno (tecnologia): número caído, banido ou pedindo QR; defeito que continua no app ou na dash; login e senha; pedido que sumiu ou duplicou; placar que não bate; roleta, limite e números de outra pessoa; quem é quem e o jeito do bot.\n- Heynan (comercial): campanha e orçamento; cliente difícil (recusa pagar, ameaça, advogado, reclama do produto); desconto e valor fora da tabela; cancelar pedido aprovado ou enviado; devolução; cliente que diz que não recebeu; comissão, saque, nota e premiação; troca de cobrador; criativo e material de objeção; chave Pix diferente da CNPJ.";
 // Os itens do manual que batem com a mensagem (palavra curta inteira; palavra longa pelo comeco), no maximo 3.
@@ -16489,7 +16493,8 @@ function _botSabeListaTexto(base, c, ev, p) {
   const equipe = Array.isArray(c.equipe) ? c.equipe : [];
   const nome = (id) => { const u = equipe.find((x) => x.id === String(id)); return u ? _botIaPrimeiro(u.nome) : ''; };
   const E = BOT_SABE_EV[ev];
-  const meu = (r) => quem.chefe || (quem.role === 'cobrador' ? (!r.cob || r.cob === quem.id) : r.at === quem.id);
+  // (o cobrador ve os da fila DELE, que e a mesma conta do raio-x: pedido sem cobrador fica com a direcao)
+  const meu = (r) => quem.chefe || (quem.role === 'cobrador' ? r.cob === quem.id : r.at === quem.id);
   const no = (t) => t > 0 && t >= p.ini && t < p.fim;
   let rs = base.linhas.filter(meu);
   if (ev === 'aprovacao') rs = rs.filter((r) => r.aguardando && !r.cancelado);
@@ -16945,7 +16950,9 @@ async function _botIaResponder(env, cfg, b, opts) {
   const t0 = Date.now();
   res.contexto = montaUser('').slice(0, 8000);
   const firme = raioX || BOT_IA_PROBLEMA_RE.test(textoProb) || idsOk.length > 0 || manual.length > 0 || (assuntoNumero && pergunta && !quemManda);
-  let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS, temperatura: firme ? 0.7 : 1 });
+  // Com o raio-x: 10 s pro primeiro modelo (medido ao vivo em 19/11: o 3.5-flash estourou os 7 s duas vezes em seis e a
+  // resposta caiu pro modelo mais fraco) e a temperatura mais baixa, que aqui e numero.
+  let ch = await _botIaChamar(env, system, montaUser(''), { orcamentoMs: BOT_IA_ORCAMENTO_MS, temperatura: raioX ? 0.4 : firme ? 0.7 : 1, teto1Ms: raioX ? 10000 : 0 });
   res.chamadas = 1;
   res.modelo = ch.modelo; res.ms = ch.ms; res.tentativas = ch.tentativas || [];
   res.viu = viu;
