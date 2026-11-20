@@ -39414,6 +39414,21 @@ async function _cronRastreio(env) {
         if (_mexeu) mudou++;
         continue;
       }
+      // O QUE A PLATAFORMA JA TINHA DITO NAO E NOVIDADE (20/11/2026, caso do Bryan no grupo: "ontem eu
+      // tinha movido para requer atencao e exatamente agora voltaram 2"). O cobrador poe em Requer
+      // Atencao o entregue que nao responde (liberado em 12/11); todo dia as 9h a PayLog manda uma
+      // rajada de "Pedido Furtado" (27 em 7 segundos em 20/11, 32 em 19/11) pros entregues ha ~11 dias
+      // sem pagar. Esse aviso sobe o updated_at da five_orders, mas o shipping_status dela continua
+      // DELIVERED (_SQL_TRAVA_ENTREGUE) e, quando o webhook perde a corrida de gravar o card, o selo do
+      // lead tambem. Esta rotina via a linha "nova", lia DELIVERED e devolvia o card pra Cobranca:
+      // 5 pedidos em 19/11 e 2 em 20/11, todos tirados de onde o cobrador tinha posto.
+      // E a mesma regra do webhook ("o ultimo sinal manda", 17/09): la o gate compara com col_plat e
+      // sinal repetido nao mexe; aqui a coluna que o selo pede JA E a ultima que a plataforma decidiu,
+      // entao o card so esta em outro lugar porque alguem pos. So passa por cima sinal NOVO, isto e,
+      // selo que pede coluna diferente de col_plat (webhook perdido de verdade continua sendo pego).
+      // Sem col_plat (card que nunca foi arrastado) vale a regra antiga. Era o F6 do teste, "nao
+      // consertado" desde 05/11.
+      if (lead.col_plat != null && lead.col_plat !== '' && _colCanon(lead.col_plat) === _colCanon(_alvo)) continue;
       if (!Array.isArray(lead.hist)) lead.hist = [];
       lead.hist.push({ from: lead.col || '—', to: _alvo, who: 'five', time: _agoraISO, note: 'rastreio: ' + String(lead.ship || '') });
       lead.col = _alvo;

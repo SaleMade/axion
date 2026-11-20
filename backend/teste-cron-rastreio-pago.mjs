@@ -16,7 +16,13 @@
 //  Pago com nota (antes ficava preso);   F9 Pagos ARQUIVADO: continua no arquivo, com a nota;
 //  toda troca de coluna feita pelo cron tem hist (who 'five', time ISO);
 //  2a batida (a Five reenviou tudo): NENHUMA nota duplica e o estado NAO e regravado.
-// F6 (reenvio do mesmo status desfazendo um arrasto manual) NAO esta consertado aqui: so e mostrado.
+// F6 (reenvio do mesmo status desfazendo um arrasto manual): CONSERTADO em 20/11/2026. O que o selo
+//  pede ja e o col_plat (a ultima coluna que a plataforma decidiu), entao nao e novidade e o card fica
+//  onde a pessoa pos, sem nota e sem regravar.
+// F10 o caso do Bryan: entregue que o cobrador pos em Requer Atencao; a PayLog manda "Pedido Furtado"
+//  (a five_orders continua DELIVERED, so o updated_at sobe) e o card NAO volta pra Cobranca.
+// F11 arrasto manual + sinal NOVO que so chegou pela five_orders (webhook perdido): passa por cima.
+// F12 card em Requer Atencao SEM col_plat (nunca arrastado): regra antiga, segue o selo.
 // Uso:
 //   npx wrangler deploy --dry-run --outdir <dir>
 //   node teste-cron-rastreio-pago.mjs <dir>/worker.js
@@ -73,6 +79,15 @@ const L = {
   voltando:  lead({ five_id: 'F7', col: 'Pago', spg: 'Pago', ship: 'IN_TRANSIT_TO_DELIVERY', col_plat: 'Pago', hist: histPago() }),
   // F8: pago so pelo spg (PAGO ANTES DE CHEGAR), card em Rota de Entrega, a entrega so chegou pelo rastreio.
   ruaPagoEnt: lead({ five_id: 'F8', col: 'Rota de Entrega', spg: 'Pago', ship: 'IN_TRANSIT_TO_DELIVERY', col_plat: 'Rota de Entrega' }),
+  // F10: o caso de 19 e 20/11. Entregue (col_plat Cobrança), o cobrador pos em Requer Atenção pelo app
+  // (who 'kanban:<id>'), e a PayLog avisa "Pedido Furtado": a five_orders segue DELIVERED, so o updated_at sobe.
+  cobAtencao: lead({ five_id: 'PL-F10', col: 'Requer Atenção', ship: 'DELIVERED', col_plat: 'Cobrança', tags: ['sys-vencido'], cob: 'cobrador_x',
+    hist: [{ from: 'Rota de Entrega', to: 'Cobrança', who: 'five', time: new Date(Date.now() - 11 * 86400e3).toISOString() }, { from: 'Cobrança', to: 'Requer Atenção', who: 'kanban:cobrador_x', time: new Date(Date.now() - 86400e3).toISOString() }] }),
+  // F11: mesmo arrasto manual, mas a plataforma disse coisa NOVA (devolvido) e o webhook se perdeu.
+  manualNovo: lead({ five_id: 'PL-F11', col: 'Requer Atenção', ship: 'DELIVERED', col_plat: 'Cobrança', cob: 'cobrador_x',
+    hist: [{ from: 'Cobrança', to: 'Requer Atenção', who: 'kanban:cobrador_x', time: new Date(Date.now() - 86400e3).toISOString() }] }),
+  // F12: em Requer Atenção sem col_plat (ninguem arrastou; card antigo): a entrega chegou so pelo rastreio.
+  semPlat:   lead({ five_id: 'F12', col: 'Requer Atenção', ship: 'NOT_DELIVERED' }),
 }
 // F9: pedido PAGOS que mora no ARQUIVO de leads (linha em geracao 1), e a Five toca a five_orders dele.
 const arquivado = lead({ five_id: 'F9', col: 'Pagos', spg: 'Pago', ship: 'IN_TRANSIT_TO_DELIVERY', col_plat: 'Retirada', hist: histPago() })
@@ -80,7 +95,7 @@ const linha = '{"_arq":1,"chips":[],"pressels":[],"leads":[' + Object.values(L).
 sq.prepare('INSERT INTO dashboard_state (id,data,version,updated_at,updated_by) VALUES (1,?,7,0,?)').run(linha, 'teste')
 sq.prepare('INSERT INTO leads_arquivo (id, json, col, ts) VALUES (?,?,?,?)').run(arquivado.id, JSON.stringify(arquivado), 'Pagos', agora - 30 * 86400)
 
-const fo = (id, ship, ev, upd) => sq.prepare('INSERT INTO five_orders (order_id, shipping_status, last_event, created_at, updated_at) VALUES (?,?,?,?,?)').run(id, ship, ev, agora - 86400, upd)
+const fo = (id, ship, ev, upd, st) => sq.prepare('INSERT INTO five_orders (order_id, shipping_status, last_event, last_status, created_at, updated_at) VALUES (?,?,?,?,?,?)').run(id, ship, ev, st || null, agora - 86400, upd)
 fo('PL-F1', 'IN_TRANSIT_TO_DELIVERY', 'CHARGE_UPDATED', agora - 50)   // o proprio postback da Payt sobe o updated_at
 fo('F2', 'READY_FOR_PICKUP', 'SHIPPING_UPDATE', agora - 49)
 fo('F3', 'RETURNED', 'SHIPPING_UPDATE', agora - 48)
@@ -90,6 +105,9 @@ fo('F6', 'IN_TRANSIT_TO_DELIVERY', 'SHIPPING_UPDATE', agora - 45)   // reenvio: 
 fo('F7', 'RETURNING_TO_ORIGIN', 'SHIPPING_UPDATE', agora - 44)
 fo('F8', 'DELIVERED', 'SHIPPING_UPDATE', agora - 43)
 fo('F9', 'IN_TRANSIT_TO_DELIVERY', 'CHARGE_UPDATED', agora - 42)
+fo('PL-F10', 'DELIVERED', 'SHIPPING_UPDATE', agora - 41, 'Pedido Furtado')   // como ficou a linha real em 20/11 09:00
+fo('PL-F11', 'RETURNED', 'SHIPPING_UPDATE', agora - 40, 'Pedido Devolvido')
+fo('F12', 'DELIVERED', 'SHIPPING_UPDATE', agora - 39)
 
 const fonte = readFileSync(bundle, 'utf8').replace(/^import\s*\{([^}]*)\}\s*from\s*['"]cloudflare:[^'"]+['"];?/gm,
   (m, nomes) => nomes.split(',').map((x) => x.trim()).filter(Boolean)
@@ -131,6 +149,7 @@ console.log('\nBATIDA 1 (gravacoes do estado: ' + gravacoes.join(', ') + ' | lin
 const m = (k) => { const d = A.por[antes[k].five_id]; return d ? `${antes[k].col} -> ${d.col} (col_plat ${antes[k].col_plat} -> ${d.col_plat}, ship ${d.ship}, hist ${antes[k].hist.length} -> ${d.hist.length}${d.__arquivado ? ', no arquivo' : ''})` : 'SUMIU' }
 for (const k of Object.keys(antes)) console.log('  ' + k.padEnd(11) + m(k))
 const f1 = A.por['PL-F1'], f2 = A.por.F2, f3 = A.por.F3, f4 = A.por.F4, f5 = A.por.F5, f6 = A.por.F6, f7 = A.por.F7, f8 = A.por.F8, f9 = A.por.F9
+const f10 = A.por['PL-F10'], f11 = A.por['PL-F11'], f12 = A.por.F12
 diz(gravacoes.filter((g) => g === 'cron:rastreio').length === 1, 'o estado foi gravado UMA vez, como cron:rastreio', gravacoes.join(','))
 diz(f1.col === 'Pago' && f1.col_plat === 'Rota de Entrega', 'F1 incidente: pago em Pago FICA em Pago; col_plat guarda o que a Five disse (Rota de Entrega)', JSON.stringify({ col: f1.col, col_plat: f1.col_plat }))
 diz(f1.hist.length === 3 && ult(f1).who === 'five' && ult(f1).from === 'Pago' && ult(f1).to === 'Pago' && ult(f1).note === 'rastreio disse Rota de Entrega; o card fica em Pago (pedido pago fica em Pagos)' && ehISO(ult(f1).time), 'F1: UMA nota no hist explicando (who five, time ISO)', JSON.stringify(ult(f1)))
@@ -141,7 +160,11 @@ diz(f2.col === 'Pagos' && f2.col_plat === 'Retirada' && f2.hist.length === 2, 'F
 diz(f3.col === 'Pago' && f3.col_plat === 'Devolvido' && f3.hist.length === 3 && /rastreio disse Devolvido; o card fica em Pago/.test(ult(f3).note), 'F3 Pago + RETURNED: NAO vai pra perda, nota no hist, col_plat Devolvido', JSON.stringify({ col: f3.col, col_plat: f3.col_plat, nota: ult(f3).note }))
 diz(f4.col === 'Pago' && f4.col_plat === 'Cobrança' && f4.hist.length === 2, 'F4 Pago + DELIVERED: fica, hist intacto (sem nota a cada reenvio)', JSON.stringify({ col: f4.col, hist: f4.hist.length }))
 diz(f5.col === 'Rota de Entrega' && f5.col_plat === 'Rota de Entrega' && f5.hist.length === 1 && ult(f5).from === 'Enviado' && ult(f5).to === 'Rota de Entrega' && ult(f5).who === 'five' && ult(f5).note === 'rastreio: IN_TRANSIT_TO_DELIVERY' && ehISO(ult(f5).time), 'F5 nao pago anda pra Rota de Entrega COM hist (who five, note rastreio: <ship>, time ISO)', JSON.stringify(ult(f5)))
-console.log('  F6 (reenvio x arrasto manual, NAO consertado aqui): ' + m('manual'))
+diz(f6.col === 'Enviado' && f6.col_plat === 'Rota de Entrega' && f6.hist.length === 1 && f6.ship === 'IN_TRANSIT_TO_DELIVERY', 'F6 arrasto manual + reenvio do MESMO status: o card fica onde a pessoa pos, sem nota', m('manual'))
+diz(f10.col === 'Requer Atenção' && f10.col_plat === 'Cobrança' && f10.ship === 'DELIVERED' && f10.hist.length === 2 && ult(f10).who === 'kanban:cobrador_x', 'F10 caso do Bryan: entregue em Requer Atenção + "Pedido Furtado" na five_orders NAO volta pra Cobrança (hist intacto)', m('cobAtencao'))
+diz(Array.isArray(f10.tags) && f10.tags.join() === 'sys-vencido' && f10.cob === 'cobrador_x', 'F10: etiqueta e cobrador intactos')
+diz(f11.col === 'Devolvido' && f11.col_plat === 'Devolvido' && f11.ship === 'RETURNED' && f11.hist.length === 2 && ult(f11).who === 'five' && ult(f11).from === 'Requer Atenção' && ult(f11).to === 'Devolvido' && ult(f11).note === 'rastreio: RETURNED', 'F11 arrasto manual + sinal NOVO (devolvido, webhook perdido): a plataforma passa por cima, com hist', m('manualNovo'))
+diz(f12.col === 'Cobrança' && f12.col_plat === 'Cobrança' && f12.ship === 'DELIVERED' && f12.hist.length === 1 && ult(f12).note === 'rastreio: DELIVERED', 'F12 Requer Atenção SEM col_plat (nunca arrastado): segue o selo, como antes', m('semPlat'))
 diz(f7.col === 'Pago' && f7.ship === 'RETURNING_TO_ORIGIN' && f7.ship_ts === agora - 44 && f7.hist.length === 2, 'F7 Pago + RETURNING_TO_ORIGIN: so o selo muda (ship_ts = updated_at), coluna e hist ficam', JSON.stringify({ col: f7.col, ship: f7.ship, hist: f7.hist.length }))
 diz(f8.col === 'Pago' && f8.col_plat === 'Cobrança' && f8.ship === 'DELIVERED' && f8.hist.length === 1 && ult(f8).from === 'Rota de Entrega' && ult(f8).to === 'Pago' && ult(f8).who === 'five' && ult(f8).note === 'entregue e ja estava pago: foi pra Pago em vez de Cobrança', 'F8 spg Pago em Rota de Entrega + DELIVERED: vai pra Pago com nota (antes ficava preso)', JSON.stringify({ col: f8.col, col_plat: f8.col_plat, ult: ult(f8) }))
 diz(!!f9 && f9.__arquivado === true && f9.col === 'Pagos' && f9.__colArq === 'Pagos' && !A.naLinha.some((l) => l.five_id === 'F9'), 'F9 Pagos ARQUIVADO: continua em Pagos e continua no arquivo (nao volta pro Kanban ativo)', JSON.stringify({ arquivado: f9 && f9.__arquivado, col: f9 && f9.col }))
@@ -163,7 +186,8 @@ const B = foto()
 console.log('\nBATIDA 2, reenvio da Five (gravacoes: ' + gravacoes.slice(nGrav).join(', ') + ' | linha v' + B.row.version + ')')
 diz(gravacoes.length === nGrav && B.row.version === A.row.version, 'nada mudou: o estado NAO foi regravado (versao igual)', 'v' + A.row.version + ' -> v' + B.row.version)
 const duplicou = Object.keys(antes).filter((k) => JSON.stringify(B.por[antes[k].five_id].hist) !== histAntes[k])
-diz(duplicou.length === 0, 'nenhuma nota duplicou no hist (os 9 pedidos iguais)', duplicou.join(','))
+diz(duplicou.length === 0, 'nenhuma nota duplicou no hist (os ' + Object.keys(antes).length + ' pedidos iguais)', duplicou.join(','))
+diz(B.por['PL-F10'].col === 'Requer Atenção' && B.por.F6.col === 'Enviado', 'e os dois arrastos manuais (F6 e F10) continuam onde a pessoa pos depois do reenvio')
 const wm = sq.prepare("SELECT value FROM app_config WHERE key='rastreio_wm'").get()
 diz(!!wm && Number(wm.value) === agora + 10, 'e a marca d agua do rastreio avancou mesmo assim', JSON.stringify(wm))
 diz(B.por.F9 && B.por.F9.__arquivado === true && B.arq.length === 1, 'F9 continua no arquivo', JSON.stringify(B.arq.map((a) => a.id + ':' + a.col)))
