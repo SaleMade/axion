@@ -10433,50 +10433,154 @@ async function handlePostState(req, env) {
 // Procura nos dois lugares. Pedido encerrado e parado ha 7 dias mora na `leads_arquivo` (memoria
 // arquivo-de-leads), e e justamente la que estao os "ja foi roubado, frustrado ou pago antes" que
 // motivaram o pedido: olhar so o blob responderia "nunca pediu" pra quem pediu mes passado.
-async function handleMesmoCpf(req, env) {
-  const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
-  const cpf = String(new URL(req.url).searchParams.get('cpf') || '').replace(/\D/g, '');
-  if (cpf.length !== 11) return json({ ok: true, cpf: '', achados: [] });
-  // So o mundo de quem pergunta: o afiliado nunca ve pedido da casa, nem o contrario.
-  const mundo = noMundoAfiliado(u) ? String(aflDe(u) || '') : '';
-  if (afiliadoSemVinculo(u)) return json({ ok: true, cpf, achados: [] });
-  // o `replace` encadeado tira pontuacao do CPF gravado (uns vem "000.000.000-00", outros so digito)
+//
+// TAMBEM PELO WHATSAPP, E DIZENDO O QUE FOI CADA PEDIDO (20/11/2026). O Jose Lourenco foi vendido
+// duas vezes: o Guilherme em 05/11 e, com o primeiro ja na agencia dos Correios, o Kevin em 17/11
+// (o cliente ligou no numero dele). O Kevin cadastrou com OUTRO CPF, valido, e o aviso ficou mudo:
+// so procurava CPF. Dois fretes pro mesmo cliente. O Bruno: "toda vez que algum cliente tem um
+// historico ruim, ja roubou um pedido, ja teve um pedido frustrado (...) caso seja um outro vendedor,
+// ele seja avisado". Agora casa CPF OU telefone (os 8 ultimos digitos, que sao os mesmos com ou sem
+// o nono, e o DDD quando os dois lados tem), e cada achado diz o tipo: 'andamento' (o pedido ainda
+// esta no caminho: o risco e frete em dobro), 'ruim' (frustrado, roubo, devolvido, retornado),
+// 'pago' e 'cancelado'; mais o nome de quem vendeu. Continua so AVISANDO: segunda compra pra outra
+// pessoa da casa existe, e quem decide e quem esta olhando.
+const _CLI_RUIM = ['Frustrados', 'Roubos', 'Devolvido com Reverso', 'Retornado'];
+const _CLI_COL_LBL = { 'Entregues': 'Cobrança', 'Enviados': 'Enviado', 'Devolvido com Reverso': 'Devolvido', 'Cancelado sem Custo': 'Cancelado' };
+const _cliFone = (v) => { let d = String(v == null ? '' : v).replace(/\D/g, ''); if (d.length >= 12 && d.startsWith('55')) d = d.slice(2); return d; };
+const _cliF8 = (v) => { const d = _cliFone(v); return d.length >= 8 ? d.slice(-8) : ''; };
+const _cliDdd = (v) => { const d = _cliFone(v); return (d.length === 10 || d.length === 11) ? d.slice(0, 2) : ''; };
+const _cliCpf = (v) => { const d = String(v == null ? '' : v).replace(/\D/g, ''); return d.length === 11 ? d : ''; };
+// A perda vem antes do pago de proposito: pedido pago que depois voltou (devolvido, roubo) e
+// historico ruim, nao "cliente que pagou".
+function _cliTipo(l) {
+  const c = _botColDe(l);
+  if (_CLI_RUIM.includes(c)) return 'ruim';
+  if (c === 'Cancelado sem Custo') return 'cancelado';
+  if (_ehPago(l) || c === 'Pagos') return 'pago';
+  return 'andamento';
+}
+function _cliColLbl(l, tipo) {
+  const c = _botColDe(l);
+  if (tipo === 'andamento' && !l.aceito && (c === 'A Enviar' || !c)) return 'Esperando aceite';
+  return _CLI_COL_LBL[c] || c || 'sem etapa';
+}
+// Os pedidos (quadro + arquivo) cujo CPF esta em `cpfs` ou cujo telefone (wa ou tel) termina num dos
+// `f8s`. O filtro grosso e no SQL; o fino (DDD, mundo) fica pra quem chama, que sabe quem procura.
+async function _cliPedidos(env, cpfs, f8s) {
+  if (!cpfs.length && !f8s.length) return [];
+  // o `replace` encadeado tira a pontuacao (uns vem "000.000.000-00" ou "(98) 98462-...", outros so digito)
   const soDigito = (col) => "replace(replace(replace(replace(COALESCE(" + col + ",''),'.',''),'-',''),' ',''),'/','')";
-  const achados = [];
-  const poe = (r) => {
-    if (!r) return;
-    if (String(r.afl || '') !== mundo) return;
-    achados.push({
-      id: String(r.id == null ? '' : r.id), nome: String(r.nome || ''), wa: String(r.wa || ''),
-      cidade: String(r.cidade || ''), uf: String(r.uf || ''), col: String(r.col || ''),
-      vl: Number(r.vl) || 0, at: String(r.at || ''), arquivado: !!r.arquivado,
-      ts: Number(r.ts) || Math.floor((Number(r.id) || 0) / 1000) || 0,
-    });
-  };
+  const soFone = (col) => "replace(replace(replace(replace(replace(replace(COALESCE(" + col + ",''),'(',''),')',''),' ',''),'-',''),'+',''),'.','')";
   const campos = (v) => "json_extract(" + v + ",'$.id') AS id, json_extract(" + v + ",'$.nome') AS nome,"
-    + " json_extract(" + v + ",'$.wa') AS wa, json_extract(" + v + ",'$.cidade') AS cidade,"
-    + " json_extract(" + v + ",'$.uf') AS uf, json_extract(" + v + ",'$.col') AS col,"
-    + " json_extract(" + v + ",'$.vl') AS vl, json_extract(" + v + ",'$.at') AS at,"
+    + " json_extract(" + v + ",'$.wa') AS wa, json_extract(" + v + ",'$.tel') AS tel, json_extract(" + v + ",'$.cpf') AS cpf,"
+    + " json_extract(" + v + ",'$.cidade') AS cidade, json_extract(" + v + ",'$.uf') AS uf,"
+    + " json_extract(" + v + ",'$.col') AS col, json_extract(" + v + ",'$.spg') AS spg, json_extract(" + v + ",'$.aceito') AS aceito,"
+    + " json_extract(" + v + ",'$.vl') AS vl, json_extract(" + v + ",'$.at') AS at, json_extract(" + v + ",'$.data') AS data,"
     + " json_extract(" + v + ",'$.ts') AS ts, COALESCE(json_extract(" + v + ",'$.afl'),'') AS afl";
+  const filtro = (v) => '(' + soDigito("json_extract(" + v + ",'$.cpf')") + ' IN (SELECT value FROM json_each(?))'
+    + ' OR substr(' + soFone("json_extract(" + v + ",'$.wa')") + ',-8) IN (SELECT value FROM json_each(?))'
+    + ' OR substr(' + soFone("json_extract(" + v + ",'$.tel')") + ',-8) IN (SELECT value FROM json_each(?)))';
+  const pc = JSON.stringify(cpfs), pf = JSON.stringify(f8s);
+  const out = [];
   try {
     const r1 = await env.DB.prepare(
       'SELECT ' + campos('j.value') + ', 0 AS arquivado'
       + " FROM dashboard_state s, json_each(json_extract(s.data,'$.leads')) j"
-      + ' WHERE s.id = 1 AND ' + soDigito("json_extract(j.value,'$.cpf')") + ' = ?'
-    ).bind(cpf).all();
-    for (const r of ((r1 && r1.results) || [])) poe(r);
+      + ' WHERE s.id = 1 AND ' + filtro('j.value')
+    ).bind(pc, pf, pf).all();
+    for (const r of ((r1 && r1.results) || [])) out.push(r);
   } catch (_) { /* sem json_each: devolve o que der */ }
   try {
     const r2 = await env.DB.prepare(
-      'SELECT ' + campos('json') + ', 1 AS arquivado'
-      + ' FROM leads_arquivo WHERE ' + soDigito("json_extract(json,'$.cpf')") + ' = ?'
-    ).bind(cpf).all();
-    for (const r of ((r2 && r2.results) || [])) poe(r);
+      'SELECT ' + campos('json') + ', 1 AS arquivado FROM leads_arquivo WHERE ' + filtro('json')
+    ).bind(pc, pf, pf).all();
+    for (const r of ((r2 && r2.results) || [])) out.push(r);
   } catch (_) { /* arquivo ainda nao existe nesta base */ }
+  return out;
+}
+// Das linhas, as que sao deste cliente (`chave` = {cpf, f8, ddd}), deste mundo, menos `exceto`.
+function _cliCasa(linhas, chave, mundo, exceto) {
+  const vistos = new Map();
+  for (const r of linhas) {
+    if (!r || String(r.afl || '') !== mundo) continue;
+    const id = String(r.id == null ? '' : r.id);
+    if (!id || id === String(exceto || '') || vistos.has(id)) continue;
+    const pCpf = !!chave.cpf && _cliCpf(r.cpf) === chave.cpf;
+    const pFone = !!chave.f8 && [r.wa, r.tel].some((x) => {
+      if (_cliF8(x) !== chave.f8) return false;
+      const d = _cliDdd(x);
+      return !chave.ddd || !d || d === chave.ddd;
+    });
+    if (!pCpf && !pFone) continue;
+    const l = { col: r.col, spg: r.spg, aceito: r.aceito === 1 || r.aceito === true || r.aceito === 'true' };
+    const tipo = _cliTipo(l);
+    vistos.set(id, {
+      id, nome: String(r.nome || ''), wa: String(r.wa || r.tel || ''),
+      cidade: String(r.cidade || ''), uf: String(r.uf || ''), col: String(r.col || ''),
+      col_lbl: _cliColLbl(l, tipo), tipo, data: String(r.data || ''),
+      vl: Number(r.vl) || 0, at: String(r.at || ''), arquivado: !!r.arquivado,
+      por: pCpf && pFone ? 'cpf e whatsapp' : (pCpf ? 'cpf' : 'whatsapp'),
+      ts: Number(r.ts) || Math.floor((Number(id) || 0) / 1000) || 0,
+    });
+  }
   // mais novo primeiro, que e o que ajuda a decidir
-  achados.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-  return json({ ok: true, cpf, achados: achados.slice(0, 20) });
+  return [...vistos.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+// O nome de quem vendeu: o vendedor de outro time nao tem a equipe inteira na tela dele.
+async function _cliNomes(env, achados) {
+  const ids = [...new Set(achados.map((a) => a.at).filter(Boolean))];
+  if (!ids.length) return achados;
+  const nomes = {};
+  try {
+    const r = await env.DB.prepare('SELECT id, name FROM users WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).all();
+    for (const x of ((r && r.results) || [])) nomes[String(x.id)] = String(x.name || '');
+  } catch (_) { /* sem nome, o aviso sai igual */ }
+  for (const a of achados) a.at_nome = nomes[a.at] || '';
+  return achados;
+}
+async function handleMesmoCpf(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  const sp = new URL(req.url).searchParams;
+  const cpf = _cliCpf(sp.get('cpf'));
+  const fone = sp.get('fone') || '';
+  const chave = { cpf, f8: _cliF8(fone), ddd: _cliDdd(fone) };
+  if (!chave.cpf && !chave.f8) return json({ ok: true, cpf: '', achados: [] });
+  // So o mundo de quem pergunta: o afiliado nunca ve pedido da casa, nem o contrario.
+  const mundo = noMundoAfiliado(u) ? String(aflDe(u) || '') : '';
+  if (afiliadoSemVinculo(u)) return json({ ok: true, cpf, achados: [] });
+  const linhas = await _cliPedidos(env, cpf ? [cpf] : [], chave.f8 ? [chave.f8] : []);
+  const achados = _cliCasa(linhas, chave, mundo, sp.get('exceto')).slice(0, 20);
+  return json({ ok: true, cpf, achados: await _cliNomes(env, achados) });
+}
+// POST /api/pedido/alertas {itens:[{id, cpf, fone}]} - pra fila das Aceitacoes (20/11/2026).
+// O aceite e o que gera o frete na PayLog, entao e ali o ultimo portao: o pedido do Kevin foi aceito
+// de madrugada sem nada na linha dizendo que o cliente ja tinha um pedido esperando na agencia. Cada
+// pedido da fila volta com os OUTROS pedidos do mesmo cliente que estao em andamento ou que foram
+// perda; o que so tem pedido pago ou cancelado antes nao volta (nao e alerta). Mesma busca do aviso
+// do Novo Pedido, numa consulta so pra fila inteira.
+async function handlePedidoAlertas(req, env) {
+  const u = await authUser(req, env);
+  if (!u) return err('Não autenticado', 401);
+  if (afiliadoSemVinculo(u)) return json({ ok: true, alertas: {} });
+  const mundo = noMundoAfiliado(u) ? String(aflDe(u) || '') : '';
+  let body = {};
+  try { body = await req.json(); } catch (_) { /* corpo vazio */ }
+  const itens = (Array.isArray(body && body.itens) ? body.itens : []).slice(0, 300).map((x) => ({
+    id: String((x && x.id) == null ? '' : x.id), cpf: _cliCpf(x && x.cpf), f8: _cliF8(x && x.fone), ddd: _cliDdd(x && x.fone),
+  })).filter((x) => x.id && (x.cpf || x.f8));
+  if (!itens.length) return json({ ok: true, alertas: {} });
+  const linhas = await _cliPedidos(env, [...new Set(itens.map((x) => x.cpf).filter(Boolean))], [...new Set(itens.map((x) => x.f8).filter(Boolean))]);
+  const alertas = {};
+  const todos = [];
+  for (const it of itens) {
+    const achados = _cliCasa(linhas, it, mundo, it.id).filter((a) => a.tipo === 'andamento' || a.tipo === 'ruim');
+    if (!achados.length) continue;
+    alertas[it.id] = achados.slice(0, 6);
+    todos.push(...alertas[it.id]);
+  }
+  await _cliNomes(env, todos);
+  return json({ ok: true, alertas });
 }
 async function handlePedidoNovo(req, env) {
   const u = await authUser(req, env);
@@ -40539,6 +40643,7 @@ export default {
       if (req.method === 'POST'  && path === '/api/state')   return handlePostState(req, env);
       if (req.method === 'POST'  && path === '/api/pedido/novo') return handlePedidoNovo(req, env);
       if (req.method === 'GET'   && path === '/api/pedido/mesmo-cpf') return handleMesmoCpf(req, env);
+      if (req.method === 'POST'  && path === '/api/pedido/alertas') return handlePedidoAlertas(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/save')   return handlePresselSave(req, env);
       if (req.method === 'POST'  && path === '/api/pressel/domains/detect') return handleDomainsDetect(req, env);
       if (req.method === 'POST'  && path === '/api/tt/reenviar')             return handleTtReenviar(req, env);
