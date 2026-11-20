@@ -2569,6 +2569,26 @@ const doHeynan = (texto, extra) => ({ ...pacote({ jid: GC, de_jid: '552499213866
   conf(/^raio-x · /.test(r.motivo) && !/Nenhum pedido encontrado/.test(u) && !/Placar e fila ficaram de fora/.test(u), 'o motivo leva a marca do raio-x; nada de "nenhum pedido encontrado" nem de "placar ficou de fora" junto');
   conf(/Heynan É da direção: nunca diga "já avisei a direção"/.test(u) && m.pushes.length === 0 && !r.alerta, 'a direcao contestando um numero nao e problema: a IA e avisada e o aviso que ela pedir NAO sai');
   conf(/RAIO-X DA OPERAÇÃO: quando vier nos DADOS/.test(m.chamadas[0].system), 'o prompt ensina a responder pelo raio-x');
+  // medido ao vivo em 19/11: o Heynan (direcao) perguntou da fila e a IA respondeu com a do Haynan (cobrador)
+  conf(/ATENÇÃO AOS NOMES: quem perguntou é Heynan Dantas \(diretor\)\. NÃO é Haynan \(cobrador\)/.test(u) && /Heynan \(quem perguntou\) é da direção: pra ele "a fila", "os pedidos" e "o total" são os da CASA inteira/.test(u), 'nome quase igual (Heynan da direcao, Haynan cobrador): os DADOS avisam que sao duas pessoas e que pra direcao a fila e a da casa');
+  conf(/Quem soma só "Em cobrança" e "Atrasados" chega em 2: os 1 que faltam pra 3 são os sem retorno marcado/.test(u), 'a conta que ele fez no grupo (em cobranca + atrasados nao fecha) ja vem explicada');
+  await m.api._botIaResponder(m.env, cfg, doBryan('@Barbadinho quantos pedidos pagaram hoje?'));
+  conf(!/ATENÇÃO AOS NOMES/.test(m.chamadas[1].user), 'quem nao tem nome parecido com ninguem nao recebe o aviso');
+}
+{
+  // PERGUNTA DE QUANTIDADE com nome de gente do time: os clientes parecidos pelo nome ficam de fora; e a comparacao de periodos
+  const leads = [...JSON.parse(JSON.stringify(RX_LEADS)), { id: 7101, nome: 'Guilherme Souza Prado', cidade: 'Itu', uf: 'SP', col: 'Entregues', at: KEVIN, cob: BRYAN, vl: 497, ts: hb('01', '09:00') }, { id: 7102, nome: 'Guilherme Antunes Lima', cidade: 'Itu', uf: 'SP', col: 'Entregues', at: KEVIN, cob: BRYAN, vl: 497, ts: hb('01', '09:10') }];
+  const m = monta(rxMundo({ leads, ia: [JSON_OK] }));
+  const cfg = cfgDe(m.api, RX_CFG);
+  let r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho quantos pedidos o Guilherme fez ontem?'));
+  conf(!/PEDIDO AMBÍGUO/.test(m.chamadas[0].user) && /RAIO-X/.test(m.chamadas[0].user) && r.viu.some((x) => /^ignorou 2 parecidos pelo nome/.test(x)), '"quantos pedidos o Guilherme fez ontem?": os dois clientes chamados Guilherme nao viram "pedido ambiguo" (so o raio-x)');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho o pedido do Guilherme Souza Prado chegou?'));
+  conf(/Pedido (encontrado|PROVÁVEL)/.test(m.chamadas[1].user) && !/RAIO-X DA OPERAÇÃO \(a casa/.test(m.chamadas[1].user), 'ja a pergunta de UM pedido pelo nome do cliente continua achando o pedido, sem raio-x');
+  r = await m.api._botIaResponder(m.env, cfg, doHeynan('@Barbadinho como foi a semana passada comparada com essa?'));
+  const u = m.chamadas[2].user;
+  conf(/RAIO-X/.test(u) && /semana passada \(26\/10 a 01\/11\)/.test(u) && /esta semana \(desde segunda, 02\/11\)/.test(u), '"como foi a semana passada comparada com essa?": o raio-x entra (pergunta geral com periodo) com as DUAS semanas lado a lado');
+  r = await m.api._botIaResponder(m.env, cfg, pacote({ texto: '@Barbadinho como foi teu fim de semana?', menciona: true }));
+  conf(!/RAIO-X/.test(m.chamadas[3].user), '"como foi teu fim de semana?" e papo: sem raio-x');
 }
 {
   // quem contesta sem ponto de interrogacao continua com o raio-x, e nao cai na conta das seguidas

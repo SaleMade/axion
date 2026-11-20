@@ -16017,6 +16017,34 @@ function _botSabePeriodo(cru, agoraMs) {
   return null;
 }
 
+// Dois primeiros nomes que se confundem (Heynan e Haynan): mesmo tamanho ou um de diferenca, e uma letra so de distancia.
+function _botSabeNomeParecido(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (a === b || a.length < 4 || b.length < 4 || Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) { let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d === 1; }
+  const [c, l] = a.length < b.length ? [a, b] : [b, a];
+  for (let i = 0; i < l.length; i++) if (l.slice(0, i) + l.slice(i + 1) === c) return true;
+  return false;
+}
+// OS PERIODOS DE COMPARACAO: quem fala de "semana" ve esta e a passada lado a lado; quem fala de "mes", este e o passado
+// ("como foi a semana passada comparada com essa?", medido ao vivo em 19/11: so um dos dois periodos ia pros DADOS).
+function _botSabeExtras(cru, agoraMs) {
+  const t = ' ' + _botSabeSemAcento(cru).replace(/[^a-z0-9\/\s-]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  const hoje = _botSabeDiaDe(agoraMs);
+  const P = (de, ate, rot) => ({ ini: _botSabeIniDia(de), fim: _botSabeIniDia(_botDiaMais(ate > hoje ? hoje : ate, 1)), rot });
+  const out = [];
+  if (/ semanas? | semanal /.test(t)) {
+    const sem = _botSemanaDe(hoje);
+    const de = _botDiaMais(sem.inicio, -7), ate = _botDiaMais(de, 6);
+    out.push(P(sem.inicio, hoje, 'esta semana (desde segunda, ' + _botSabeCurto(sem.inicio) + ')'));
+    out.push(P(de, ate, 'semana passada (' + _botSabeCurto(de) + ' a ' + _botSabeCurto(ate) + ')'));
+  }
+  if (/ mes | meses | mensal /.test(t)) {
+    const ate = _botDiaMais(hoje.slice(0, 8) + '01', -1), de = ate.slice(0, 8) + '01';
+    out.push(P(de, ate, 'mês passado (' + BOT_SABE_MESES_TXT[Number(de.slice(5, 7)) - 1] + ')'));
+  }
+  return out;
+}
 // A entrada do card numa coluna pelo historico: a primeira (`primeira`) ou a ultima. 0 = o historico nao tem (pedido
 // encerrado guarda so os ultimos movimentos, ver _trimBlobData).
 function _botSabeEntrou(l, colId, primeira) {
@@ -16184,7 +16212,7 @@ function _botSabeAnuncioDe(base, p) {
   return Math.max(0, v);
 }
 // A BASE de uma resposta: os periodos (os de sempre mais o pedido na mensagem), as linhas, o movimento de cada um e o agora.
-async function _botSabeBase(env, st, agoraMs, pedido, comDinheiro) {
+async function _botSabeBase(env, st, agoraMs, pedido, comDinheiro, extras) {
   const hoje = _botSabeDiaDe(agoraMs);
   const hojeIni = _botSabeIniDia(hoje), amanhaIni = hojeIni + 86400000;
   const dia1 = hoje.slice(0, 8) + '01';
@@ -16199,6 +16227,8 @@ async function _botSabeBase(env, st, agoraMs, pedido, comDinheiro) {
     foco = pers.find((p) => p.ini === pedido.ini && p.fim === pedido.fim) || null;
     if (!foco) { foco = { k: 'pedido', rot: pedido.rot, ini: pedido.ini, fim: pedido.fim }; pers.push(foco); }
   }
+  // os periodos de comparacao que a mensagem pede ("a semana passada comparada com essa"): entram junto, sem repetir
+  for (const e of (Array.isArray(extras) ? extras : [])) if (e && !pers.some((p) => p.ini === e.ini && p.fim === e.fim)) pers.push({ k: 'x' + pers.length, rot: e.rot, ini: e.ini, fim: e.fim });
   const fimAnt = _botDiaMais(dia1, -1), iniAnt = fimAnt.slice(0, 8) + '01';
   const mesPassado = { k: 'mesPassado', rot: 'mês passado (' + BOT_SABE_MESES_TXT[Number(iniAnt.slice(5, 7)) - 1] + ')', ini: _botSabeIniDia(iniAnt), fim: _botSabeIniDia(dia1) };
   const janela = agoraMs - BOT_SABE_JANELA_MS;
@@ -16223,7 +16253,11 @@ const BOT_SABE_CONTESTA_RE = /\b(\d+ pedidos?|faltando|nao bate|nao fecha|estran
 const BOT_SABE_EXPLICA_RE = /\b(o que (e|eh|significa|quer dizer|conta|entra|sao)|significa|quer dizer|como (e|eh|foi) (calculad|contad|feit)\w*|como (conta|calcula|chega)|inclu\w*|contando|entra[m]? (n|em)|por ?que|pq|estranh\w*|errad\w*|nao bate|nao fecha|faltando|zoad\w*|diferenc\w*|entend\w*)\b/;
 const BOT_SABE_DINHEIRO_RE = /\b(fatur\w*|lucro|receita|valor(es)?|reais|dinheiro|grana|quanto (entrou|vendemos|recebemos|gastamos|faturamos|foi gasto|deu)|invest\w*|gast\w*|custos?|cpa|cpl|roas|ticket|comiss\w*|a receber|trafego|anuncios?)\b/;
 // "numero" e "chip" so ligam pra direcao (o retrato dos numeros da casa): "meu numero caiu?" do vendedor ja tem resposta propria.
-const _botSabeLiga = (tn, pergunta, chefe) => (BOT_SABE_ASSUNTO_RE.test(tn) || (chefe && /\b(numeros?|chips?)\b/.test(tn))) && (pergunta || BOT_SABE_QUER_RE.test(tn) || BOT_SABE_CONTESTA_RE.test(tn));
+// Com um PERIODO na mensagem, a pergunta geral tambem liga ("como foi a semana passada comparada com essa?").
+const BOT_SABE_GERAL_RE = /\b(como (foi|ta|tao|esta|estao|estamos|fomos|anda|andam|vai|vamos|ficou|fechou|fechamos)|compar\w*|desempenho|resultados?|movimento|melhor|pior)\b/;
+const _botSabeLiga = (tn, pergunta, chefe, temPeriodo) => (BOT_SABE_ASSUNTO_RE.test(tn) || (chefe && /\b(numeros?|chips?)\b/.test(tn)) || (!!temPeriodo && BOT_SABE_GERAL_RE.test(tn))) && (pergunta || BOT_SABE_QUER_RE.test(tn) || BOT_SABE_CONTESTA_RE.test(tn));
+// Palavra de QUANTIDADE: a pergunta e de numero, nao de um pedido (os parecidos pelo nome que a busca achar ficam de fora).
+const BOT_SABE_QTD_RE = /\b(quant[oa]s?|total|totais|taxa|leads?|convers\w*|metricas?|gast\w*|anuncios?|custos?|fatur\w*|lucro|vendemos|recebemos)\b/;
 // Palavra de CONTA: com ela o raio-x entra mesmo quando a busca achou um pedido pelo nome ("quantos pedidos do Bryan pagaram?").
 const BOT_SABE_CONTA_RE = /\b(quant[oa]s?|total|totais|numeros?|taxa|fila|falt\w*|por ?que|pq|relatorio|resumo|leads?|convers\w*|metricas?|soma|somando)\b/;
 
@@ -16262,16 +16296,17 @@ function _botSabeTexto(base, c) {
   L.push('- Cancelados: ' + cada((m) => m.cancelados));
   if (base.leads && base.leads.ok) L.push('- Leads novos (conversas que chegaram nos números dos vendedores): ' + cada((m, p) => { const n = _botSabeLeadsDe(base, p); return n == null ? 'sem dado' : n + (n > 0 ? ' (' + pct(vendasVend(m), n) + ' viraram pedido)' : ''); }));
   L.push('AGORA (pedidos em aberto, cada um na etapa em que está): ' + etapasTxt(a) + '. Total em aberto: ' + a.abertos + '.');
-  L.push('FILA DA COBRANÇA (é a linha "Faltam cobrar" do resumo): ' + filaTxt(a.fila) + '. Entra todo pedido que o cliente já recebeu (ou que está na agência) e ainda não foi marcado como pago. Preparando, enviados, saiu pra entrega e requer atenção NÃO entram: são ' + a.caminho + ' ainda a caminho. Dos ' + a.fila.n + ' da fila: ' + sitTxt(a.fila) + ' (' + a.fila.combinado + ' + ' + a.fila.atrasado + ' + ' + a.fila.sem + ' = ' + a.fila.n + '). Chamar o cliente ou marcar retorno NÃO tira o pedido da fila, só passa pra "Em cobrança": ele só sai quando é marcado como pago ou vira perda.');
+  L.push('FILA DA COBRANÇA (é a linha "Faltam cobrar" do resumo): ' + filaTxt(a.fila) + '. Entra todo pedido que o cliente já recebeu (ou que está na agência) e ainda não foi marcado como pago. Preparando, enviados, saiu pra entrega e requer atenção NÃO entram: são ' + a.caminho + ' ainda a caminho. Dos ' + a.fila.n + ' da fila: ' + sitTxt(a.fila) + ' (' + a.fila.combinado + ' + ' + a.fila.atrasado + ' + ' + a.fila.sem + ' = ' + a.fila.n + ').' + (a.fila.sem > 0 ? ' Quem soma só "Em cobrança" e "Atrasados" chega em ' + (a.fila.combinado + a.fila.atrasado) + ': os ' + a.fila.sem + ' que faltam pra ' + a.fila.n + ' são os sem retorno marcado, que o resumo não mostra em linha própria.' : '') + ' Chamar o cliente ou marcar retorno NÃO tira o pedido da fila, só passa pra "Em cobrança": ele só sai quando é marcado como pago ou vira perda.');
   const cobIds = Object.keys(a.filaPorCob).sort((x, y) => a.filaPorCob[y].n - a.filaPorCob[x].n);
   if (cobIds.length) L.push('Fila por cobrador (total: em cobrança, atrasados, sem retorno): ' + cobIds.map((id) => { const f = a.filaPorCob[id]; return (nome(id) || (id ? 'outro' : 'sem cobrador')) + ' ' + f.n + ' (' + f.combinado + ', ' + f.atrasado + ', ' + f.sem + ')'; }).join(' · ') + '.');
   L.push('Há quanto tempo os pedidos estão na fila: até 3 dias ' + a.idade[0] + ' · de 4 a 7 dias ' + a.idade[1] + ' · de 8 a 15 dias ' + a.idade[2] + ' · mais de 15 dias ' + a.idade[3] + '.');
-  L.push('TAXA DE PAGAMENTO (a mesma do app: dos pedidos cadastrados no período, só os que já terminaram, isto é, pago, entregue em cobrança, frustrado, devolvido ou roubo; os que ainda estão a caminho ficam de fora): ' + pers[3].rot + ' ' + taxa(mov.mes) + ' · ' + base.mesPassado.rot + ' ' + taxa(mov.mesPassado) + (base.foco && base.foco.k === 'pedido' ? ' · ' + base.foco.rot + ' ' + taxa(mov.pedido) : '') + '.');
-  // por pessoa: hoje, ontem, o mes e o periodo da mensagem
-  const pp = [pers[0], pers[1], pers[3]];
+  L.push('TAXA DE PAGAMENTO (a mesma do app: dos pedidos cadastrados no período, só os que já terminaram, isto é, pago, entregue em cobrança, frustrado, devolvido ou roubo; os que ainda estão a caminho ficam de fora): ' + pers[3].rot + ' ' + taxa(mov.mes) + ' · ' + base.mesPassado.rot + ' ' + taxa(mov.mesPassado) + pers.slice(4).filter((p) => p.ini !== base.mesPassado.ini || p.fim !== base.mesPassado.fim).map((p) => ' · ' + p.rot + ' ' + taxa(mov[p.k])).join('') + '.');
+  // por pessoa: hoje, ontem, o mes e os periodos da mensagem (o pedido e os de comparacao)
+  const pp = [pers[0], pers[1], pers[3], ...pers.slice(4)];
   if (base.foco && !pp.includes(base.foco)) pp.push(base.foco);
   const pri = _botIaPrimeiro(quem.nome) || 'quem perguntou';
   if (chefe) {
+    L.push(pri + ' (quem perguntou) é da direção: pra ele "a fila", "os pedidos" e "o total" são os da CASA inteira, a não ser que diga o nome de alguém' + (a.filaPorCob[quem.id] ? ' (no nome dele mesmo há ' + a.filaPorCob[quem.id].n + ' na fila)' : '') + '.');
     L.push('POR VENDEDOR (pedidos cadastrados e, dos leads que recebeu, quantos % viraram pedido):');
     for (const p of pp) {
       const m = mov[p.k];
@@ -16579,7 +16614,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   // NA SALA DA DIRECAO (19/11/2026) pergunta ou pedido sobre a operacao e com o bot, mesmo sem marcar: a sala existe pra
   // isso. O resto (os socios conversando entre si) segue a regra de sempre.
   const tnOper = _botIaNorm(textoBusca);
-  if (!modo && o.sala && BOT_SABE_ASSUNTO_RE.test(tnOper) && (pergunta || BOT_SABE_QUER_RE.test(tnOper))) modo = 'chamado';
+  if (!modo && o.sala && _botSabeLiga(tnOper, pergunta, true, !!_botSabePeriodo(textoBusca, Date.now()))) modo = 'chamado';
   if (!modo) { res.acao = 'visto'; res.motivo = 'não era pra mim'; return res; }
   // FALANDO COM OUTRA PESSOA (ver _botIaMarcouOutroHaPouco): sem marcar o bot nem chamar ele pelo nome, quem marcou ou
   // chamou outra pessoa esta falando com ela. Vale pro problema, pra festa, pra conversa e pra quem citou o bot.
@@ -16717,6 +16752,13 @@ async function _botIaResponder(env, cfg, b, opts) {
     'Equipe: ' + equipe.map((u) => u.nome + ' (' + (BOT_IA_ROLE_TXT[u.role] || u.role) + ')').join(', ') + '.',
     'aviso_entregue: ' + (pushOk ? 'true' : 'false') + '.',
     ...(quem.id && _botIaLimpoCom(quem.nome) ? ['Com ' + quem.nome.split(' ')[0] + ' a festa e a zoeira são LIMPAS: sem palavrão, sem duplo sentido e sem piada de sexo.'] : []),
+    // NOMES QUASE IGUAIS (19/11/2026, medido ao vivo: o Heynan, da direcao, perguntou da fila e a IA respondeu com a fila
+    // do Haynan, o cobrador): quem perguntou e avisado como outra pessoa.
+    ...(() => {
+      const meu = _botIaNorm(_botIaPrimeiro(quem.nome));
+      const iguais = quem.id ? equipe.filter((u) => u.id !== quem.id && _botSabeNomeParecido(meu, _botIaNorm(_botIaPrimeiro(u.nome)))) : [];
+      return iguais.length ? ['ATENÇÃO AOS NOMES: quem perguntou é ' + quem.nome + ' (' + (BOT_IA_ROLE_TXT[quem.role] || quem.role) + '). NÃO é ' + iguais.map((u) => u.nome + ' (' + (BOT_IA_ROLE_TXT[u.role] || u.role) + ')').join(' nem ') + ': são pessoas diferentes, com nome parecido. Nunca use os números de um pra responder o outro.'] : [];
+    })(),
     // A DIRECAO PERGUNTANDO (19/11/2026: "Mas ta zoado" do Heynan ganhou "ja avisei a direcao pra dar uma olhada").
     ...(quem.chefe ? [quem.nome.split(' ')[0] + ' É da direção: nunca diga "já avisei a direção" pra quem é da direção. Pergunta de número, ou dizer que um número está estranho, errado ou que não bate, NÃO é problema pra avisar ninguém: deixe avisar_direcao vazio, mostre a conta parte por parte pelo RAIO-X e diga qual parte olhar. Só defeito de verdade (app, número caído, pedido travado) vai em avisar_direcao, e aí o aviso chega no outro sócio.'] : []),
   ];
@@ -16731,7 +16773,7 @@ async function _botIaResponder(env, cfg, b, opts) {
   // mensagem com numero (o resumo do dia).
   const ultima = await _botIaUltimaPraEle(env, b.jid, b.de_jid);
   const seguindoRaioX = !!(ultima && agora - Number(ultima.ts) < 600 && /raio-x/.test(String(ultima.motivo || '')) && (BOT_SABE_ASSUNTO_RE.test(tnOper) || BOT_SABE_CONTESTA_RE.test(tnOper)));
-  const sabeLiga = !!quem.id && modo !== 'festa' && (_botSabeLiga(tnOper, pergunta, quem.chefe) || seguindoRaioX || (!!b.citado && (pergunta || BOT_SABE_QUER_RE.test(tnOper)) && BOT_SABE_ASSUNTO_RE.test(_botIaNorm(String(b.citado)))));
+  const sabeLiga = !!quem.id && modo !== 'festa' && (_botSabeLiga(tnOper, pergunta, quem.chefe, !!_botSabePeriodo(textoBusca, Date.now())) || seguindoRaioX || (!!b.citado && (pergunta || BOT_SABE_QUER_RE.test(tnOper)) && BOT_SABE_ASSUNTO_RE.test(_botIaNorm(String(b.citado)))));
   let raioX = false;
   const assuntoNumero = modo === 'festa' || quemManda || BOT_IA_ASSUNTO_VENDA_RE.test(textoBusca) || (!!b.citado && BOT_IA_ASSUNTO_VENDA_RE.test(String(b.citado)));
   let nomes = null, tagMap = null;
@@ -16772,6 +16814,13 @@ async function _botIaResponder(env, cfg, b, opts) {
     if (falaDePedido || grupo === 'cob') {
       await nomesDe();
       busca = _botIaAcharPedidos(st, textoBusca, quem, grupo, nomes, tagMap, ps);
+      // PERGUNTA DE QUANTIDADE (19/11/2026, medido ao vivo): "quantos pedidos o Guilherme fez ontem?" achava 2 clientes
+      // chamados Guilherme e "quanto gastamos de anuncio?" 4 candidatos, e a lista ia pros DADOS junto do raio-x. Sem
+      // telefone, CPF nem acerto certo, quem responde e o raio-x: os parecidos pelo nome ficam de fora.
+      if (sabeLiga && !temDigitos && BOT_SABE_QTD_RE.test(tnOper) && !busca.certo && !busca.varios && (busca.blocos.length || busca.foraDoEscopo.length)) {
+        viu.push('ignorou ' + (busca.blocos.length + busca.foraDoEscopo.length) + ' parecidos pelo nome (pergunta de quantidade)');
+        busca = { ...busca, blocos: [], foraDoEscopo: [], leads: [], ids: [], okNums: [], provavel: false, ambiguo: false };
+      }
       if (busca.blocos.length) {
         const cab2 = busca.varios ? 'Pedidos encontrados (um pra cada telefone, CPF ou número da mensagem; responda de cada um):' : busca.certo ? 'Pedido encontrado:' : busca.provavel ? (busca.leads.length === 1 && busca.parecido[String(busca.leads[0].id)] ? 'Pedido PROVÁVEL pelo telefone parecido (o do cadastro tem dígito diferente; confirme com quem perguntou que é esse antes de afirmar pagamento):' : 'Pedido PROVÁVEL (um candidato só, pelo nome; confirme com quem perguntou que é esse antes de afirmar pagamento):') : (busca.foneSemPedido ? 'NENHUM pedido tem o telefone da mensagem. Pelo NOME há estes candidatos (diga que o telefone não bate com nenhum deles, liste e pergunte qual é; não afirme pagamento):' : 'PEDIDO AMBÍGUO, candidatos (pergunte qual é; não afirme pagamento):');
         D.push(cab2 + '\n' + busca.blocos.join('\n\n')); idsOk.push(...busca.ids, ...busca.okNums);
@@ -16791,7 +16840,7 @@ async function _botIaResponder(env, cfg, b, opts) {
       try {
         const agoraMs = Date.now();
         const reservado = !!(o.teste || o.grupoTeste || o.sala);
-        const base = await _botSabeBase(env, st, agoraMs, _botSabePeriodo(textoBusca, agoraMs), quem.chefe && reservado);
+        const base = await _botSabeBase(env, st, agoraMs, _botSabePeriodo(textoBusca, agoraMs), quem.chefe && reservado, _botSabeExtras(textoBusca, agoraMs));
         const numeros = (quem.chefe && BOT_IA_NUMERO_RE.test(textoProb)) ? await _botSabeNumeros(env, st, equipe, agoraMs) : '';
         D.push(_botSabeTexto(base, { quem, equipe, grupo, reservado, cfg, sala: !!o.sala, numeros, explica: seguindoRaioX || BOT_SABE_EXPLICA_RE.test(tnOper) }));
         viu.push('raio-x' + (base.foco ? ' (' + base.foco.rot + ')' : ''));
