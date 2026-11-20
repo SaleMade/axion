@@ -293,6 +293,7 @@ contextBridge.exposeInMainWorld('__trocaConversa', (phone, nome, nk) => {
 })
 // Pro teste do "ja li esta conversa": grupo e desconectado sao os dois casos que NAO podem marcar.
 contextBridge.exposeInMainWorld('__grupo', (on) => { ESTADO.grupo = !!on })
+contextBridge.exposeInMainWorld('__poeEspera', (seg) => { ESTADO.esperaPareado = Number(seg) || 0 })
 contextBridge.exposeInMainWorld('__autenticado', (on) => { ESTADO.autenticado = !!on })
 // Pro teste simular a rede caindo no cadastro.
 contextBridge.exposeInMainWorld('__falhaPedido', (n) => { falharPedido = Number(n) || 0 })

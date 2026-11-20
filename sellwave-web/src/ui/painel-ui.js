@@ -2224,6 +2224,12 @@ async function enfileira(lista, marca, rotulo) {
   if (e) estadoWa = e
   if (!at.chatId) { rodape('abra uma conversa primeiro'); return }
   if (!at.envia) { rodape('o motor do WhatsApp não está pronto'); return }
+  // NUMERO CONECTADO HA POUCO SO RECEBE (20/11/2026, pedido do Bruno: 10 min depois de ler o QR, ver
+  // livrePareado no main.js). Recusa aqui pra o funil nem entrar na fila.
+  if (Number(at.esperaPareado) > 0) {
+    rodape('número conectado há pouco: funil e envios do painel liberam em ' + Math.max(1, Math.ceil(Number(at.esperaPareado) / 60)) + ' min', null, true)
+    return
+  }
   const job = {
     id,
     marca,

@@ -1073,6 +1073,75 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o carimbo e em SEGUNDOS, nao em milissegundos', quando(seg(hoje)) !== quando(hoje.getTime()))
 }
 
+// ── A ESPERA DE 10 MINUTOS DEPOIS DE CONECTAR (20/11/2026, pedido do Bruno). O (49) 98893-1194 foi
+//    pareado no PC do Bruno as 17:47, aberto no do Guilherme as 17:50 e o funil saiu as 17:51: banido.
+//    As funcoes de verdade (guardaLivre, esperaPareadoFaltaMs, mandaItem), com relogio de mentira.
+{
+  const fonte = leia('main.js')
+  const pega = (ini) => fonte.split('\n').find((l) => l.startsWith(ini))
+  const codigo = [pega('const PAREAMENTO_MIN_MS ='), pega('const livrePareado = new Map()'), pega('let esperaPareadoMs ='),
+    recorta(fonte, 'function guardaLivre(nk, livre, espera)'), recorta(fonte, 'function esperaPareadoFaltaMs(nk)'),
+    recorta(fonte, 'function avisoEsperaPareado(faltaMs)'), recorta(fonte, 'function notaPareamento(s, st)'),
+    recorta(fonte, 'async function mandaItem(nk, chatId, item)')].join('\n')
+  let agora = 1795207000000
+  let desvio = 0            // o relogio do servidor menos o deste PC
+  const abertos = new Map()
+  const mandados = []
+  const F = new Function('Date', 'agoraCerto', 'abertos', 'anota', 'viewAtiva', 'dataUriDe', 'naVezDoNumero', 'comTetoNode', 'tetoDoItem',
+    'confereCaptura', 'CAPTURA_ESPERA_MS', 'colheConversa', 'setTimeout',
+    codigo + '\nreturn { guardaLivre, esperaPareadoFaltaMs, notaPareamento, mandaItem, livrePareado }')(
+    { now: () => agora }, () => agora + desvio, abertos, () => {}, () => null, async () => 'data:', async (nk, fn) => fn(),
+    async (wc, nk, js) => { mandados.push(nk); return true }, () => 1000, () => {}, 1000, async () => {}, () => {})
+  const NK = '4988931194'
+  const view = { webContents: { isDestroyed: () => false } }
+
+  // o PC do Guilherme: abriu a sessao que o Bruno pareou 4 min antes; o servidor diz ate quando
+  const sG = { nk: NK, view }
+  abertos.set(NK, sG)
+  const livreS = Math.floor(agora / 1000) + 360
+  F.guardaLivre(NK, livreS, 600)
+  vale('o GET da proxy traz a hora: faltam 6 min', Math.round(F.esperaPareadoFaltaMs(NK) / 1000) === 360, String(F.esperaPareadoFaltaMs(NK)))
+  let r = await F.mandaItem(NK, 'chat@c.us', { tipo: 'texto', texto: 'oi' })
+  vale('o funil do Guilherme NAO sai (o caso do 1194)', r.ok === false && r.espera === true && !mandados.length, JSON.stringify(r))
+  vale('e o aviso diz em quanto tempo libera', /funil e envios do painel liberam em 6 min/.test(r.erro), r.erro)
+  desvio = 120000   // o PC dele esta 2 min atrasado: vale o relogio do servidor
+  vale('a conta usa o relogio do servidor, nao o do PC', Math.round(F.esperaPareadoFaltaMs(NK) / 1000) === 240, String(F.esperaPareadoFaltaMs(NK)))
+  desvio = 0
+  agora += 361000
+  r = await F.mandaItem(NK, 'chat@c.us', { tipo: 'texto', texto: 'oi' })
+  vale('passados os 10 min, o funil sai', r.ok === true && mandados.length === 1, JSON.stringify(r))
+
+  // o "pronto" de outro estado nao apaga; resposta sem espera apaga
+  F.guardaLivre(NK, Math.floor(agora / 1000) + 100, 600)
+  F.guardaLivre(NK, 0, 600)
+  vale('servidor dizendo livre (0) solta o numero', F.esperaPareadoFaltaMs(NK) === 0)
+
+  // o QR lido NESTE PC: segura na hora, sem esperar o servidor
+  const sB = { nk: '1172518066', view }
+  abertos.set(sB.nk, sB)
+  F.notaPareamento(sB, 'qr'); F.notaPareamento(sB, 'pronto')
+  vale('pareou aqui: segura os 10 min na hora', Math.round(F.esperaPareadoFaltaMs(sB.nk) / 1000) === 600, String(F.esperaPareadoFaltaMs(sB.nk)))
+  r = await F.mandaItem(sB.nk, 'chat@c.us', { tipo: 'texto', texto: 'oi' })
+  vale('e o envio volta recusado', r.ok === false && r.espera === true)
+  F.guardaLivre(sB.nk, 0, 300)   // o servidor mudou a regra pra 5 min
+  vale('quem manda nos minutos e o servidor', Math.round(F.esperaPareadoFaltaMs(sB.nk) / 1000) === 300, String(F.esperaPareadoFaltaMs(sB.nk)))
+  F.guardaLivre(sB.nk, 0, 600)
+
+  // reabriu conectado (sem QR): nada espera
+  const sK = { nk: '1127335679', view }
+  abertos.set(sK.nk, sK)
+  F.notaPareamento(sK, 'pronto')
+  r = await F.mandaItem(sK.nk, 'chat@c.us', { tipo: 'texto', texto: 'oi' })
+  vale('numero que abriu ja conectado manda normal', r.ok === true && F.esperaPareadoFaltaMs(sK.nk) === 0)
+
+  vale('a fila das automaticas pula o numero na espera', /AUTO_PRONTO_MS\n\s*&& esperaPareadoFaltaMs\(nk\) <= 0/.test(fonte))
+  vale('o estado do painel leva os segundos que faltam', /e\.esperaPareado = Math\.ceil\(esperaPareadoFaltaMs\(nkAtual\) \/ 1000\)/.test(fonte))
+  vale('o GET da proxy guarda a espera', /if \(d && d\.ok\) guardaLivre\(nk, d\.livre, d\.espera\)/.test(fonte))
+  vale('o "pronto" reportado guarda a espera', /if \(st === 'pronto' && r\.ok\)[\s\S]{0,120}guardaLivre\(s\.nk, d\.livre, d\.espera\)/.test(fonte))
+  const painel = leia('ui/painel-ui.js')
+  vale('o painel recusa o clique antes de pôr na fila', /if \(Number\(at\.esperaPareado\) > 0\) \{[\s\S]{0,200}return\s*\}\s*const job = \{/.test(painel))
+}
+
 console.log('')
 if (falhas) { console.log(falhas + ' conta(s) erradas.'); process.exit(1) }
 console.log('todas as contas conferem.')

@@ -43,7 +43,8 @@ let ponto = 'antes do whenReady'
 // suite inteiro morria no meio e os testes seguintes nem rodavam.
 // E PRA 180s EM 31/10/2026: a versao de cobrador ganhou dois blocos (painel e casca) e o suite ja
 // passava de 105s sem eles.
-setTimeout(() => { console.log('ESTOUROU O TEMPO (180s). Ultimo ponto: ' + ponto); app.exit(1) }, 180000)
+// 240 s desde 20/11/2026: o bloco da espera depois de conectar soma uns 6 s, e o teste ja beirava os 180.
+setTimeout(() => { console.log('ESTOUROU O TEMPO (240s). Ultimo ponto: ' + ponto); app.exit(1) }, 240000)
 process.on('unhandledRejection', (e) => { console.log('PROMESSA SOLTA em ' + ponto + ': ' + (e && e.message)); app.exit(1) })
 
 app.whenReady().then(async () => {
@@ -1058,6 +1059,32 @@ app.whenReady().then(async () => {
     + ' parou: (window.__ver()).filter(c => c.nome === "parar" && c.args[1] === true).map(c => String(c.args[0])) }))()')
   conta('parar o funil de um numero nao para o do outro',
     antesParar >= 2 && depoisParar.parou.length === 1, JSON.stringify({ antesParar, ...depoisParar }))
+  await js('(() => { fila = []; "ok" })()').catch(() => {})
+  await espera(1400)
+  await js('(() => { window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293") })()')
+  await espera(300)
+
+  // ══ NUMERO CONECTADO HA POUCO SO RECEBE (20/11/2026, pedido do Bruno: 10 min depois de ler o QR) ══
+  // O (49) 98893-1194 foi pareado no PC do Bruno as 17:47 e o funil saiu do PC do Guilherme as 17:51:
+  // banido. Com o numero na espera, o clique no funil e no item NAO entra na fila e o rodape diz
+  // quanto falta; acabou a espera, volta ao normal.
+  ponto = 'espera depois de conectar'
+  await js('(() => { window.__trocaConversa("5511977776666", "Recem pareado", "88931194") })()')
+  await js('window.__poeEspera(420)')
+  await espera(1700)
+  const mandaRecem = () => js('(window.__ver()).filter(c => c.nome === "manda" && String(c.args[1] || "").indexOf("5511977776666") === 0).length')
+  await clica('[data-aba=funis]')
+  await espera(300)
+  await clica('[data-funil=s1]')
+  await espera(900)
+  const rodEspera = await js('document.getElementById("rod").textContent')
+  conta('na espera, o funil nao entra na fila', (await mandaRecem()) === 0 && !(await js('document.querySelector(".saindo") ? document.querySelector(".saindo").textContent : ""')).includes('Recem pareado'))
+  conta('e o rodape diz quanto falta', /conectado há pouco: funil e envios do painel liberam em 7 min/.test(rodEspera), rodEspera)
+  await js('window.__poeEspera(0)')
+  await espera(1700)
+  await clica('[data-funil=s1]')
+  await espera(1600)
+  conta('acabou a espera: o funil sai', (await mandaRecem()) >= 1, String(await mandaRecem()))
   await js('(() => { fila = []; "ok" })()').catch(() => {})
   await espera(1400)
   await js('(() => { window.__trocaConversa("5519995983293", "Cliente de Teste", "95983293") })()')

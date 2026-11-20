@@ -357,6 +357,8 @@ async function puxaProxyDaDash(nk) {
     if (!r.ok) return { px: null, rede: true }
     const d = await r.json()
     const px = d && d.proxy
+    // A ESPERA DEPOIS DE CONECTAR vem junto (ver livrePareado): o QR pode ter sido lido em outro PC.
+    if (d && d.ok) guardaLivre(nk, d.livre, d.espera)
     config.proxies = config.proxies || {}
     if (px && px.host) config.proxies[nk] = px
     else delete config.proxies[nk]
@@ -1579,6 +1581,44 @@ async function estaConectado(wc, nk, estrito) { return conectadoDe(await lerCone
 // em 4 s, porque a batida do sinal e de minuto em minuto e um QR lido entre duas batidas passaria
 // sem ser visto; depois disso a batida cobre uma queda e um QR novo no meio do expediente.
 const PAREAMENTO_MIN_MS = 180000
+
+// ESPERA DE 10 MINUTOS DEPOIS DE CONECTAR (20/11/2026, pedido do Bruno: "esperar por 5 a 10 minutos.
+// Eu acho que 10 minutos talvez seria um periodo bom"). Numero pareado agora fica SO RECEBENDO: funil,
+// item do painel e mensagem automatica esperam. Digitar na mao continua livre.
+//
+// O caso: o (49) 98893-1194 foi pareado no PC do Bruno as 17:47, o Guilherme abriu no PC dele as 17:50
+// e o funil saiu as 17:51; um minuto depois a conta estava banida.
+//
+// DUAS FONTES, porque quem pareia e quem dispara quase nunca sao a mesma maquina:
+//   - o SERVIDOR (`livre`, epoch s), que vem no GET da proxy antes de abrir e em todo "pronto"
+//     reportado: e assim que o PC do vendedor fica sabendo do QR lido no PC da direcao;
+//   - o pareamento DESTA abertura (`s.pareouEm`, o mesmo relogio da subida pra nuvem), que vale na hora,
+//     sem esperar a batida de minuto em minuto que reporta o estado.
+// Quem decide os 10 min e o servidor (`espera`); o valor daqui so vale ate a primeira resposta dele.
+const livrePareado = new Map()     // nk -> epoch s em que os envios voltam (do servidor)
+let esperaPareadoMs = 600000
+function guardaLivre(nk, livre, espera) {
+  const e = Number(espera)
+  if (e > 0 && e <= 3600) esperaPareadoMs = e * 1000
+  const l = Number(livre) || 0
+  if (l > 0) livrePareado.set(String(nk), l)
+  else livrePareado.delete(String(nk))
+}
+function esperaPareadoFaltaMs(nk) {
+  const k = String(nk || '')
+  if (!k) return 0
+  let falta = 0
+  const l = Number(livrePareado.get(k) || 0)
+  if (l) falta = l * 1000 - agoraCerto()
+  const s = abertos.get(k)
+  if (s && s.pareouEm) falta = Math.max(falta, s.pareouEm + esperaPareadoMs - Date.now())
+  return Math.max(0, falta)
+}
+function avisoEsperaPareado(faltaMs) {
+  const min = Math.max(1, Math.ceil(faltaMs / 60000))
+  return 'número conectado há pouco: funil e envios do painel liberam em ' + min + ' min'
+}
+
 function notaPareamento(s, st) {
   if (!s) return
   if (st === 'qr' || st === 'caiu') { s.viuQr = true; s.pareouEm = 0; return }
@@ -3465,19 +3505,28 @@ async function reportaConexao(s, e) {
     + ' modo=' + String((c && c.modo) || '') + ' info=' + String((c && c.info) || '')
     + ' queda=' + JSON.stringify((c && c.queda) || null) + ' espontaneo=' + (espontaneo ? 1 : 0))
   avisaCasca('sw:conexao', { nk: s.nk, st, espontaneo })
+  // PAREOU NESTA ABERTURA: avisa uma vez (ver livrePareado). O servidor tambem ve a virada qr -> pronto,
+  // mas o QR lido entre duas batidas so chega la como "sincronizando" -> "pronto".
+  const pareou = st === 'pronto' && !!s.pareouEm && s.pareouAvisado !== s.pareouEm
+  if (pareou) s.pareouAvisado = s.pareouEm
   try {
-    await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/conexao', {
+    const r = await fetch(String(config.apiBase).replace(/\/+$/, '') + '/api/swweb/conexao', {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + config.token },
       // O NUMERO VAI PELO SLOT (`nk`), nunca pelo que o agente diz: depois do logout o
       // `numeroDoAparelho()` volta VAZIO, e usar ele como identidade foi um furo ja consertado.
       body: JSON.stringify({
-        nk: s.nk, st, espontaneo,
+        nk: s.nk, st, espontaneo, pareou,
         modo: String((c && c.modo) || ''), info: String((c && c.info) || ''),
         queda: (c && c.queda) || null,
       }),
       signal: AbortSignal.timeout(15000),
     })
+    // So o "pronto" traz a espera; os outros estados voltam sem ela e nao podem apagar a que ja veio.
+    if (st === 'pronto' && r.ok) {
+      const d = await r.json().catch(() => null)
+      if (d && d.ok) guardaLivre(s.nk, d.livre, d.espera)
+    }
   } catch (_) { /* sem rede: a proxima virada reporta */ }
 }
 
@@ -4103,6 +4152,9 @@ ipcMain.handle('swp:estado-wa', async (ev) => {
   e.nk = nkAtual
   e.cobranca = modoCobranca()
   e.direcao = direcaoReal
+  // Quantos segundos faltam pra soltar os envios deste numero (ver livrePareado): o painel recusa o
+  // clique com o aviso em vez de pôr o funil na fila.
+  e.esperaPareado = Math.ceil(esperaPareadoFaltaMs(nkAtual) / 1000)
   return e
 })
 
@@ -4394,6 +4446,10 @@ async function mandaItem(nk, chatId, item) {
   const alvo = String(nk || '') ? abertos.get(String(nk)) : null
   const wc = alvo && alvo.view && !alvo.view.webContents.isDestroyed() ? alvo.view.webContents : (nk ? null : viewAtiva())
   if (!wc) return { ok: false, erro: nk ? 'o número foi fechado, o funil parou aqui' : 'nenhum número aberto' }
+  // NUMERO RECEM PAREADO SO RECEBE (ver livrePareado). Todo envio do app passa por aqui: funil, item
+  // avulso e mensagem automatica.
+  const faltaPar = esperaPareadoFaltaMs(nk)
+  if (faltaPar > 0) return { ok: false, erro: avisoEsperaPareado(faltaPar), espera: true }
   const pedaco = { ...(item || {}) }
   if (pedaco.tipo === 'midia') {
     if (!pedaco.url) return { ok: false, erro: 'esse item nao tem arquivo' }
@@ -4591,6 +4647,7 @@ async function autoCobranca() {
   const nks = [...abertos.keys()].filter((nk) => {
     const s = abertos.get(nk)
     return alugados.has(nk) && ehDeCobranca(nk) && prontoCob(nk) && !!(s && s.prontoEm) && Date.now() - s.prontoEm >= AUTO_PRONTO_MS
+      && esperaPareadoFaltaMs(nk) <= 0   // recem pareado so recebe (ver livrePareado)
   })
   if (!nks.length) return
   autoRodando = true
