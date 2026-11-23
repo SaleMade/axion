@@ -2636,14 +2636,30 @@ async function _plVoltaOrigem(env, code) {
 }
 // Anota um evento v2 na volta do pedido, se ele for da volta. Idempotente: reenvio ou reprocessamento
 // do mesmo evento nao muda nada (a hora e a do evento, nao a de chegada).
+// A VOLTA DOS CORREIOS NAO E AVISADA (23/11/2026). Pacote que o cliente nao retirou na agencia volta
+// com o pedido ainda em "Aguardando Retirada" (code 18) e o rastreio "Objeto em transferencia"; a
+// PayLog so poe "Ao Remetente" no ultimo movimento, "Objeto entregue ao remetente" em Jundiai/SP (a
+// unidade dos Correios que devolve pra ela). Medido no log de 02 a 23/11: dos que se moveram em
+// transferencia depois de chegar na agencia, 5 de 5 terminaram ao remetente; o unico que foi
+// entregue ao cliente tinha outra frase ("Direcionado para entrega em unidade... a pedido do cliente").
+const _plVoltaCorreios = (o, sh) => {
+  const st = (o && o.status) || {}, tr = (sh && sh.tracking_status) || {};
+  return Number(st.code) === 18 && Number(tr.code) === 30 && /em transfer[eê]ncia/i.test(String((sh && sh.description) || ''));
+};
+// O FIM DA VOLTA. Correios: "Objeto entregue ao remetente". J&T: "Status 101", o ultimo movimento de
+// todas as 18 voltas da J&T ate 23/11, sempre na cidade de onde a encomenda saiu, um dia depois da
+// "Chegada na Unidade" de la. A tela mostra uma frase em vez do codigo cru.
+const _PL_VOLTA_FIM_JT = /^status 101$/i;
+const _plVoltaFim = (desc, naOrigem) => /entregue ao remetente/i.test(desc) || (naOrigem && _PL_VOLTA_FIM_JT.test(desc));
+
 async function _plVoltaAnota(env, p, code, mundo) {
   const o = (p && p.order) || {}, sh = (p && p.shipment) || {};
   const ev = String((p && p.event) || '');
-  if (!code || !(_plNaVolta(o) || ev === 'shipment.returning' || ev === 'shipment.returned')) return false;
+  if (!code || !(_plNaVolta(o) || ev === 'shipment.returning' || ev === 'shipment.returned' || _plVoltaCorreios(o, sh))) return false;
   const ms = Date.parse(sh.occurred_at || (p && p.event_timestamp) || '');
   const ts = Math.floor((isNaN(ms) ? Date.now() : ms) / 1000);
   const tsr = (sh.tracking_status && sh.tracking_status.label) || '';
-  const desc = String(sh.description || tsr || (p && p.event_label) || ev).slice(0, 120);
+  let desc = String(sh.description || tsr || (p && p.event_label) || ev).slice(0, 120);
   const local = String(sh.location || '').slice(0, 80);
   await _plVoltaEnsure(env);
   const oid = 'PL-' + String(code);
@@ -2651,9 +2667,14 @@ async function _plVoltaAnota(env, p, code, mundo) {
   const origem = (atual && atual.origem) || (await _plVoltaOrigem(env, String(code)));
   // CHEGOU = um movimento da volta na cidade de onde a encomenda saiu. Medido no ORDQLWP2C: "Chegada
   // na Unidade" em Indaiatuba/SP em 19/10, seis dias depois do "Em Devolucao" em Mage/RJ.
-  const chegou = (origem && local && _semAcento(local) === _semAcento(origem)) ? ts : null;
-  // DEVOLVIDO = a PayLog encerrou a volta (shipment.returned) ou a encomenda foi entregue de volta.
-  const devolvido = (ev === 'shipment.returned' || ev === 'shipment.delivered') ? ts : null;
+  const naOrigem = !!(origem && local && _semAcento(local) === _semAcento(origem));
+  const fim = _plVoltaFim(desc, naOrigem);
+  if (fim && _PL_VOLTA_FIM_JT.test(desc)) desc = 'Entregue de volta ao remetente';
+  // A volta dos Correios termina em Jundiai, nao na cidade de onde saiu: o fim tambem e "chegou".
+  const chegou = (naOrigem || fim) ? ts : null;
+  // DEVOLVIDO = a PayLog encerrou a volta (shipment.returned), a encomenda foi entregue de volta, ou
+  // o ultimo movimento da transportadora diz que entregou ao remetente.
+  const devolvido = (ev === 'shipment.returned' || ev === 'shipment.delivered' || fim) ? ts : null;
   await env.DB.prepare(`INSERT INTO pl_volta (order_id, mundo, inicio_ts, ult_ts, ult_desc, ult_local, origem, chegou_ts, devolvido_ts, atualizado)
     VALUES (?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(order_id) DO UPDATE SET
@@ -2672,7 +2693,7 @@ async function _plVoltaAnota(env, p, code, mundo) {
 // primeira vez; depois serve pra conferir.
 async function _plVoltaRefaz(env) {
   await _pl2Ensure(env);
-  const r = await env.DB.prepare("SELECT subpath, body FROM paylog2_debug WHERE verified = 1 AND (event IN ('shipment.returning','shipment.returned') OR body LIKE '%Ao Remetente%') ORDER BY id").all();
+  const r = await env.DB.prepare("SELECT subpath, body FROM paylog2_debug WHERE verified = 1 AND (event IN ('shipment.returning','shipment.returned') OR body LIKE '%Ao Remetente%' OR (body LIKE '%Aguardando Retirada%' AND body LIKE '%transfer%')) ORDER BY id").all();
   let n = 0;
   for (const x of ((r && r.results) || [])) {
     let p = null; try { p = JSON.parse(x.body); } catch (_) { continue; }

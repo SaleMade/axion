@@ -172,6 +172,47 @@ const l2 = r.j && r.j.voltas && r.j.voltas.find((x) => x.order_id === 'PL-' + CO
 ok('diretor refaz pelo log e chega no mesmo resultado', !!l2 && l2.inicio_ts === s('2026-10-13T07:24:44-03:00') && l2.chegou_ts === s('2026-10-19T17:31:26-03:00') && l2.devolvido_ts === s('2026-10-21T10:47:50-03:00') && l2.ult_local === 'Indaiatuba/SP', JSON.stringify(l2));
 ok("o refazer nao inventa volta do pedido forjado", !!(r.j && r.j.voltas) && !r.j.voltas.some((x) => x.order_id === 'PL-ORDFORJADO'));
 
+// 9) 23/11/2026: o fim da volta que a PayLog nao avisa. J&T termina em "Status 101" na cidade de
+// origem; Correios volta com o pedido em "Aguardando Retirada" e termina em "Objeto entregue ao
+// remetente" em Jundiai/SP (nunca na cidade de onde saiu).
+const vol = (c) => sq.prepare('SELECT * FROM pl_volta WHERE order_id = ?').get('PL-' + c);
+const RETIRADA = { code: 18, label: 'Aguardando Retirada' }, SAIU = { code: 19, label: 'Saiu para Entrega' };
+await manda(v2('shipment.posted', ENVIADO, '2026-11-06T10:49:00-03:00', 'Coleta Realizada', 'Indaiatuba/SP', 'ORDJT101'), 'seg-normal');
+await manda(v2('shipment.returning', VOLTA, '2026-11-09T18:58:00-03:00', 'Em Devolução', 'Amambai/MS', 'ORDJT101'), 'seg-normal');
+await manda(v2('shipment.in_transit', VOLTA, '2026-11-18T06:23:00-03:00', 'Chegada na Unidade', 'Indaiatuba/SP', 'ORDJT101'), 'seg-normal');
+ok('J&T: chegou, ainda nao devolvido', vol('ORDJT101') && vol('ORDJT101').chegou_ts === s('2026-11-18T06:23:00-03:00') && vol('ORDJT101').devolvido_ts === null);
+await manda(v2('shipment.in_transit', VOLTA, '2026-11-19T15:17:00-03:00', 'Status 101', 'Indaiatuba/SP', 'ORDJT101'), 'seg-normal');
+v = vol('ORDJT101');
+ok('J&T: Status 101 na origem = devolvido', v && v.devolvido_ts === s('2026-11-19T15:17:00-03:00'), v && v.devolvido_ts);
+ok('J&T: a tela le uma frase, nao o codigo', v && v.ult_desc === 'Entregue de volta ao remetente', v && v.ult_desc);
+await manda(v2('shipment.posted', ENVIADO, '2026-11-06T10:49:00-03:00', 'Coleta Realizada', 'Indaiatuba/SP', 'ORDJTLONGE'), 'seg-normal');
+await manda(v2('shipment.returning', VOLTA, '2026-11-09T18:58:00-03:00', 'Em Devolução', 'Recife/PE', 'ORDJTLONGE'), 'seg-normal');
+await manda(v2('shipment.in_transit', VOLTA, '2026-11-10T09:00:00-03:00', 'Status 101', 'Recife/PE', 'ORDJTLONGE'), 'seg-normal');
+v = vol('ORDJTLONGE');
+ok('J&T: Status 101 longe da origem NAO e devolvido', v && v.devolvido_ts === null && v.chegou_ts === null && v.ult_desc === 'Status 101', v && JSON.stringify([v.devolvido_ts, v.chegou_ts, v.ult_desc]));
+
+await manda(v2('shipment.posted', ENVIADO, '2026-10-30T10:00:00-03:00', 'Objeto postado', 'Indaiatuba/SP', 'ORDCORR1'), 'seg-normal');
+await manda(v2('shipment.in_transit', ENVIADO, '2026-11-01T10:00:00-03:00', 'Objeto em transferência - por favor aguarde', 'CONTAGEM/MG', 'ORDCORR1'), 'seg-normal');
+ok('Correios: transferencia na ida nao abre volta', !vol('ORDCORR1'));
+await manda(v2('shipment.awaiting_pickup', RETIRADA, '2026-11-02T10:00:00-03:00', 'Objeto aguardando retirada no endereço indicado', 'CAMPINA VERDE/MG', 'ORDCORR1'), 'seg-normal');
+ok('Correios: aguardando retirada nao abre volta', !vol('ORDCORR1'));
+await manda(v2('shipment.in_transit', RETIRADA, '2026-11-06T10:08:00-03:00', 'Objeto em transferência - por favor aguarde', 'CAMPINA VERDE/MG', 'ORDCORR1'), 'seg-normal');
+v = vol('ORDCORR1');
+ok('Correios: saiu da agencia sem ser retirado abre a volta', v && v.inicio_ts === s('2026-11-06T10:08:00-03:00') && v.chegou_ts === null && v.devolvido_ts === null, v && JSON.stringify(v));
+await manda(v2('shipment.out_for_delivery', SAIU, '2026-11-13T10:18:00-03:00', 'Objeto saiu para entrega ao remetente', 'JUNDIAI/SP', 'ORDCORR1'), 'seg-normal');
+await manda(v2('shipment.returning', VOLTA, '2026-11-13T11:47:00-03:00', 'Objeto entregue ao remetente', 'JUNDIAI/SP', 'ORDCORR1'), 'seg-normal');
+v = vol('ORDCORR1');
+ok('Correios: entregue ao remetente = chegou e devolvido', v && v.chegou_ts === s('2026-11-13T11:47:00-03:00') && v.devolvido_ts === s('2026-11-13T11:47:00-03:00') && v.inicio_ts === s('2026-11-06T10:08:00-03:00'), v && JSON.stringify(v));
+await manda(v2('shipment.awaiting_pickup', RETIRADA, '2026-11-02T10:00:00-03:00', 'Objeto aguardando retirada no endereço indicado', 'Recife/PE', 'ORDCORR2'), 'seg-normal');
+await manda(v2('shipment.in_transit', RETIRADA, '2026-11-03T10:00:00-03:00', 'Direcionado para entrega em unidade dos Correios a pedido do cliente', 'Recife/PE', 'ORDCORR2'), 'seg-normal');
+ok('Correios: mudanca de agencia a pedido do cliente nao e volta', !vol('ORDCORR2'));
+sq.exec('DELETE FROM pl_volta');
+r = await le('/api/devolucoes/plataforma?refazer=1', 'dir');
+const l3 = r.j && r.j.voltas && r.j.voltas.find((x) => x.order_id === 'PL-ORDCORR1');
+ok('refazer acha a volta dos Correios pelo log', !!l3 && l3.inicio_ts === s('2026-11-06T10:08:00-03:00') && l3.devolvido_ts === s('2026-11-13T11:47:00-03:00'), JSON.stringify(l3));
+const l4 = r.j && r.j.voltas && r.j.voltas.find((x) => x.order_id === 'PL-ORDJT101');
+ok('refazer poe a frase no lugar do Status 101', !!l4 && l4.ult_desc === 'Entregue de volta ao remetente' && l4.devolvido_ts === s('2026-11-19T15:17:00-03:00'), JSON.stringify(l4));
+
 console.log(res.join('\n'));
 const falhou = res.filter((x) => x.startsWith('FALHOU')).length;
 console.log(falhou ? `\nFALHOU ${falhou} de ${res.length}` : `\nTUDO PASSOU (${res.length})`);
