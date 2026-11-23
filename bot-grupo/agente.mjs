@@ -18,6 +18,7 @@
 // neste PC. Uma pergunta em voo por grupo; pergunta com mais de 2 min fica sem resposta (o bot estava fora).
 // REAGIR (1.7.0): o worker pode devolver so `reacao` (um emoji) no lugar do texto: o bot poe a reacao na mensagem,
 // sem "digitando" e sem citar, e confirma igual (msg-ack). O worker so manda reacao pro bot que se diz 1.7.0 ou mais.
+// MARCAR (1.9.0): "@<digitos>" no texto da fila (LID ou telefone de quem esta no grupo) sai como marcacao de verdade.
 // Higiene (pra nao banir): UM socket por vez, reconexao com recuo, 440 (outra copia) espera 2 min,
 // nunca religa depois de 401 sem QR novo, markOnlineOnConnect false, identidade fixa, metadados em cache.
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs'
@@ -32,7 +33,7 @@ import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Browser
 import { textoDa, quemMandou, meusJidsDe, mencionaBot, marcouBot, idsDoBot, respondeBot, idadeS, pacoteDe } from './entrada.mjs'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
-const VERSAO = '1.8.0'
+const VERSAO = '1.9.0'
 const CFG_ARQ = path.join(AQUI, 'bot-grupo.json')
 const SESSAO = path.join(AQUI, 'sessao')
 const LOCK = path.join(AQUI, 'agente.lock')
@@ -329,6 +330,27 @@ async function baixarMidia(m) {
   } catch (e) { return { erro: 'baixar a midia: ' + String((e && e.message) || e).slice(0, 120) } }
 }
 
+// MARCAR ALGUEM (1.9.0): "@<digitos>" no texto da fila vira marcacao de verdade (a pessoa recebe o aviso)
+// quando os digitos sao o LID ou o telefone de quem esta no grupo. O WhatsApp so desenha o nome quando o
+// texto traz "@" + o mesmo id que vai em `mentions`, entao telefone de quem aparece como LID no grupo e
+// trocado pelo LID. Digitos que nao sao de ninguem do grupo ficam como texto.
+function marcacoesDoTexto(texto, meta) {
+  const parts = (meta && Array.isArray(meta.participants)) ? meta.participants : []
+  const user = (j) => String(j || '').split('@')[0].split(':')[0]
+  const fim = (d) => d.slice(-8)
+  const mentions = []
+  const novo = String(texto || '').replace(/@\+?(\d{8,16})\b/g, (tudo, dig) => {
+    const p = parts.find((x) => x && [x.id, x.lid, x.phoneNumber, x.jid].filter(Boolean).some((j) => {
+      const u = user(j)
+      return u === dig || (u.length >= 10 && dig.length >= 10 && fim(u) === fim(dig) && u.slice(0, 4) === dig.slice(0, 4))
+    }))
+    if (!p || !p.id) return tudo
+    if (!mentions.includes(String(p.id))) mentions.push(String(p.id))
+    return '@' + user(p.id)
+  })
+  return { texto: novo, mentions }
+}
+
 async function enviarItem(it) {
   const jid = String(it.jid)
   const ja = enviadosMapa[String(it.id)]
@@ -341,7 +363,8 @@ async function enviarItem(it) {
   let msgId = ''
   try {
     if (!cacheGrupo.has(jid)) { try { cacheGrupo.set(jid, await sock.groupMetadata(jid)) } catch {} }
-    const texto = String(it.texto || '')
+    const marc = marcacoesDoTexto(String(it.texto || ''), cacheGrupo.get(jid))
+    const texto = marc.texto
     let conteudo = { text: texto }
     if (it.midia && it.midia.url) {
       const d = await baixarMidia(it.midia)
@@ -357,6 +380,7 @@ async function enviarItem(it) {
         return
       }
     }
+    if (marc.mentions.length) conteudo.mentions = marc.mentions
     const m = await sock.sendMessage(jid, conteudo)
     msgId = (m && m.key && m.key.id) || ''
   } catch (e) {
