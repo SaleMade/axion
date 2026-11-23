@@ -17670,17 +17670,28 @@ async function _swwebPodeNoNumero(env, nk, u, manda, mundo) {
 // Aceitar das Aceitacoes - com o anti-dobro por CPF e a conferencia dupla que ja existem la. A API
 // da PayLog nao tem idempotencia, entao pedido em dobro la nao tem desfazer barato: nenhum caminho
 // novo pula esse portao.
+// UMA VEZ POR ISOLATE (23/11/2026, inspecao). As tres funcoes de tabela do SellWave Web abaixo
+// (rascunho, uso e sessao) rodavam o CREATE em TODA chamada: 2 idas ao banco no /api/swweb/uso
+// (11 mil por dia, renovacao de 45 em 45 s de cada numero aberto), 3 no /api/swweb/numeros e 2 no
+// /api/swweb/rascunhos, ~65 mil DDL por dia na mesma fila do D1 que atende o vendedor, e cada ida
+// custa ~150 ms daqui do Brasil. Agora, como as outras _xxxTabela do worker, a marca so liga depois
+// de a criacao passar sem erro; se falhar, a proxima chamada tenta de novo.
+let _swRascTabOk = false, _swUsoTabOk = false, _swSessaoTabOk = false;
 async function _swwebRascunhoTabela(env) {
+  if (_swRascTabOk) return;
+  let ok = true;
   try {
     await env.DB.prepare(
       'CREATE TABLE IF NOT EXISTS swweb_rascunho (id TEXT PRIMARY KEY, user_id TEXT, phone TEXT, dados TEXT, criado INTEGER, mexido INTEGER)'
     ).run();
-  } catch (_) { /* ja existe */ }
-  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS ix_swweb_rasc_user ON swweb_rascunho (user_id, mexido DESC)').run(); } catch (_) { /* ok */ }
+  } catch (_) { ok = false; /* ja existe */ }
+  try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS ix_swweb_rasc_user ON swweb_rascunho (user_id, mexido DESC)').run(); } catch (_) { ok = false; /* ok */ }
+  if (ok) _swRascTabOk = true;
 }
 
 const SWWEB_USO_SEG = 120;      // quanto tempo o aluguel vale sem renovar
 async function _swwebUsoTabela(env) {
+  if (_swUsoTabOk) return;
   try {
     await env.DB.prepare(
       'CREATE TABLE IF NOT EXISTS swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, maquina TEXT, desde INTEGER, ate INTEGER)'
@@ -17697,6 +17708,7 @@ async function _swwebUsoTabela(env) {
     await env.DB.prepare(
       'CREATE TABLE IF NOT EXISTS swweb_uso_revoga (nk TEXT, maquina TEXT, ate INTEGER, por TEXT, PRIMARY KEY (nk, maquina))'
     ).run();
+    _swUsoTabOk = true;
   } catch (_) { /* ja existe */ }
 }
 
@@ -17728,10 +17740,12 @@ async function _swwebUsoTabela(env) {
 const SWWEB_SESSAO_PREFIXO = 'swweb-sessao/';
 const SWWEB_SESSAO_PARTE_MAX = 40 * 1024 * 1024;
 async function _swwebSessaoTabela(env) {
+  if (_swSessaoTabOk) return;   // uma vez por isolate (ver _swRascTabOk)
   try {
     await env.DB.prepare(
       'CREATE TABLE IF NOT EXISTS swweb_sessao (nk TEXT PRIMARY KEY, ver INTEGER NOT NULL DEFAULT 0, chave TEXT, manifesto TEXT, ant TEXT, bytes INTEGER, arquivos INTEGER, maquina TEXT, user_id TEXT, nome TEXT, ts INTEGER)'
     ).run();
+    _swSessaoTabOk = true;
   } catch (_) { /* ja existe */ }
 }
 async function _swwebSessaoNaMao(env, nk, u, maquina) {
@@ -19824,9 +19838,18 @@ async function handleSwWeb(req, env, path) {
     // antes o diretor da casa passava com chip de qualquer um, afiliado incluido, e carimbava a
     // conversa de outra operacao como se fosse dele.
     let meusNums = null;
+    // NAO CONSEGUIU LER = 503, NUNCA "NADA E SEU" (23/11/2026, inspecao). Ate aqui, com o banco em
+    // rajada ("D1 DB is overloaded", ~2 vezes por dia, 08h e 12h30) a leitura dos chips ou dos
+    // usuarios falhava, o catch abaixo deixava a lista VAZIA, o lote inteiro era "barrado" e a
+    // resposta era 200: o app tirava o lote da fila e as mensagens (e o lead com o codigo do anuncio)
+    // nao voltavam mais. Agora a falha de leitura responde 503 e o app guarda o lote e manda de novo
+    // em 15 s. O _getDashData nao lanca erro: num isolate novo com o banco fora ele devolve {} sem
+    // `chips`, e estado de verdade sempre tem a lista - por isso o teste e o Array.isArray.
+    let _leuChips = false;
     try {
       const _d = await _getDashData(env);
-      const _chips = Array.isArray(_d && _d.chips) ? _d.chips : [];
+      if (!Array.isArray(_d && _d.chips)) throw new Error('estado sem a lista de chips');
+      const _chips = _d.chips;
       if (manda) {
         const _rs = await env.DB.prepare("SELECT id, COALESCE(afiliado_id,'') afl FROM users WHERE COALESCE(archived,0)=0").all();
         const _mundoDe = {};
@@ -19839,7 +19862,12 @@ async function handleSwWeb(req, env, path) {
           .filter((c) => c && c.num && String(c.at || '') === String(u.id))
           .map((c) => _k8(c.num)));
       }
-    } catch (_) { meusNums = new Set(); }
+      _leuChips = true;
+    } catch (eL) {
+      console.error('[swweb] captura sem conseguir ler chips/usuarios, lote volta pro app: ' + String((eL && eL.message) || eL).slice(0, 120));
+      meusNums = new Set();
+    }
+    if (!_leuChips) return err('O servidor está ocupado agora. A captura tenta de novo sozinha.', 503);
 
     // TRAVA 2: venda so vale se aquele telefone JA TINHA escrito pra aquele numero ANTES deste
     // lote. Senao a conferencia seria circular: bastava mandar um "recebido" forjado no mesmo lote
@@ -19965,18 +19993,22 @@ async function handleSwWeb(req, env, path) {
     const vivo = (b && b.auth === true) ? 1 : 0;
     try {
       await _scEnsureTables(env);
-      await env.DB.prepare(
+      // AS TRES GRAVACOES NUMA IDA SO (23/11/2026, inspecao): eram tres idas em fila (~150 ms cada
+      // daqui do Brasil) em cada sinal de vida, um por numero aberto a cada 60 s. O batch e uma
+      // transacao: ou grava as tres ou nenhuma, e na falha a resposta continua sendo o 500 de sempre.
+      const _hbSts = [env.DB.prepare(
         "INSERT INTO sc_heartbeat (self_number, at_id, instance, wpp_seen, last_seen, meta) VALUES (?,?,?,?,strftime('%s','now'),'swweb')" +
         " ON CONFLICT(self_number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, wpp_seen=excluded.wpp_seen, last_seen=excluded.last_seen, meta=excluded.meta"
-      ).bind(num, String(dono.at_id), dono.instance || null, vivo).run();
+      ).bind(num, String(dono.at_id), dono.instance || null, vivo)];
       if (dono.instance && vivo) {
-        await env.DB.prepare(
+        _hbSts.push(env.DB.prepare(
           "INSERT INTO wa_conn (instance, state, number, updated_at) VALUES (?, 'sc', ?, strftime('%s','now'))" +
           " ON CONFLICT(instance) DO UPDATE SET state='sc', number=excluded.number, updated_at=excluded.updated_at"
-        ).bind(dono.instance, num).run();
+        ).bind(dono.instance, num));
         // Um numero so pode estar num slot: linha velha de outro vendedor vira conexao fantasma.
-        await env.DB.prepare("DELETE FROM wa_conn WHERE number=? AND instance<>?").bind(num, dono.instance).run();
+        _hbSts.push(env.DB.prepare("DELETE FROM wa_conn WHERE number=? AND instance<>?").bind(num, dono.instance));
       }
+      if (_hbSts.length === 1) await _hbSts[0].run(); else await env.DB.batch(_hbSts);
     } catch (e2) {
       console.error('[swweb] heartbeat falhou: ' + String((e2 && e2.message) || e2));
       return json({ ok: false }, 500);
@@ -20436,14 +20468,38 @@ async function handleSwWeb(req, env, path) {
 
   // GET /api/swweb/numeros — a lista que a barra lateral do app mostra.
   if (req.method === 'GET' && path === '/api/swweb/numeros') {
-    const data = await _getDashData(env);
+    // AS LEITURAS QUE NAO DEPENDEM UMA DA OUTRA SAEM TODAS JUNTAS (23/11/2026, inspecao). Esta rota
+    // era a mais pesada do worker: ~8,8 mil chamadas por dia (o app pergunta de 20 em 20 s), mediana
+    // de 2,2 s, porque fazia umas 12 idas ao banco EM FILA (~150 ms cada daqui do Brasil): estado,
+    // cobradores, usuarios, placar do dia, alugueis, vivos, API morta, nuvem, conexoes, fotos. Nada
+    // disso depende do resultado do outro, entao todas comecam aqui e cada uma e esperada no mesmo
+    // lugar de antes, com o mesmo tratamento de falha de antes:
+    //  - as que tinham try/catch proprio (usuarios, placar, alugueis, nuvem, conexoes) viram `null`
+    //    na falha e o codigo la embaixo segue com o vazio de sempre;
+    //  - as que NAO tinham (vivos, API morta, fotos) continuam derrubando a rota se falharem: o
+    //    `.catch` aqui so evita o aviso de rejeicao sem dono, o `await` la embaixo ainda recebe o erro.
+    const _pega = (p) => Promise.resolve(p).catch(() => null);
+    const _calado = (p) => { p.catch(() => {}); return p; };
+    const _pUsers = _pega(env.DB.prepare("SELECT id, name, COALESCE(afiliado_id,'') afl FROM users WHERE COALESCE(archived,0)=0").all());
+    const _diaN = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
+    const _pLh = _pega((async () => ({
+      lh: (await _leadsHojePorNumero(env, _diaN)) || {},
+      porAt: ((await _leadsHojePorAt(env, _diaN)) || {}).porAt || {},
+    }))());
+    const _agoraUso = Math.floor(Date.now() / 1000);
+    const _pUso = _pega((async () => { await _swwebUsoTabela(env); return env.DB.prepare('SELECT nk, user_id, nome, maquina, desde FROM swweb_uso WHERE ate > ?').bind(_agoraUso).all(); })());
+    const _pLive = _calado(_presselLiveSet(env));
+    const _pMorto = _calado(_carregaApiMorto(env));
+    const _pNuvem = _pega((async () => { await _swwebSessaoTabela(env); return env.DB.prepare('SELECT nk, ver, ts, nome FROM swweb_sessao WHERE ver > 0').all(); })());
+    const _pConn = _pega(env.DB.prepare('SELECT nk, st, espontaneo, ts FROM swweb_conn').all());
+    const _pFotos = _calado(_swwebFotosEquipe(req, env));
+    const [data] = await Promise.all([_getDashData(env), _cobIds(env)]);   // _cobIds: numero de cobrador, sem roleta e fora do placar
     const chips = Array.isArray(data && data.chips) ? data.chips : [];
-    await _cobIds(env);   // numero de cobrador: sem roleta e fora do placar (ver _cobIds)
     // Nome do dono de cada chip, numa ida so.
     // Nome E MUNDO de cada dono, na mesma ida: o mundo e o que separa a casa do afiliado.
     const donos = {}, mundoDoDono = {};
     try {
-      const r = await env.DB.prepare("SELECT id, name, COALESCE(afiliado_id,'') afl FROM users WHERE COALESCE(archived,0)=0").all();
+      const r = await _pUsers;
       for (const x of ((r && r.results) || [])) {
         donos[String(x.id)] = x.name || x.id;
         mundoDoDono[String(x.id)] = String(x.afl || '').trim();
@@ -20542,11 +20598,11 @@ async function handleSwWeb(req, env, path) {
     // ve quantos ja chegaram no numero dele sem precisar abrir a dash.
     let lh = {}, leadPorAt = {};
     try {
-      const dia = Math.floor(new Date(_brDay() + 'T00:00:00-03:00').getTime() / 1000);
-      lh = (await _leadsHojePorNumero(env, dia)) || {};
+      // (lido la em cima, junto com o resto: _pLh)
       // E O MESMO DIA POR VENDEDOR, pelo DONO DA HORA (ver o placar da equipe la embaixo). Mesma
       // varredura e mesmo cache do de cima: nao custa consulta nenhuma a mais.
-      leadPorAt = ((await _leadsHojePorAt(env, dia)) || {}).porAt || {};
+      const _x = await _pLh;
+      if (_x) { lh = _x.lh || {}; leadPorAt = _x.porAt || {}; }
     } catch (_) { lh = {}; }
     // A FILA DO MODO LIMITE, pro app mostrar o MESMO que a Chegada de leads mostra.
     //
@@ -20561,9 +20617,7 @@ async function handleSwWeb(req, env, path) {
     // ter que perguntar numero por numero.
     const usoDe = {};
     try {
-      await _swwebUsoTabela(env);
-      const agoraU = Math.floor(Date.now() / 1000);
-      const ru = await env.DB.prepare('SELECT nk, user_id, nome, maquina, desde FROM swweb_uso WHERE ate > ?').bind(agoraU).all();
+      const ru = await _pUso;   // lido la em cima, junto com o resto
       for (const x of ((ru && ru.results) || [])) usoDe[String(x.nk)] = { nome: x.nome || '', user: String(x.user_id || ''), maquina: String(x.maquina || ''), desde: Number(x.desde) || 0 };
     } catch (_) { /* sem a tabela o app so nao mostra cadeado */ }
 
@@ -20640,20 +20694,19 @@ async function handleSwWeb(req, env, path) {
     // wa_conn, nem no heartbeat, nem em wa_api_numbers.
     // Eu mesma fui enganada por esse campo hoje e repassei o numero errado adiante, que e o custo
     // tipico de tela que afirma mais do que sabe.
-    const liveSet = await _presselLiveSet(env);
-    await _carregaApiMorto(env);
+    const liveSet = await _pLive;   // (as quatro de baixo foram lidas la em cima, junto com o resto)
+    await _pMorto;
     // O estado de conexao de todo mundo, numa ida so.
     // QUAIS NUMEROS TEM A SESSAO NA NUVEM (19/10/2026), pro app mostrar a nuvenzinha na linha: e o que
     // diz pro Bruno que o vendedor vai abrir o numero ja conectado, sem QR.
     const nuvemDe = {};
     try {
-      await _swwebSessaoTabela(env);
-      const rn = await env.DB.prepare('SELECT nk, ver, ts, nome FROM swweb_sessao WHERE ver > 0').all();
+      const rn = await _pNuvem;
       for (const x of ((rn && rn.results) || [])) nuvemDe[String(x.nk)] = { ver: Number(x.ver) || 0, ts: Number(x.ts) || 0, nome: String(x.nome || '') };
     } catch (_) { /* sem a tabela a linha so nao mostra a nuvem */ }
     const conns = {};
     try {
-      const rc = await env.DB.prepare('SELECT nk, st, espontaneo, ts FROM swweb_conn').all();
+      const rc = await _pConn;
       for (const x of ((rc && rc.results) || [])) {
         if (x && x.nk) conns[String(x.nk)] = { st: String(x.st || ''), esp: !!x.espontaneo, ts: Number(x.ts) || 0 };
       }
@@ -20771,7 +20824,7 @@ async function handleSwWeb(req, env, path) {
     // mundo dele - inclusive o vendedor, que no resto da lista so ve os numeros dele. Os leads somam
     // TODOS os numeros da pessoa hoje, inclusive o que saiu do ar no meio do dia: e a mesma conta do
     // placar da roleta (nksTodos), entao a barra e a roleta nunca discordam de quem recebeu quanto.
-    const fotos = await _swwebFotosEquipe(req, env);
+    const fotos = await _pFotos;   // lido la em cima, junto com o resto
     for (const n of visiveis) { const f = fotos[String(n.at || '')]; n.foto = (f && f.foto) || ''; n.sigla = (f && f.sigla) || ''; n.corDono = (f && f.cor) || ''; }
     const equipe = [];
     try {
@@ -21543,8 +21596,24 @@ async function handleSwWeb(req, env, path) {
     // A MAQUINA ESTA EM QUARENTENA? (ver o ramo do `forcar` acima). A consulta e por chave
     // primaria e so olha a propria maquina, entao nao pesa no caminho de 45 em 45 segundos.
     // Leitura que falha NAO bloqueia ninguem: quarentena e conveniencia, aluguel e operacao.
+    // AS DUAS LEITURAS NUMA IDA SO (23/11/2026, inspecao): a quarentena e o aluguel atual eram duas
+    // idas em fila, em cada renovacao (de 45 em 45 s por numero aberto). Se o lote falhar (tabela
+    // da quarentena faltando, banco antigo), cai no jeito de antes, uma por uma, cada uma com a
+    // falha propria - o mesmo comportamento de sempre.
+    let _revLido = null, _atualLido = null, _lidasJuntas = false;
     try {
-      const rev = await env.DB.prepare("SELECT ate FROM swweb_uso_revoga WHERE nk=? AND maquina=? AND ate > strftime('%s','now')").bind(nk, maquina).first();
+      const [_r1, _r2] = await env.DB.batch([
+        env.DB.prepare("SELECT ate FROM swweb_uso_revoga WHERE nk=? AND maquina=? AND ate > strftime('%s','now')").bind(nk, maquina),
+        env.DB.prepare('SELECT user_id, nome, maquina, desde, ate FROM swweb_uso WHERE nk=?').bind(nk),
+      ]);
+      _revLido = (_r1 && _r1.results && _r1.results[0]) || null;
+      _atualLido = (_r2 && _r2.results && _r2.results[0]) || null;
+      // So vale se as DUAS voltaram com `results` (o D1 sempre devolve; um banco de mentira de teste
+      // que so devolve o `meta` cai no jeito antigo em vez de ler "nada" e liberar o numero).
+      _lidasJuntas = Array.isArray(_r1 && _r1.results) && Array.isArray(_r2 && _r2.results);
+    } catch (_) { _lidasJuntas = false; }
+    try {
+      const rev = _lidasJuntas ? _revLido : await env.DB.prepare("SELECT ate FROM swweb_uso_revoga WHERE nk=? AND maquina=? AND ate > strftime('%s','now')").bind(nk, maquina).first();
       if (rev) {
         return json({ ok: false, revogado: true, segundos: Math.max(1, Number(rev.ate) - agoraU),
           erro: 'A direção liberou este número. Feche e abra o SellWave Web para usar ele de novo.' });
@@ -21552,7 +21621,8 @@ async function handleSwWeb(req, env, path) {
     } catch (_) { /* sem a tabela, segue o fluxo de sempre */ }
 
     let atual = null;
-    try { atual = await env.DB.prepare('SELECT user_id, nome, maquina, desde, ate FROM swweb_uso WHERE nk=?').bind(nk).first(); } catch (_) { atual = null; }
+    if (_lidasJuntas) atual = _atualLido;
+    else { try { atual = await env.DB.prepare('SELECT user_id, nome, maquina, desde, ate FROM swweb_uso WHERE nk=?').bind(nk).first(); } catch (_) { atual = null; } }
     const vivo = atual && Number(atual.ate) > agoraU;
     if (vivo && String(atual.maquina || '') !== maquina) {
       return json({ ok: false, ocupado: { nome: atual.nome || 'outra pessoa', desde: Number(atual.desde) || 0 } });
@@ -21570,21 +21640,25 @@ async function handleSwWeb(req, env, path) {
       }
     }
     const desde = vivo ? (Number(atual.desde) || agoraU) : agoraU;
-    try {
-      await env.DB.prepare(
-        'INSERT INTO swweb_uso (nk, user_id, nome, maquina, desde, ate) VALUES (?,?,?,?,?,?) ' +
-        'ON CONFLICT(nk) DO UPDATE SET user_id=excluded.user_id, nome=excluded.nome, maquina=excluded.maquina, desde=excluded.desde, ate=excluded.ate'
-      ).bind(nk, String(u.id), String(u.name || u.id), maquina, desde, agoraU + SWWEB_USO_SEG).run();
-    } catch (e) { return err('Não consegui reservar o número agora.', 503); }
     // A VERSAO DO APP DE QUEM ESTA COM O NUMERO (23/10/2026). Ate aqui o `x-sw-versao` chegava e nao
     // ficava em lugar nenhum: pra responder "o Kevin esta atualizado?" a unica saida era perguntar pro
-    // Bruno. Agora: SELECT nome, maquina, versao FROM swweb_uso. Gravacao a parte, depois do aluguel:
-    // coluna que falhe nao pode derrubar a reserva do numero. App antes da 1.25.0 nao manda: 'antiga'.
-    try {
-      if (!_usoVersaoOk) { try { await env.DB.prepare('ALTER TABLE swweb_uso ADD COLUMN versao TEXT').run(); } catch (_) {} _usoVersaoOk = true; }
-      const _v = String(req.headers.get('x-sw-versao') || '').replace(/[^0-9.]/g, '').slice(0, 20) || 'antiga';
-      await env.DB.prepare("UPDATE swweb_uso SET versao=? WHERE nk=? AND COALESCE(versao,'')<>?").bind(_v, nk, _v).run();
-    } catch (_) { /* so registro */ }
+    // Bruno. Agora: SELECT nome, maquina, versao FROM swweb_uso. App antes da 1.25.0 nao manda: 'antiga'.
+    // ALUGUEL E VERSAO NUMA IDA SO (23/11/2026, inspecao), num batch. Se o batch falhar (a coluna
+    // versao sumida, por exemplo), cai no jeito de antes: o aluguel sozinho, com o 503 dele, e a
+    // versao a parte - coluna que falhe nao pode derrubar a reserva do numero.
+    const _v = String(req.headers.get('x-sw-versao') || '').replace(/[^0-9.]/g, '').slice(0, 20) || 'antiga';
+    if (!_usoVersaoOk) { try { await env.DB.prepare('ALTER TABLE swweb_uso ADD COLUMN versao TEXT').run(); } catch (_) {} _usoVersaoOk = true; }
+    const _insUso = () => env.DB.prepare(
+      'INSERT INTO swweb_uso (nk, user_id, nome, maquina, desde, ate) VALUES (?,?,?,?,?,?) ' +
+      'ON CONFLICT(nk) DO UPDATE SET user_id=excluded.user_id, nome=excluded.nome, maquina=excluded.maquina, desde=excluded.desde, ate=excluded.ate'
+    ).bind(nk, String(u.id), String(u.name || u.id), maquina, desde, agoraU + SWWEB_USO_SEG);
+    const _verUso = () => env.DB.prepare("UPDATE swweb_uso SET versao=? WHERE nk=? AND COALESCE(versao,'')<>?").bind(_v, nk, _v);
+    let _gravouJunto = false;
+    try { await env.DB.batch([_insUso(), _verUso()]); _gravouJunto = true; } catch (_) { _gravouJunto = false; }
+    if (!_gravouJunto) {
+      try { await _insUso().run(); } catch (e) { return err('Não consegui reservar o número agora.', 503); }
+      try { await _verUso().run(); } catch (_) { /* so registro */ }
+    }
     return json({ ok: true, ate: agoraU + SWWEB_USO_SEG });
   }
 
@@ -25243,8 +25317,33 @@ async function _scSeedOwners(env, opts) {
       }
       return 0;
     }
+    // A ASSINATURA TAMBEM FICA NO BANCO (23/11/2026, inspecao). O `_seedSig` acima mora na memoria do
+    // isolate, e a batida do cron quase nunca cai no mesmo isolate da anterior: MEDIDO em 22-23/11,
+    // 56.254 regravacoes por dia em wa_number_owner (~97 por batida de 'conexao', ou seja, TODA
+    // batida regravava os ~95 numeros um a um, ~95 idas ao banco em fila segurando o cron e um terco
+    // de todas as escritas do D1 no dia). Agora a batida le a assinatura da ultima gravacao (uma
+    // linha) e so regrava se a lista mudou ou se passou meia hora, como o `soSeMudou` sempre quis.
+    // Quem chama SEM a opcao (cadastro de numero, registro na API) continua gravando sempre.
+    let _sigH = '';
+    try { _sigH = await sha256Hex(_sig); } catch (_) { _sigH = ''; }
+    if (opts && opts.soSeMudou && _sigH) {
+      let salvo = null;
+      try { salvo = JSON.parse((await _readConfig(env, 'seed_owners_sig')) || 'null'); } catch (_) { salvo = null; }
+      if (salvo && salvo.h === _sigH && (Date.now() - (Number(salvo.t) || 0)) < 1800000) {
+        _seedSig = _sig; _seedT = Number(salvo.t) || Date.now();
+        for (const c of chips) {
+          if (!(c && c.api === true)) continue;
+          const num = String(c.num || '').replace(/\D/g, ''), at = c.at != null ? String(c.at) : '';
+          if (!num || !at) continue;
+          try { await env.DB.prepare("UPDATE wa_api_numbers SET at_id=?, updated_at=strftime('%s','now') WHERE num_key=? AND COALESCE(at_id,'')<>?").bind(at, _waNumKey(num), at).run(); } catch (_) {}
+        }
+        return 0;
+      }
+    }
     let n = 0;
     const vivos = [];
+    const _ups = [];   // os upserts vao juntos (env.DB.batch), nao um por ida ao banco
+    const _apis = [];
     for (const c of chips) {
       const num = String((c && c.num) || '').replace(/\D/g, '');
       const at = c && (c.at != null ? String(c.at) : '');
@@ -25254,19 +25353,28 @@ async function _scSeedOwners(env, opts) {
       // Se os 2 números do vendedor ficassem na MESMA instância, eles colidiriam depois no
       // mergeSc do handleWAConn (byInst) e só um apareceria como "WhatsApp rodando".
       const inst = 'ax_' + at + (c.bkp === true ? '_b' : '');
-      await env.DB.prepare(
+      _ups.push(env.DB.prepare(
         // created_at fica SÓ no INSERT (fora do DO UPDATE): é o nascimento do número no sistema, usado
         // pelo aquecimento. Se entrasse no UPDATE, todo seed do cron "rejuvenesceria" o número e ele
         // ficaria eternamente em aquecimento com teto baixo.
         `INSERT INTO wa_number_owner (number, at_id, instance, source, num_key, created_at, updated_at) VALUES (?, ?, ?, 'chips', ?, strftime('%s','now'), strftime('%s','now'))
          ON CONFLICT(number) DO UPDATE SET at_id=excluded.at_id, instance=excluded.instance, source=excluded.source, num_key=excluded.num_key, updated_at=excluded.updated_at`
-      ).bind(num, at, inst, _waNumKey(num)).run();
+      ).bind(num, at, inst, _waNumKey(num)));
       // Chip marcado como API oficial → liga o vendedor (at_id) ao número oficial (Cloud API) por num_key.
       // O phone_number_id nasce no registro (Fase R); aqui só conecta o dono quando a linha já existe.
-      if (c && c.api === true) {
-        try { await env.DB.prepare("UPDATE wa_api_numbers SET at_id=?, updated_at=strftime('%s','now') WHERE num_key=?").bind(at, _waNumKey(num)).run(); } catch (_) {}
-      }
+      if (c && c.api === true) _apis.push([at, _waNumKey(num)]);
       n++;
+    }
+    // EM LOTES DE 40, cada lote numa ida so. Lote que falhar cai no jeito antigo (um por um), e um
+    // erro ali sobe pro catch de fora como sempre subiu: a assinatura nao e gravada e a proxima
+    // batida tenta de novo.
+    for (let i = 0; i < _ups.length; i += 40) {
+      const lote = _ups.slice(i, i + 40);
+      try { await env.DB.batch(lote); }
+      catch (_) { for (const st of lote) await st.run(); }
+    }
+    for (const [at, nk] of _apis) {
+      try { await env.DB.prepare("UPDATE wa_api_numbers SET at_id=?, updated_at=strftime('%s','now') WHERE num_key=?").bind(at, nk).run(); } catch (_) {}
     }
     // Remove dono ÓRFÃO: chip que perdeu o atendente ou saiu da base. Sem isso a linha velha fica
     // pra sempre e um número reaproveitado sequestraria a instância do vendedor antigo (o lead dele
@@ -25278,13 +25386,17 @@ async function _scSeedOwners(env, opts) {
     // Só marca como inativo, guardando o último dono conhecido pra atribuição continuar funcionando.
     // Guarda: só mexe se leu uma lista plausível (evita zerar tudo num read parcial) e se cabe no
     // limite de parâmetros do D1.
-    if (vivos.length >= 3 && vivos.length <= 90) {
+    // A LISTA VAI COMO UM PARAMETRO SO, por json_each (23/11/2026, inspecao). Era um `?` por numero
+    // com teto de 90 (o D1 aceita no maximo 100 parametros), e a operacao passou de 90 numeros com
+    // dono no fim de outubro: desde 30/10 esta faxina nao rodava mais (a ultima linha 'chips_off' e
+    // de 30/10, e havia 99 linhas 'chips' pra ~97 numeros vivos). Mesma regra, sem o teto.
+    if (vivos.length >= 3 && vivos.length <= 2000) {
       try {
-        const ph = vivos.map(() => '?').join(',');
-        await env.DB.prepare(`UPDATE wa_number_owner SET source='chips_off' WHERE source='chips' AND number NOT IN (${ph})`).bind(...vivos).run();
+        await env.DB.prepare("UPDATE wa_number_owner SET source='chips_off' WHERE source='chips' AND number NOT IN (SELECT value FROM json_each(?))").bind(JSON.stringify(vivos)).run();
       } catch (_) {}
     }
     _seedSig = _sig; _seedT = Date.now();
+    if (_sigH) { try { await _writeConfig(env, 'seed_owners_sig', JSON.stringify({ h: _sigH, t: _seedT })); } catch (_) { /* sem a marca a proxima batida so regrava de novo */ } }
     return n;
   } catch (_) { return 0; }
 }
@@ -25617,6 +25729,41 @@ async function _ehUsuarioAtivo(env, atId) {
   _usuarioAtivoCache.set(k, { v, t: Date.now() });
   return v;
 }
+// O BANCO VIGIADO DA INGESTAO (23/11/2026, inspecao). A ingestao abaixo engole erro de proposito em
+// cada passo (o lote nao pode cair por um evento ruim), e o _waLeadCapture engole tudo por dentro.
+// So que o ack saia MESMO quando o passo falhou porque o D1 estava em rajada ("D1 DB is overloaded",
+// ~2 vezes por dia): o app marcava a mensagem como entregue e a colheita nunca mais mandava, e o
+// lead podia ficar sem o codigo do anuncio (sem pixel, venda sem atribuicao). Este envelope so CONTA
+// as falhas PASSAGEIRAS do banco (rajada, rede, prazo), sem mudar nada no que cada passo faz; o
+// evento que pegou uma delas fica sem ack e a colheita do app manda de novo em ate 2 min. Reenviar
+// e seguro: mensagem (INSERT OR IGNORE por msg_id), venda (por msg_id), lead e atribuicao (upsert
+// por telefone) e bolinha (so soma linha nova) ja eram feitos pra repeticao.
+// Erro de regra (tabela, coluna, restricao) NAO conta: esse nao passa tentando de novo.
+const _RE_D1_PASSAGEIRO = /overloaded|queued for too long|network connection lost|timed? ?out|connection reset|internal error|try again|storage operation exceeded/i;
+function _d1Vigiado(env, vig) {
+  if (!env || !env.DB) return env;
+  const nota = (e) => { if (_RE_D1_PASSAGEIRO.test(String((e && e.message) || e))) vig.passageiro++; throw e; };
+  const embrulha = (st) => {
+    if (!st || typeof st !== 'object') return st;
+    return {
+      __vigReal: st,
+      bind: (...a) => embrulha(st.bind(...a)),
+      first: (...a) => Promise.resolve().then(() => st.first(...a)).catch(nota),
+      all: (...a) => Promise.resolve().then(() => st.all(...a)).catch(nota),
+      run: (...a) => Promise.resolve().then(() => st.run(...a)).catch(nota),
+      raw: (...a) => Promise.resolve().then(() => st.raw(...a)).catch(nota),
+    };
+  };
+  const db = new Proxy(env.DB, {
+    get(t, k) {
+      if (k === 'prepare') return (sql) => embrulha(t.prepare(sql));
+      if (k === 'batch') return (lista) => Promise.resolve().then(() => t.batch((lista || []).map((s) => (s && s.__vigReal) ? s.__vigReal : s))).catch(nota);
+      const v = t[k];
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
+  return { ...env, DB: db };
+}
 // POST /api/salechat/ingest/<token> — recebe um LOTE de eventos capturados pelo Sale Chat.
 // FASE 0: grava só na auditoria crua e devolve o ack (msg_id aceitos) pro injetor drenar a fila.
 async function handleSalechatIngest(req, env, token) {
@@ -25624,6 +25771,9 @@ async function handleSalechatIngest(req, env, token) {
   if (!expected || token !== expected) return json({ error: 'token inválido' }, 401);
   let body; try { body = await req.json(); } catch (_) { return json({ ok: true, ack: [] }); }
   const events = Array.isArray(body?.events) ? body.events : (Array.isArray(body) ? body : []);
+  const _vig = { passageiro: 0 };
+  env = _d1Vigiado(env, _vig);   // ver o comentario do _d1Vigiado: so muda QUEM ganha ack
+  let _segurados = 0;
   await _scEnsureTables(env);
   const now = Math.floor(Date.now() / 1000);
   const ack = [];
@@ -25634,6 +25784,7 @@ async function handleSalechatIngest(req, env, token) {
   const src = await _waCaptureSource(env);   // 'sc' = computar aqui (lead/venda/pixel); 'evo' = só auditar
   const salesOut = [];   // vendas registradas neste lote (pro Sale Chat confirmar pro vendedor)
   for (const e of events) {
+    const _falhasAntes = _vig.passageiro;   // falha passageira do banco DURANTE este evento = sem ack
     try {
       const msgId = String(e?.msgId || e?.id || '');
       const selfNumber = String(e?.selfNumber || '').replace(/\D/g, '');
@@ -25694,7 +25845,7 @@ async function handleSalechatIngest(req, env, token) {
               media_url: mediaUrl || null, cobranca: true,
             });
           } catch (_) {}
-          if (msgId) ack.push(msgId);
+          if (msgId && _vig.passageiro === _falhasAntes) ack.push(msgId); else if (msgId) _segurados++;
           continue;
         }
         // Espelha no histórico (wa_messages/wa_chats). É daqui que saem o RITMO da roleta e o TETO
@@ -25745,9 +25896,10 @@ async function handleSalechatIngest(req, env, token) {
       // (cifraMs) e quantas ja sairam sem a legivel (cifraSoltas). So loga quando houve espera: e o
       // dado pra acertar o prazo da espera, que hoje e um chute conservador de 6 s.
       if (Number(e?.cifraMs) > 0 || Number(e?.cifraSoltas) > 0) console.log('SWWEB_CIFRA ms=' + (Number(e?.cifraMs) || 0) + ' soltas=' + (Number(e?.cifraSoltas) || 0) + ' tipo=' + String(e?.type || '') + ' num=' + selfNumber.slice(-4));
-      if (msgId) ack.push(msgId);
+      if (msgId && _vig.passageiro === _falhasAntes) ack.push(msgId); else if (msgId) _segurados++;
     } catch (_) { /* nunca quebra o lote inteiro por um evento ruim */ }
   }
+  if (_segurados) console.log('SWWEB_ACK_SEGURADO n=' + _segurados + ' de=' + events.length + ' (banco em rajada: a colheita do app manda de novo)');
   return json({ ok: true, ack, count: ack.length, sales: salesOut });
 }
 // ═══════════════════════════════════════════════════════════════════════════════════════════
@@ -27092,19 +27244,34 @@ function _fetchComTeto(url, ms, init = {}) {
 // A CHAVE DO DATACRAZY, SEPARANDO "NAO TEM" DE "O BANCO NAO RESPONDEU" (14/10/2026). O _readConfig
 // engole o erro e devolve null: com o D1 sobrecarregado (14/10, das 16:46 as 16:56) o inbox avisou
 // "sem_dc_api_key" com a chave salva ali, e quem le acha que a integracao foi desligada.
+// A MARCA DE "PLANO SEM API" VEM NA MESMA LEITURA DA CHAVE (23/11/2026, inspecao). A conta da casa no
+// Datacrazy esta no plano gratis e a API deles responde HTTP 400 "upgrade-plan" (requiredPlan Pro) em
+// TODA chamada: medido em 22-23/11, ~2.900 chamadas por dia so pra ouvir o mesmo nao (o sync do
+// inbox e a busca de lead, de minuto em minuto), cada uma segurando a batida do cron. Quando a
+// resposta e essa, a casa (ou o mundo do afiliado, cada um com a sua marca) fica 1 hora sem chamar;
+// se o plano voltar, a primeira chamada depois da hora passa e tudo segue sozinho.
+const DC_PAUSA_PLANO_MS = 3600000;
 async function _dcChave(env, mundo) {
   try {
     await _ensureConfigTable(env);
-    const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(_cfgNome('dc_api_key', mundo)).first();
-    const key = (row && row.value) || '';
-    return { key, erro: key ? '' : 'sem_dc_api_key' };
-  } catch (_) { return { key: '', erro: 'o banco de dados nao respondeu agora (lentidao momentanea)' }; }
+    const kChave = _cfgNome('dc_api_key', mundo), kPausa = _cfgNome('dc_plano_free', mundo);
+    const rows = await env.DB.prepare('SELECT key, value FROM app_config WHERE key IN (?, ?)').bind(kChave, kPausa).all();
+    let key = '', pausaAte = 0;
+    for (const x of ((rows && rows.results) || [])) {
+      if (x.key === kChave) key = x.value || '';
+      else if (x.key === kPausa) pausaAte = Number(x.value) || 0;
+    }
+    return { key, erro: key ? '' : 'sem_dc_api_key', pausaAte };
+  } catch (_) { return { key: '', erro: 'o banco de dados nao respondeu agora (lentidao momentanea)', pausaAte: 0 }; }
 }
 async function _dcApiGetRaw(env, path, mundo) {
   // `mundo` vazio = a casa. Com afiliado, a chave e a DELE e nao existe queda pra nossa: puxar a
   // conversa do cliente dele com a nossa chave nao devolveria nada e ainda gastaria requisicao.
-  const { key, erro: _semChave } = await _dcChave(env, mundo);
+  const { key, erro: _semChave, pausaAte } = await _dcChave(env, mundo);
   if (!key) return { ok: false, status: 0, dados: null, erro: _semChave };
+  if (pausaAte > Date.now()) {
+    return { ok: false, status: 400, dados: null, erro: 'plano do Datacrazy sem API (upgrade-plan): pausado ate ' + new Date(pausaAte - 3 * 3600000).toISOString().slice(11, 16) };
+  }
   // TIMEOUT OBRIGATORIO (22/09/2026), a mesma guarda que a ponte da Evolution ja tinha e este caminho nao:
   // sem ele, Datacrazy pendurado = requisicao pendurada, e como e a propria TELA do inbox que chama
   // isto (/api/wa/dc/tick), a dash inteira fica esperando. Medido no ar antes da correcao: 83
@@ -27135,6 +27302,9 @@ async function _dcApiGetRaw(env, path, mundo) {
   if (!r.ok) {
     // o CORPO do erro e o que diz se e chave vencida (401), permissao/plano (403) ou throttle (429)
     const corpo = await r.text().catch(() => '');
+    if (r.status === 400 && corpo.includes('"upgrade-plan"')) {
+      try { await _writeConfig(env, _cfgNome('dc_plano_free', mundo), String(Date.now() + DC_PAUSA_PLANO_MS)); } catch (_) { /* sem a marca, so tenta de novo na proxima */ }
+    }
     return { ok: false, status: r.status, dados: null, erro: 'HTTP ' + r.status + ' ' + corpo.slice(0, 200) };
   }
   try {
@@ -32409,9 +32579,15 @@ async function _numerosMudos(env) {
     // banco em fila era tempo de pagina do anuncio. As tres ultimas (o conjunto preso e as provas de
     // reaberto e religado) tem a falha propria: falhar nelas nao pode derrubar a contagem.
     const _24h = agoraS - 86400;
+    // O `direction IN ('in','out')` NA CONSULTA DAS MENSAGENS (23/11/2026, inspecao). So com `ts>=?`
+    // o SQLite varria o indice idx_wa_msg_dir_ts INTEIRO (direction vem primeiro nele): 271 mil
+    // linhas lidas por rodada, 1.757 rodadas por dia, ~60% de TODAS as linhas que o banco le no dia,
+    // pra contar o que chegou em 30 minutos. Com o IN ele faz duas buscas pela faixa de ts
+    // ("SEARCH ... (direction=? AND ts>?)", conferido com EXPLAIN QUERY PLAN). Mesmo resultado: na
+    // tabela so existem 'in' e 'out' (o _waLogMsg so grava esses dois).
     const [rv, rm, rCfg, rConn, rLiga] = await Promise.all([
       env.DB.prepare("SELECT num_key nk, (ts/60)*60 b, COUNT(*) n FROM tt_pending INDEXED BY idx_ttp_ts_num WHERE ts>=? AND num_key IS NOT NULL AND num_key<>'' GROUP BY 1,2").bind(desde).all(),
-      env.DB.prepare("SELECT substr(instance,-8) k, SUM(CASE WHEN direction='in' THEN 1 ELSE 0 END) ent, COUNT(*) n FROM wa_messages WHERE ts>=? GROUP BY 1").bind(desde).all(),
+      env.DB.prepare("SELECT substr(instance,-8) k, SUM(CASE WHEN direction='in' THEN 1 ELSE 0 END) ent, COUNT(*) n FROM wa_messages WHERE direction IN ('in','out') AND ts>=? GROUP BY 1").bind(desde).all(),
       env.DB.prepare('SELECT key, value FROM app_config WHERE key IN (?, ?)').bind(MUDO_PRESO_KEY, MUDO_RECOMECO_KEY).all().catch(() => null),
       env.DB.prepare("SELECT nk, ts FROM swweb_conn WHERE st='pronto' AND ts > ?").bind(_24h).all().catch(() => null),
       env.DB.prepare("SELECT nk, MAX(ts) ts FROM pressel_num_log WHERE acao='liga' AND por<>'sistema' AND ts > ? GROUP BY nk").bind(_24h).all().catch(() => null),
@@ -37652,6 +37828,23 @@ async function handlePresselsTotalPage(req, env){
 let _presselTablesOk = false;
 async function _presselEnsure(env){
   if (_presselTablesOk) return;
+  // A SONDA BARATA (23/11/2026, inspecao): "uma vez por isolate" ainda eram 14 comandos de esquema EM
+  // FILA, ~2 a 3 s no PRIMEIRO clique de cada isolate - e isolate novo nasce o tempo todo: MEDIDO
+  // hoje, 56 "ALTER TABLE tt_pending ADD COLUMN ttp" em 105 segundos as 08h, ou seja, 56 visitantes
+  // pagos esperando a pagina por isso (e o p95 de 1,8 s da /p/13). Mesmo remedio do _waEnsureTables:
+  // UMA ida ao banco le as colunas mais novas e as tres tabelas; passando, nao ha DDL nenhuma. So
+  // quando a sonda falha (banco novo, coluna nova no codigo) a lista inteira roda, como antes.
+  // REGRA: coluna nova no tt_pending aqui embaixo? ponha ela na sonda tambem.
+  try {
+    await env.DB.batch([
+      env.DB.prepare('SELECT code, clicked, num_key, utm, fbc, fbp, ip, ua, url, ttp FROM tt_pending LIMIT 0'),
+      env.DB.prepare('SELECT pid, day, hits FROM pressel_hits LIMIT 0'),
+      env.DB.prepare('SELECT pid, views, clicks FROM pressel_stats LIMIT 0'),
+      env.DB.prepare('SELECT pid, day, views, clicks FROM pressel_day LIMIT 0'),
+    ]);
+    _presselTablesOk = true;
+    return;
+  } catch (_) { /* falta coluna ou tabela: roda a lista inteira abaixo */ }
   try{
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS pressel_hits (pid TEXT, day TEXT, hits INTEGER DEFAULT 0, PRIMARY KEY(pid,day))').run();
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS tt_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, inst TEXT, ttclid TEXT, pid TEXT, ts INTEGER, claimed INTEGER DEFAULT 0)').run();
@@ -40163,7 +40356,12 @@ async function _cronPurga(env) {
   // dash e NUNCA chegava no pixel, e ninguém via. Mesmo event_id = TikTok deduplica, não conta 2x.
   try { await _ttRetryFailed(env); } catch (_) {}
   // Guarda o histórico dos envios por 60 dias (serve de prova pro gestor de tráfego).
-  try { await env.DB.prepare("DELETE FROM tt_events WHERE status='ok' AND ts < strftime('%s','now')-5184000").run(); } catch (_) {}
+  // O `+` NA FRENTE DO status E DE PROPOSITO (23/11/2026, inspecao). Sem ele o SQLite escolhia o
+  // indice idx_tt_retry (status, next_try) e varria TODOS os eventos 'ok' (23,8 mil) atras dos poucos
+  // velhos: 0,9 s de banco travado por rodada, 137 rodadas por dia, e o D1 e uma fila so (foi um dos
+  // "D1 DB is overloaded" das 08h). Com o `+` ele anda pelo idx_tt_events_ts (ts) e le so os velhos.
+  // Conferido com EXPLAIN QUERY PLAN: "SEARCH tt_events USING INDEX idx_tt_events_ts (ts<?)".
+  try { await env.DB.prepare("DELETE FROM tt_events WHERE +status='ok' AND ts < strftime('%s','now')-5184000").run(); } catch (_) {}
   // FAXINA DOS LOGS/DEBUG (12/09/2026, pedido do Bruno). Sao tabelas que so CRESCEM e ninguem le
   // depois de alguns dias: payload cru de webhook, evento bruto, falha de envio. Nada aqui alimenta
   // tela nem regra de operacao - e material de investigacao. Janela GENEROSA (21-30 dias) pra sempre

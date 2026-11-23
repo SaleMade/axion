@@ -50,8 +50,10 @@ console.log('\nCAPTURA: DE QUEM E O LEAD\n');
 const blocoIngest = recorta('async function handleSalechatIngest(', '\n// ═══');
 const blocoInst = recorta('function _instComNumero(', '\n// Resolve o número OFICIAL');
 const blocoNaoMsg = recorta('const _WA_NAO_MSG = new Set([', '\n// LEAD:');
+// o banco vigiado da ingestao (23/11/2026): conta falha passageira do D1 pra segurar o ack
+const blocoVigia = recorta('const _RE_D1_PASSAGEIRO', '\n// POST /api/salechat/ingest/');
 
-function montaIngest() {
+function montaIngest(opts = {}) {
   const chamadas = { lead: [], attrib: [], log: [], venda: [] };
   // o 3o numero e de COBRADOR (31/10/2026, versao de cobrador do app): ver o bloco no fim.
   const DONOS = { '5515974060653': { at_id: 'dir', instance: 'ax_dir' }, '5515900005555': { at_id: 'ccol_5', instance: 'ax_ccol_5' }, '5515900007777': { at_id: 'cob_hay', instance: 'ax_cob_hay' } };   // dono do NUMERO na Contingencia (o 2o esta numa COLUNA)
@@ -63,7 +65,8 @@ function montaIngest() {
           bind(...args) {
             return {
               run: async () => { if (/INSERT INTO wa_attrib/.test(sql)) chamadas.attrib.push(args); return {}; },
-              first: async () => null, all: async () => ({ results: [] }),
+              first: async () => { if (opts.falhaNoBanco && /SELECT 1 FROM rajada/.test(sql)) throw new Error(opts.falhaNoBanco); return null; },
+              all: async () => ({ results: [] }),
             };
           },
           run: async () => ({}),
@@ -79,14 +82,15 @@ function montaIngest() {
     resolveOwner: async (_env, num) => DONOS[String(num)] || null,
     _waLogMsg: async (_env, m) => { chamadas.log.push(m); },
     _waDetectSale: async (_env, inst) => { chamadas.venda.push(inst); return {}; },
-    _waLeadCapture: async (_env, inst) => { chamadas.lead.push(inst); },
+    // Igual ao de verdade: le o banco e ENGOLE o erro por dentro (o _waLeadCapture tem catch geral).
+    _waLeadCapture: async (_env, inst) => { chamadas.lead.push(inst); try { await _env.DB.prepare('SELECT 1 FROM rajada').bind().first(); } catch (_) {} },
     _ehUsuarioAtivo: async (_env, at) => !/^ccol_/.test(String(at)),
     _scStoreMedia: async () => '',
     _cobIds: async () => new Set(['cob_hay']),
     json: (obj) => obj,
   };
   const nomes = Object.keys(deps);
-  const fabrica = new Function(...nomes, 'let _attribTablesOk = true;\n' + blocoNaoMsg + '\n' + blocoInst + '\n' + blocoIngest + '\nreturn handleSalechatIngest;');
+  const fabrica = new Function(...nomes, 'let _attribTablesOk = true;\n' + blocoNaoMsg + '\n' + blocoInst + '\n' + blocoVigia + '\n' + blocoIngest + '\nreturn handleSalechatIngest;');
   const handleSalechatIngest = fabrica(...nomes.map((n) => deps[n]));
   const chama = (body) => handleSalechatIngest({ json: async () => body }, env, 'tok');
   return { chama, chamadas };
@@ -151,6 +155,26 @@ const evLead = { msgId: 'm1', selfNumber: '5515974060653', phone: '5511988887777
   const { chama, chamadas } = montaIngest();
   await chama({ installId: 'swweb:cob_hay', donoPorNumero: true, events: [{ ...evLead, msgId: 'c3' }] });
   conta('o numero do dir, mesmo aberto no app do cobrador, segue virando lead do dir', chamadas.lead[0] === 'ax_dir_74060653' && chamadas.log[0] && !chamadas.log[0].cobranca, JSON.stringify(chamadas.lead));
+}
+
+// BANCO EM RAJADA NAO DA RECIBO (23/11/2026, inspecao). O _waLeadCapture engole o erro por dentro; o
+// banco vigiado conta a falha PASSAGEIRA e o evento sai sem ack, pra colheita do app mandar de novo.
+// Erro de REGRA (coluna, tabela) nao segura: esse nao passa tentando de novo.
+{
+  const { chama, chamadas } = montaIngest({ falhaNoBanco: 'D1_ERROR: D1 DB is overloaded. Requests queued for too long.' });
+  const r = await chama({ installId: 'swweb:socio_x4dy6d', donoPorNumero: true, events: [{ ...evLead, msgId: 'r1' }] });
+  conta('rajada no banco: o lead foi tentado', chamadas.lead.length === 1);
+  conta('rajada no banco: o evento fica SEM recibo (a colheita manda de novo)', r && Array.isArray(r.ack) && r.ack.length === 0, JSON.stringify(r && r.ack));
+}
+{
+  const { chama } = montaIngest({ falhaNoBanco: 'D1_ERROR: no such column: xyz' });
+  const r = await chama({ installId: 'swweb:socio_x4dy6d', donoPorNumero: true, events: [{ ...evLead, msgId: 'r2' }] });
+  conta('erro de regra no banco nao segura o recibo (nao adianta repetir)', r && Array.isArray(r.ack) && r.ack.length === 1 && r.ack[0] === 'r2', JSON.stringify(r && r.ack));
+}
+{
+  const { chama } = montaIngest();
+  const r = await chama({ installId: 'swweb:socio_x4dy6d', donoPorNumero: true, events: [{ ...evLead, msgId: 'r3' }, { ...evLead, msgId: 'r4', fromMe: true, body: 'ok' }] });
+  conta('banco normal: os dois eventos ganham recibo', r && Array.isArray(r.ack) && r.ack.join(',') === 'r3,r4', JSON.stringify(r && r.ack));
 }
 
 console.log('\n' + ok + ' certos, ' + falhas.length + ' errados');
