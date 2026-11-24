@@ -348,7 +348,10 @@ async function _verComoNaLeitura(req, env, u) {
   let como = '';
   try { como = new URL(req.url).searchParams.get('como') || ''; } catch (_) { como = ''; }
   if (!como || String(como) === String(u.id)) return u;
-  const SEL = (extra) => 'SELECT id, login, name, abbr, role, color, bg, com_pct, photo, banner, email' + extra + ' FROM users WHERE id = ? AND COALESCE(archived,0) = 0';
+  // O DESLIGADO TAMBEM DA PRA VER (23/11/2026): o diretor confere o que a pessoa que saiu enxerga
+  // antes de avisar. Arquivado entra aqui marcado `desligado`, e e a marca que recorta tudo (ver
+  // _gateDesligado), entao o preview mostra exatamente o login dele.
+  const SEL = (extra) => 'SELECT id, login, name, abbr, role, color, bg, com_pct, photo, banner, email, COALESCE(archived,0) AS archived' + extra + ' FROM users WHERE id = ?';
   let alvo = null;
   try { alvo = await env.DB.prepare(SEL(', afiliado_id, ve_desde')).bind(String(como)).first(); }
   catch (_) {
@@ -356,7 +359,9 @@ async function _verComoNaLeitura(req, env, u) {
     catch (_2) { try { alvo = await env.DB.prepare(SEL('')).bind(String(como)).first(); } catch (_3) { alvo = null; } }
   }
   if (!alvo || isDirector(alvo)) return u;
-  return { ...alvo, user_id: alvo.id, expires_at: u.expires_at, _comoDe: String(u.id) };
+  const desligado = Number(alvo.archived) === 1;
+  delete alvo.archived;
+  return { ...alvo, desligado, user_id: alvo.id, expires_at: u.expires_at, _comoDe: String(u.id) };
 }
 // SESSAO LEMBRADA POR 10s, SO PRA LEITURA (19/09/2026, o inbox tem que ser rapido). Achar a
 // sessao e uma ida ao D1 (~200ms) em TODA requisicao, e o inbox de cada vendedor faz quatro
@@ -398,7 +403,11 @@ async function _authSessaoBanco(req, env, token, now) {
      WHERE s.token = ? AND s.expires_at > ?`;
   // ve_desde entra pela MESMA rede acima: o banco do Giovane roda este codigo e pode nao ter a
   // coluna. Cada degrau abaixo perde uma coluna e nunca a autenticacao.
+  // O `archived` VEM NO PRIMEIRO DEGRAU (23/11/2026, funcionario desligado com acesso restrito, ver
+  // _gateDesligado). Falhou (banco sem a coluna), cai na escada de sempre e a pessoa so nao e marcada.
   try {
+    row = await env.DB.prepare(SEL(', u.afiliado_id, u.ve_desde, COALESCE(u.archived,0) AS archived')).bind(token, now).first();
+  } catch (_0) { try {
     row = await env.DB.prepare(SEL(', u.afiliado_id, u.ve_desde')).bind(token, now).first();
   } catch (_) {
     try { await env.DB.prepare('ALTER TABLE users ADD COLUMN afiliado_id TEXT').run(); } catch (_2) {}
@@ -408,8 +417,14 @@ async function _authSessaoBanco(req, env, token, now) {
       try { row = await env.DB.prepare(SEL(', u.afiliado_id')).bind(token, now).first(); }
       catch (_4) { row = await env.DB.prepare(SEL('')).bind(token, now).first(); }
     }
-  }
+  } }
   if (!row) return null;
+  // ARQUIVADO COM SESSAO VIVA = DESLIGADO COM ACESSO RESTRITO. Arquivar do jeito de sempre apaga as
+  // sessoes e estraga o login (ver handleDeleteUser); so o "manter o acesso ao que e dele" deixa a
+  // pessoa entrando. Mesmo assim a regra e pela coluna e nao pelo modo: arquivado que tenha sessao,
+  // por qualquer caminho, cai no recorte, que e o lado seguro.
+  row.desligado = Number(row.archived) === 1;
+  delete row.archived;
   // Sliding expiry: enquanto o usuário usa, renova o prazo. Pra não gravar a cada
   // request (polling de 10s), só renova quando falta menos de (TTL - 1 dia) →
   // no máximo ~1 write/dia por sessão. Assim sessão ativa nunca expira.
@@ -712,6 +727,50 @@ async function _gateRestrito(req, env, path) {
     if (!(await _restritoAgora(env, u))) return null;
     console.log('AFL_RESTRITO barrou ' + String(req.method || '?') + ' ' + p + ' de ' + String((u && u.login) || '?'));
     return err('Sem permissão', 403);
+  } catch (_) { return null; }   // nunca derrubar a API por causa deste gate
+}
+
+// ══ FUNCIONARIO DESLIGADO COM ACESSO RESTRITO (23/11/2026) ═══════════════════════════════════
+//
+// Pedido do Bruno, pensando no cobrador que vai sair: "quero que ele continue tendo acesso ainda ao
+// login dele. Porem, ele vai ficar acompanhando mais a questao do salario dele, as vendas dele, tudo
+// que ele ja fez (...) que ele nao fique espionando nada da nossa operacao, nao tenha acesso ao
+// numero dos clientes (...) e que ele tenha acesso tambem ao aplicativo dele".
+//
+// QUEM E: usuario ARQUIVADO que ainda tem sessao (a marca `desligado` nasce no _authSessaoBanco).
+// Arquivar do jeito de sempre estraga o login e apaga as sessoes; o modo "manter o acesso ao que e
+// dele" (handleDeleteUser com ?manter=1) arquiva sem fazer isso. Enquanto o diretor nao arquiva,
+// NADA muda pra pessoa: esta tranca nem existe pra quem nao esta arquivado.
+//
+// O QUE ELE ALCANCA, por lista BRANCA (rota nova nasce fechada, mesma razao do _gateRestrito):
+//   /auth/me, /auth/login, /auth/logout -> entrar e sair
+//   GET /api/state e /api/state/pulso   -> o estado DELE, recortado em _stateDoDesligado
+//   GET /api/users                      -> so a propria linha (salario, comissao)
+// O resto leva 403 com `desligado: true`, que e o que faz a aba que ficou aberta se recarregar
+// UMA vez e redesenhar o menu curto (ver lib/api.js). Saque nao entra: ele acompanha, o acerto e
+// com a direcao.
+//
+// O SELLWAVE WEB DO COMPUTADOR DELE FECHA OS NUMEROS SEM VERSAO NOVA DO APP. O app renova o aluguel
+// de cada numero aberto de 45 em 45 s (/api/swweb/uso) e fecha o numero quando a resposta diz
+// `revogado`; ao abrir, pede o mesmo aluguel e nao abre se vier `revogado`. Um 403 aqui NAO serviria:
+// o app trata como falha de rede e deixa o WhatsApp aberto. A lista de numeros volta vazia pelo
+// mesmo motivo (com 403 a barra lateral continuaria mostrando a lista velha guardada no disco).
+const _DESL_OK_GET = new Set(['/api/state', '/api/state/pulso', '/api/users', '/auth/me']);
+async function _gateDesligado(req, env, path) {
+  try {
+    const p = String(path || '');
+    if (p.indexOf('/api/') !== 0 && p.indexOf('/auth/') !== 0) return null;
+    if (p === '/auth/login' || p === '/auth/logout') return null;
+    const auth = req.headers.get('authorization') || '';
+    if (!/^Bearer\s+[a-f0-9]{64}$/i.test(auth)) return null;                  // sem sessao: o handler decide
+    const u = await authUser(req, env);
+    if (!u || !u.desligado) return null;
+    const m = String(req.method || 'GET').toUpperCase();
+    if (p === '/api/swweb/uso') return json({ ok: false, revogado: true, erro: 'Este número não está mais liberado para você.' });
+    if (p === '/api/swweb/numeros') return json({ ok: true, numeros: [], equipe: [], cobradores: [], direcao: false, cargo: '' });
+    if ((m === 'GET' || m === 'HEAD') && _DESL_OK_GET.has(p)) return null;
+    console.log('DESLIGADO barrou ' + m + ' ' + p + ' de ' + String((u && u.id) || '?'));
+    return json({ error: 'Sem permissão', desligado: true }, 403);
   } catch (_) { return null; }   // nunca derrubar a API por causa deste gate
 }
 
@@ -1108,7 +1167,7 @@ async function handleLogin(req, env) {
     // botoes de editar pressel apareciam por um instante ate o /auth/me chegar e sumiam depois -
     // o pior dos dois mundos: da pra clicar (e levar 403) e ainda anuncia que algo foi tirado.
     // O SELECT roda antes de qualquer ALTER, entao a coluna que falta cai no plano B.
-    'SELECT id, login, pwd_hash, name, abbr, role, color, bg, com_pct, photo, banner, email, afiliado_id, ve_desde FROM users WHERE lower(login) = ?'
+    'SELECT id, login, pwd_hash, name, abbr, role, color, bg, com_pct, photo, banner, email, afiliado_id, ve_desde, COALESCE(archived,0) AS archived FROM users WHERE lower(login) = ?'
   ).bind(login).first().catch(async () => {
     try { await env.DB.prepare('ALTER TABLE users ADD COLUMN ve_desde INTEGER').run(); } catch (_) {}
     return env.DB.prepare(
@@ -1140,7 +1199,10 @@ async function handleLogin(req, env) {
   cleanExpiredSessions(env);
 
   // Não retorna pwd_hash
-  const { pwd_hash, ...safe } = user;
+  const { pwd_hash, archived: _arqLogin, ...safe } = user;
+  // DESLIGADO JA ENTRA COM O MENU CERTO (23/11/2026), pelo mesmo motivo do afiliado restrito logo
+  // abaixo: o login nao passa pelo authUser. Ver _gateDesligado.
+  safe.desligado = Number(_arqLogin) === 1;
   // AFILIADO RESTRITO ja entra com o menu certo. O login nao passa pelo authUser (e ele que cria a
   // sessao), entao a marca e lida aqui tambem - senao a primeira tela depois de entrar seria a dash
   // inteira, ate o /auth/me chegar.
@@ -5576,8 +5638,62 @@ const RE_CHAVE_AFL = /^(tags|wa_statuses|contCols|contColColors|cont_col_order|c
 // (O gestor de trafego e contratado de fora; designer idem.)
 const ROLE_SO_CAMPANHA = ['gestor', 'designer'];
 
+// ══ O ESTADO DO DESLIGADO (23/11/2026, ver _gateDesligado) ════════════════════════════════════
+//
+// LISTA BRANCA DE TUDO: das chaves do estado e dos campos de cada pedido. Ele leva so o que as telas
+// do dinheiro dele usam (Meu Painel e a aba Comissoes do app): os pedidos em que ELE e o vendedor
+// (`at`) ou o dono da cobranca (`cob`), os saques e os pagamentos feitos a ele, e o visual do app.
+// Nada da operacao: equipe, numeros, pressel, roteiro, conexoes, fila dos outros.
+//
+// O PEDIDO VAI SEM O CLIENTE. Sai telefone, CPF, e-mail, endereco, cidade, CEP, observacao,
+// comentarios, comprovante, foto e assinatura da entrega, codigo de rastreio e link de pagamento.
+// O nome vira "Maria S." (primeiro nome e a inicial do ultimo): da pra ele reconhecer o pedido na
+// lista da comissao e nao da pra achar a pessoa. O historico do pedido fica so com as colunas e as
+// horas (e de la que sai a data do pagamento), sem quem mexeu nem a nota.
+//
+// Campo NOVO de pedido nasce fora daqui. Se uma conta de comissao passar a depender de um campo novo,
+// acrescente na lista E confira no teste (backend/teste-desligado.mjs compara os numeros do painel
+// com o pedido inteiro e com o recortado).
+const _DESL_CAMPOS_PEDIDO = ['id', 'data', 'ts', 'vl', 'valor_neg', 'vl_cobrado', 'vl_parcelas', 'vl_juros', 'prod', 'trat',
+  'mod', 'pgto', 'orig', 'col', 'col_plat', 'spg', 'pago_ts', 'pago_ts_fonte', 'com_pct', 'at', 'cob', 'cob_pct', 'cob_ts', 'afl',
+  'five_status', 'fonte', 'aceito', 'aceito_em', 'transp', 'transp_nome', 'ship', 'ship_ts', 'entrega_ts', 'agend', 'tags', 'recompra_de'];
+const _deslNome = (nome) => {
+  const p = String(nome || '').trim().split(/\s+/).filter(Boolean);
+  if (!p.length) return 'Cliente';
+  const primeiro = p[0].charAt(0).toUpperCase() + p[0].slice(1).toLowerCase();
+  return p.length > 1 ? primeiro + ' ' + p[p.length - 1].charAt(0).toUpperCase() + '.' : primeiro;
+};
+function _deslPedido(l) {
+  const o = {};
+  for (const k of _DESL_CAMPOS_PEDIDO) if (l[k] !== undefined) o[k] = l[k];
+  o.nome = _deslNome(l.nome);
+  if (Array.isArray(l.hist)) o.hist = l.hist.map((h) => (h && typeof h === 'object' ? { from: h.from, to: h.to, time: h.time } : null)).filter(Boolean);
+  if (Array.isArray(l.pagamentos)) o.pagamentos = l.pagamentos.map((p) => (p && typeof p === 'object' ? { ts: p.ts, data: p.data, valor: p.valor } : null)).filter(Boolean);
+  if (Array.isArray(o.tags)) o.tags = o.tags.filter((t) => String(t) === 'reenvio');   // so a que muda conta (reenvio sem cobranca)
+  return o;
+}
+function _stateDoDesligado(u, data) {
+  const meu = String((u && u.id) || '');
+  const d = {};
+  if (!meu) return d;
+  d.leads = (Array.isArray(data && data.leads) ? data.leads : [])
+    .filter((l) => l && (String(l.at || '') === meu || String(l.cob || '') === meu))
+    .map(_deslPedido);
+  d.saques = (Array.isArray(data && data.saques) ? data.saques : [])
+    .filter((x) => x && String(x.at || x.user_id || x.para || '') === meu);
+  d.lancamentos = (Array.isArray(data && data.lancamentos) ? data.lancamentos : [])
+    .filter((l) => l && String(l.tipo || '') === 'pagamento_equipe' && String(l.at || '') === meu);
+  d.notifs = (Array.isArray(data && data.notifs) ? data.notifs : []).filter((x) => x && String(x.to || '') === meu);
+  const kits = data && data.regras && Array.isArray(data.regras.kits) ? data.regras.kits : [];
+  d.regras = { kits };
+  if (data && data.app && data.app.visual) d.app = { visual: data.app.visual };
+  return d;
+}
+
 // O que o GET devolve pra quem nao e diretor.
 async function _stateVisivel(u, data, env) {
+  // O desligado vem ANTES do diretor: um socio desligado tambem so leva o que e dele.
+  if (u && u.desligado) return _stateDoDesligado(u, data);
   if (isDirector(u)) return data;
   // Ids do mundo do afiliado, pra filtrar o Sale Chat por pessoa. So consulta quando e o caso.
   const _idsMundo = (env && (noMundoAfiliado(u) || afiliadoSemVinculo(u))) ? await _idsDoMundoAfiliado(env, aflDe(u)) : [];
@@ -6855,8 +6971,9 @@ async function handleGetState(req, env) {
   // PELO CACHE DE VERSAO (14/10/2026, ver _dashRawAtual): a tela recebe o mesmo texto e a mesma versao
   // que o banco tem agora; so nao baixa 1,47 MB quando nada mudou desde a ultima leitura do isolate.
   const _rowP = _dashRawAtual(env).then((r) => (r ? { data: r.raw, version: r.version, updated_at: r.updated_at, updated_by: r.updated_by, __arq: r.arq || null } : null));
-  const _teamP = _stateTeam(req, env, uVis);
-  const _conexP = _stateConexoes(env, uVis);
+  // O DESLIGADO NAO LEVA EQUIPE NEM CONEXAO (23/11/2026): e operacao, nao o dinheiro dele.
+  const _teamP = uVis.desligado ? Promise.resolve([]) : _stateTeam(req, env, uVis);
+  const _conexP = uVis.desligado ? Promise.resolve(null) : _stateConexoes(env, uVis);
   const _qualityP = env.DB.prepare('SELECT display_phone, quality FROM wa_api_numbers WHERE quality IS NOT NULL').all();
   const row = await _rowP;
   if (!row) { await Promise.allSettled([_teamP, _conexP]); return json({ data: {}, version: 0, updated_at: 0, min_version: MIN_APP_VERSION }); }
@@ -10842,7 +10959,7 @@ async function handleListUsers(req, env) {
   // Comissão, salário e e-mail são do DIRETOR. Todo cargo restrito (vendedor, cobrador, gestor de
   // tráfego) chama este endpoint só pra saber NOME de quem é quem, e estava recebendo a folha inteira
   // da equipe junto. Aqui a resposta encolhe pro que a tela dele precisa.
-  if (!isDirector(u)) {
+  if (!isDirector(u) || u.desligado) {
     // A PROPRIA COMISSAO E DELE. Esconder a taxa dos OUTROS esta certo; esconder a DO PROPRIO
     // vendedor quebrava a tela dele: sem com_pct a conta cai em zero e o painel mostrava o pedido
     // mas "R$ 0,00" em comissao, como se ele nao tivesse vendido nada. Foi o que o Guilherme
@@ -10857,6 +10974,8 @@ async function handleListUsers(req, env) {
     // fora (a condicao exige o afiliado_id dele).
     const meuAfl = isAfiliado(u) ? aflDe(u) : null;
     const linhaCheia = (r) => String(r.id) === meu || (!!meuAfl && String(r.afiliado_id || '') === meuAfl);
+    // O DESLIGADO VE SO A PROPRIA LINHA (23/11/2026): o salario e a comissao dele. A equipe e operacao.
+    if (u.desligado) rows = { ...rows, results: (rows.results || []).filter((r) => String(r.id) === meu) };
     // O LOGIN DOS OUTROS NAO SAI PRA CARGO RESTRITO (09/10/2026, item 36): e metade da credencial, e
     // nenhuma tela de vendedor/cobrador usa. Fica so na propria linha e nas do time do afiliado
     // (que ele edita pela Lista de Usuarios, e o formulario manda o login de volta).
@@ -11035,23 +11154,67 @@ async function handleDeleteUser(req, env, userId) {
     return json({ ok: true, action: 'deleted' });
   }
 
+  // DESLIGAR MANTENDO O ACESSO AO QUE E DELE (23/11/2026, ?manter=1). Pedido do Bruno pro cobrador
+  // que vai sair: continua entrando, so pra acompanhar salario, comissao e o que ja fez. Arquiva
+  // (sai de toda lista da operacao: divisao da cobranca, roleta, bot, equipe) mas NAO estraga o login
+  // nem apaga as sessoes; quem recorta o que ele ve e o _gateDesligado. A fila dele em aberto passa
+  // pros outros cobradores sozinha (ver _cronCobrador). O aviso no celular sai: e da operacao.
+  // Serve tambem pra DEVOLVER o acesso restrito a quem ja tinha sido cortado: o login volta sem o
+  // sufixo (mesma regra do restaurar), se ninguem pegou o nome nesse meio tempo.
+  const manter = url.searchParams.get('manter') === '1';
+  if (manter) {
+    const r = await env.DB.prepare(
+      "UPDATE users SET archived = 1, archived_at = COALESCE(archived_at, strftime('%s','now')) WHERE id = ?"
+    ).bind(userId).run();
+    if (!r.meta.changes) return err('Usuário não encontrado', 404);
+    let login = null, loginOcupado = false;
+    try {
+      const row = await env.DB.prepare('SELECT login FROM users WHERE id = ?').bind(userId).first();
+      const atual = String((row && row.login) || '');
+      const orig = atual.replace(/(_arch_\d+)+$/, '');
+      login = atual;
+      if (orig && orig !== atual) {
+        const dup = await env.DB.prepare('SELECT id FROM users WHERE lower(login) = ? AND id != ?').bind(orig.toLowerCase(), userId).first();
+        if (dup) loginOcupado = true;
+        else { await env.DB.prepare('UPDATE users SET login = ? WHERE id = ?').bind(orig, userId).run(); login = orig; }
+      }
+    } catch (_) {}
+    try { await env.DB.prepare('DELETE FROM push_subs WHERE user_id = ?').bind(userId).run(); } catch (_) {}
+    _sessaoCache.clear();   // a marca vale ja na proxima leitura deste isolate, sem esperar os 10 s
+    return json({ ok: true, action: 'desligado', login, login_ocupado: loginOcupado });
+  }
+
   // Soft-delete: marca como archived + zera login pra liberar pra reuso (login UNIQUE)
   // O nome/role/dados ficam intactos pra histórico continuar mostrando.
   // Tenta com archived; se coluna não existe, cria.
+  // A DATA DO ARQUIVAMENTO NAO MUDA e o sufixo nao dobra (23/11/2026): cortar o acesso de quem ja
+  // estava desligado com acesso restrito passa por aqui de novo, e a data que vale e a da saida.
+  const SQL_ARQ = "UPDATE users SET archived = 1, archived_at = COALESCE(archived_at, strftime('%s','now')), "
+    + "login = CASE WHEN instr(login, '_arch_') > 0 THEN login ELSE login || '_arch_' || strftime('%s','now') END WHERE id = ?";
   try {
-    const r = await env.DB.prepare(
-      "UPDATE users SET archived = 1, archived_at = strftime('%s','now'), login = login || '_arch_' || strftime('%s','now') WHERE id = ?"
-    ).bind(userId).run();
+    const r = await env.DB.prepare(SQL_ARQ).bind(userId).run();
     if (!r.meta.changes) return err('Usuário não encontrado', 404);
   } catch (_) {
     try {await env.DB.prepare('ALTER TABLE users ADD COLUMN archived INTEGER DEFAULT 0').run();} catch (_) {}
     try {await env.DB.prepare('ALTER TABLE users ADD COLUMN archived_at INTEGER').run();} catch (_) {}
-    const r = await env.DB.prepare(
-      "UPDATE users SET archived = 1, archived_at = strftime('%s','now'), login = login || '_arch_' || strftime('%s','now') WHERE id = ?"
-    ).bind(userId).run();
+    const r = await env.DB.prepare(SQL_ARQ).bind(userId).run();
     if (!r.meta.changes) return err('Usuário não encontrado', 404);
   }
+  // OS NUMEROS ABERTOS NO SELLWAVE WEB DELE FECHAM (23/11/2026). Sem sessao, a renovacao do aluguel
+  // de cada numero volta 401, e o app trata 401 como falha de rede: o WhatsApp ficava ABERTO no
+  // computador de quem saiu ate ele fechar o app. A quarentena da maquina (swweb_uso_revoga) e lida
+  // antes da autenticacao no /api/swweb/uso, entao a proxima renovacao recebe `revogado` e fecha.
+  try {
+    await _swwebUsoTabela(env);
+    await env.DB.prepare(
+      "INSERT INTO swweb_uso_revoga (nk, maquina, ate, por) SELECT nk, maquina, strftime('%s','now')+900, ? FROM swweb_uso WHERE user_id = ? AND COALESCE(maquina,'') <> '' "
+      + 'ON CONFLICT(nk, maquina) DO UPDATE SET ate=excluded.ate, por=excluded.por'
+    ).bind(String(u.id), String(userId)).run();
+    await env.DB.prepare('DELETE FROM swweb_uso WHERE user_id = ?').bind(String(userId)).run();
+  } catch (e) { console.log('ARQUIVAR: quarentena dos numeros falhou: ' + String((e && e.message) || e)); }
+  try { await env.DB.prepare('DELETE FROM push_subs WHERE user_id = ?').bind(userId).run(); } catch (_) {}
   try { await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run(); } catch (_) {}   // revoga sessões do arquivado (senão o token vive até expirar)
+  _sessaoCache.clear();
   return json({ ok: true, action: 'archived' });
 }
 
@@ -11064,6 +11227,7 @@ async function handleRestoreUser(req, env, userId) {
     "UPDATE users SET archived = 0, archived_at = NULL WHERE id = ?"
   ).bind(userId).run();
   if (!r.meta.changes) return err('Usuário não encontrado', 404);
+  _sessaoCache.clear();   // desligado que volta deixa de ser recortado ja na proxima leitura
   // O LOGIN VOLTA JUNTO (29/10/2026). Arquivar grava "<login>_arch_<ts>" pra liberar o nome; reativar
   // so tirava o arquivado e o login ficava com o sufixo. O Heynan arquivou o Haynan sem querer,
   // reativou, e ele nao conseguia mais entrar ("Login ou senha invalidos") nem ver o Kanban.
@@ -19568,7 +19732,24 @@ async function handleSwWeb(req, env, path) {
   }
 
   const u = await authUser(req, env);
-  if (!u) return err('Não autenticado', 401);
+  if (!u) {
+    // QUEM FOI ARQUIVADO COM O APP ABERTO (23/11/2026). A sessao dele ja nao existe, entao a renovacao
+    // do aluguel de cada numero cairia no 401, que o app trata como falha de rede e deixa o WhatsApp
+    // aberto. Se a maquina dele esta em quarentena pra aquele numero (gravada no arquivar, ver
+    // handleDeleteUser), a resposta e `revogado` e o app fecha o numero. So diz isso, nada mais.
+    if (req.method === 'POST' && path === '/api/swweb/uso') {
+      try {
+        const maq = String(req.headers.get('x-sw-maquina') || '').replace(/[^a-z0-9-]/gi, '').slice(0, 40);
+        const b = await req.clone().json().catch(() => null);
+        const nkQ = _swwebKeyExata(b && b.nk);
+        if (maq && nkQ) {
+          const q = await env.DB.prepare("SELECT 1 x FROM swweb_uso_revoga WHERE nk=? AND maquina=? AND ate > strftime('%s','now')").bind(nkQ, maq).first();
+          if (q) return json({ ok: false, revogado: true, erro: 'Este número não está mais liberado para você.' });
+        }
+      } catch (_) { /* sem a tabela ou sem o corpo: 401 de sempre */ }
+    }
+    return err('Não autenticado', 401);
+  }
   if (!_swwebPodeUsar(u)) return err('Sem acesso', 403);
 
   // TRAVA E PROXY SAO POR MUNDO, pelo mesmo padrao do dc_api_key: a casa grava em `swweb_cfg` e o
@@ -40251,6 +40432,20 @@ async function _cronCobrador(env) {
   const direcao = new Set((await _cobAceitos(env, cobs)).filter((c) => c && c.direcao).map((c) => String(c.id)));
   const regra = await _cobRegra(env);   // ver A REGRA DE DISTRIBUICAO DA COBRANCA, logo acima
   let conv = null, donoDoN8 = null;   // ver "O PEDIDO E DE QUEM O CLIENTE CHAMOU" (uma consulta por batida)
+  // QUEM SAIU DA CASA (23/11/2026, ver "O DONO SAIU" logo abaixo). So por PROVA: arquivado no banco,
+  // ou id que nao existe mais. "Nao esta na lista de cobradores" nao basta - se a leitura da direcao
+  // falhasse, o pedido que o Bruno tomou pra si viraria "orfao" e iria pra um cobrador. Leitura que
+  // falha = ninguem saiu nesta batida.
+  let saiu = null;
+  try {
+    const ru = await env.DB.prepare('SELECT id, COALESCE(archived,0) AS arch FROM users').all();
+    const lista = (ru && ru.results) || [];
+    if (lista.length) {
+      const vivos = new Set(), arq = new Set();
+      for (const x of lista) (Number(x.arch) === 1 ? arq : vivos).add(String(x.id));
+      saiu = (id) => arq.has(id) || !vivos.has(id);
+    }
+  } catch (_) { saiu = null; }
 
   for (let tent = 0; tent < 4; tent++) {
     const row = await env.DB.prepare('SELECT data, version FROM dashboard_state WHERE id = 1').first();
@@ -40268,6 +40463,12 @@ async function _cronCobrador(env) {
       // dono daria a ele um pedido "recebido" de R$ 0 nas contas, no podio e nas comemoracoes.
       if (!dono && _reenvioSemCobranca(l)) continue;
       if (!dono) { semDono.push(l); continue; }
+      // O DONO SAIU (23/11/2026, pedido do Bruno ao planejar a saida de um cobrador). Pedido EM ABERTO
+      // de quem nao e mais cobrador ativo nem da direcao (foi arquivado, ou desligado com acesso
+      // restrito) ficava preso no nome dele: nenhum cobrador ve pedido de outro dono (ehDoCobrador),
+      // entao ninguem cobrava. Volta pra divisao como pedido novo. O que ja foi PAGO continua dele,
+      // com a taxa congelada: e a comissao que ele ganhou e acompanha pelo login restrito.
+      if (saiu && saiu(dono) && !carga.has(dono) && !direcao.has(dono) && _cobEmAberto(l) && !_reenvioSemCobranca(l)) { l.__orfao = dono; semDono.push(l); continue; }
       if (carga.has(dono) && _cobEmAberto(l)) carga.set(dono, carga.get(dono) + 1);
     }
 
@@ -40275,8 +40476,17 @@ async function _cronCobrador(env) {
     // O PEDIDO NOVO VAI PELA REGRA DA DIRECAO (04/11/2026). Sem regra salva continua o de antes:
     // pra quem tem menos pedido em aberto (o `carga` acima).
     const { novos } = _cobContagens(data.leads, ids, regra);
+    const _orfaos = {};
     for (const l of semDono) {
       const alvo = _cobEscolhe(regra, l, ids, carga, novos) || ids[0];
+      if (l.__orfao) {
+        // carimbo de troca: a varredura "o pedido e de quem o cliente chamou" so desfaz com mensagem
+        // MAIS NOVA que isto, e a taxa velha (se houvesse) nao vale pro dono novo
+        _orfaos[l.__orfao] = (_orfaos[l.__orfao] || 0) + 1;
+        delete l.__orfao;
+        l.cob_ts = Date.now();
+        delete l.cob_pct;
+      }
       l.cob = alvo;
       if (_cobEmAberto(l)) carga.set(alvo, carga.get(alvo) + 1);
       novos.set(alvo, (novos.get(alvo) || 0) + 1);
@@ -40338,7 +40548,11 @@ async function _cronCobrador(env) {
     if (!mudou) return;
     const res = await env.DB.prepare('UPDATE dashboard_state SET data=?, version=?, updated_at=?, updated_by=? WHERE id=1 AND version=?')
       .bind(JSON.stringify(data), (row.version || 0) + 1, Math.floor(Date.now() / 1000), 'cron:cobrador', row.version).run();
-    if (res && res.meta && res.meta.changes > 0) { console.log('COB_DISTRIBUI ' + mudou + ' pedido(s)'); return; }
+    if (res && res.meta && res.meta.changes > 0) {
+      const _o = Object.keys(_orfaos).map((k) => k + ':' + _orfaos[k]).join(' ');
+      console.log('COB_DISTRIBUI ' + mudou + ' pedido(s)' + (_o ? ' (de quem saiu: ' + _o + ')' : ''));
+      return;
+    }
     await new Promise((r) => setTimeout(r, 15 * (tent + 1)));
   }
 }
@@ -40911,6 +41125,9 @@ export default {
       // ninguem precisar lembrar. Caminho liberado nem consulta sessao (ver _gateRestrito).
       const _barradoRestr = await _gateRestrito(req, env, path);
       if (_barradoRestr) return _barradoRestr;
+      // DESLIGADO COM ACESSO RESTRITO (23/11/2026): so o que e dele. Ver _gateDesligado.
+      const _barradoDesl = await _gateDesligado(req, env, path);
+      if (_barradoDesl) return _barradoDesl;
 
       // auth
       if (req.method === 'POST'  && path === '/auth/login')  return handleLogin(req, env);
