@@ -918,6 +918,10 @@ async function abreDeVerdade(nk, numero, meu) {
   // documento, e se nao estiver em maos ali, a injecao cai pro caminho tardio.
   await pegaMotor()
 
+  // SEM O SERVICE WORKER DO WHATSAPP NA ABERTURA (ver tiraServiceWorker): e ele que deixava a tela
+  // branca 10 s em toda abertura, e minutos quando o site redireciona.
+  await tiraServiceWorker(nk, 'abrir')
+
   const view = new WebContentsView({
     webPreferences: {
       partition: particaoDe(nk),
@@ -1000,7 +1004,14 @@ async function abreDeVerdade(nk, numero, meu) {
       texto: 'O WhatsApp deste número não terminou de carregar. Feche e abra de novo; se repetir, avise a direção.',
     })
   }, 45000)
-  view.webContents.once('did-finish-load', () => clearTimeout(relogioCarga))
+  // QUANTO A ABERTURA LEVOU, uma linha por abertura (24/11/2026). Ate aqui o log so falava quando
+  // passava de 45 s, e "abriu em 3 s" ou "em 14 s" era invisivel: nao dava pra saber se o conserto
+  // do Service Worker valeu no computador de cada um.
+  const carregaDesde = Date.now()
+  view.webContents.once('did-finish-load', () => {
+    clearTimeout(relogioCarga)
+    anota('[numero] ' + nk + ' carregou em ' + Math.round((Date.now() - carregaDesde) / 100) / 10 + ' s')
+  })
   view.webContents.once('destroyed', () => clearTimeout(relogioCarga))
 
   // A VIGIA DA TELA BRANCA comeca em toda navegacao de verdade da pagina (a primeira, o recarregar do
@@ -1681,6 +1692,35 @@ function vigiaPareamento(s) {
   }, 4000)
 }
 
+// O SERVICE WORKER DO WHATSAPP SAI ANTES DE A PAGINA CARREGAR (24/11/2026, Bruno: "acho que ta
+// acontecendo muito disso de eu abrir um dos numeros de WhatsApp e ele ficar com a tela branca, e fica
+// assim um tempao"). No PC dele os dois numeros do Bryan levaram mais de um minuto em branco.
+//
+// MEDIDO com o cache de verdade dos numeros (so o cache do site, sem a sessao) e a mesma proxy:
+//   - com o Service Worker que o WhatsApp deixa na particao, a pagina so comeca DEPOIS que ele sobe, e
+//     ele leva 9,5 a 10 s pra subir (sao 17 MB de script). Dez segundos de tela branca em toda abertura;
+//   - quando o site responde com redirecionamento (302 pra /login/), a abertura fica PRESA: o Service
+//     Worker sobe, nao atende, para 30 s depois, e a pagina segue em branco (212 s no teste, sem fim);
+//   - sem ele, a mesma particao desenha em 3 s, com 22 de 27 arquivos vindos do cache do disco.
+// O remedio e o mesmo que os apps que abrem varios WhatsApp fazem: tirar o registro do Service Worker
+// antes de carregar. Ele e so do site (o login mora no IndexedDB e no Local Storage, que ficam), o
+// WhatsApp registra de novo sozinho quando quiser, e o 2o degrau da vigia ja tira ele com a pagina viva
+// desde 20/10. O CacheStorage NAO sai aqui: ha suspeita de numero deslogado depois de limpar ele (ver
+// vigiaBranco). Leva ~80 ms; o teto de 3 s e so pra nunca segurar a abertura.
+async function tiraServiceWorker(nk, onde) {
+  try {
+    const r = await Promise.race([
+      session.fromPartition(particaoDe(nk)).clearStorageData({ storages: ['serviceworkers'] }).then(() => 'ok'),
+      espera(3000).then(() => 'demorou'),
+    ])
+    if (r !== 'ok') anota('[numero] ' + nk + ' tirar o service worker passou de 3 s (' + onde + '): segui sem esperar')
+  } catch (e) { anota('[numero] ' + nk + ' nao tirei o service worker (' + onde + '): ' + ((e && e.message) || e)) }
+}
+// Toda recarga de numero passa por aqui pelo mesmo motivo: recarregar e carregar de novo.
+function recarregaSemSw(nk, wc, onde) {
+  return tiraServiceWorker(nk, onde).then(() => { try { if (wc && !wc.isDestroyed()) wc.reload() } catch (_) { /* ok */ } })
+}
+
 // O WHATSAPP EM BRANCO SE CONSERTA SOZINHO (20/10/2026, Bruno: "diversas vezes, quando eu entro em um
 // dos numeros, o WhatsApp abre totalmente branco; preciso fechar e abrir de novo").
 //
@@ -1689,7 +1729,7 @@ function vigiaPareamento(s) {
 // conexao por ela leva 1 a 2 s pra abrir, medido em 20/10, e uma que trava segura a pagina inteira) ou
 // quando o Service Worker do WhatsApp fica num estado ruim. Fechar e abrir resolvia porque refaz as
 // conexoes - entao o app faz isso sozinho, em degraus, e para no terceiro pra nao virar recarga sem fim:
-//   1o branco (25 s): recarrega a pagina;
+//   1o branco (25 s): recarrega a pagina (sem o Service Worker, desde 24/11: ver tiraServiceWorker);
 //   2o branco: apaga SO o Service Worker e o cache do WhatsApp (o login mora no IndexedDB e no Local
 //      Storage, que ficam) e recarrega sem cache;
 //   3o: fecha e abre o numero, que era o que resolvia na mao (no maximo uma vez a cada 10 min).
@@ -1740,6 +1780,9 @@ function vigiaBranco(s, tempo, continua) {
     if (s.brancos === 1) {
       anota('[branco] ' + s.nk + (tela === 'abrindo' ? ' parado na tela de carregamento do WhatsApp ha ' : tela === 'ocupada' ? ' ainda carregando ha ' : ' sem nada na tela em ')
         + Math.round(faz / 1000) + ' s: recarregando')
+      // Recarregar com o Service Worker parado e esperar ele subir de novo (ver tiraServiceWorker).
+      await tiraServiceWorker(s.nk, 'vigia')
+      if (gen !== s.vigiaGen || wc.isDestroyed()) return
       try { wc.reload() } catch (_) { /* ok */ }
     } else if (s.brancos === 2) {
       anota('[branco] ' + s.nk + ' branco de novo: limpando o Service Worker e o cache do WhatsApp (o login fica) e recarregando')
@@ -4413,7 +4456,7 @@ function confereCaptura(nk, desde) {
     return
   }
   anota('[captura] ' + nk + ' parou de registrar as conversas: recarrego a pagina')
-  try { wc.reload() } catch (_) { /* ok */ }
+  recarregaSemSw(nk, wc, 'captura')
   avisaCasca('sw:aviso', { nk, texto: (d0 ? d0 + ' ' : 'Um número ') + 'parou de registrar as conversas na dash e foi recarregado sozinho.' })
 }
 const cheioDe = (nk) => {
@@ -4725,17 +4768,17 @@ ipcMain.handle('sw:recarregar-todos', () => {
     const wc = s && s.view && s.view.webContents
     if (!wc || wc.isDestroyed()) continue
     if (disparos.has(nk) || autoNoAr.has(nk)) { noFunil += 1; continue }
-    try { wc.reload(); feitos += 1 } catch (_) { /* um numero que falha nao para os outros */ }
+    recarregaSemSw(nk, wc, 'todos'); feitos += 1
   }
   anota('[agente] recarreguei ' + feitos + ' numero(s) pro motor novo valer'
     + (noFunil ? '; ' + noFunil + ' no meio do funil ficaram pra depois' : ''))
   return { ok: true, feitos, noFunil }
 })
 
-ipcMain.handle('swp:recarregar-ativo', (ev) => {
+ipcMain.handle('swp:recarregar-ativo', async (ev) => {
   const nk = nkDoPainel(ev && ev.sender)
   const s = nk && abertos.get(nk)
-  if (s && !s.view.webContents.isDestroyed()) s.view.webContents.reload()
+  if (s && !s.view.webContents.isDestroyed()) await recarregaSemSw(nk, s.view.webContents, 'painel')
   return { ok: true }
 })
 
@@ -5328,9 +5371,13 @@ ipcMain.handle('sw:abrirInstalador', () => {
   return { ok: true }
 })
 
-ipcMain.handle('sw:recarregar', (_e, { nk }) => {
+// O RECARREGAR DA BARRA tambem tira o Service Worker antes (ver tiraServiceWorker): e o botao que a
+// pessoa aperta justamente quando a tela ficou branca, e recarregar com ele no meio repetia o branco.
+ipcMain.handle('sw:recarregar', async (_e, { nk }) => {
   const s = abertos.get(nk)
-  if (s) s.view.webContents.reload()
+  if (!s) return { ok: true }
+  await tiraServiceWorker(nk, 'recarregar')
+  if (abertos.get(nk) === s && !s.view.webContents.isDestroyed()) s.view.webContents.reload()
   return { ok: true }
 })
 

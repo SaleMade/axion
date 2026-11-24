@@ -447,10 +447,13 @@ console.log('\n=== contas do SellWave Web ===\n')
   const abertos = new Map([['3173623697', { view: { webContents: wc } }]])
   const mandasNoAr = new Map()
   const capturaVistaEm = new Map(), capturaFaltou = new Map(), recarregouSurdaEm = new Map()
-  const F = new Function('Date', 'anota', 'avisaCasca', 'abertos', 'mandasNoAr', 'capturaVistaEm', 'capturaFaltou', 'recarregouSurdaEm', 'cheioDe',
+  // A recarga passa pela limpeza do Service Worker desde 24/11 (ver a secao da tela branca); aqui so
+  // importa SE recarrega, entao a recarga de mentira e na hora.
+  const recarregaSemSw = (_nk, w) => { w.reload(); return Promise.resolve() }
+  const F = new Function('Date', 'anota', 'avisaCasca', 'abertos', 'mandasNoAr', 'capturaVistaEm', 'capturaFaltou', 'recarregouSurdaEm', 'cheioDe', 'recarregaSemSw',
     codigo + '\nreturn { nkDaPagina, confereCaptura }')(
     { now: () => agora }, (t) => anotado.push(t), (c, d) => avisos.push(d), abertos, mandasNoAr,
-    capturaVistaEm, capturaFaltou, recarregouSurdaEm, () => '(31) 97362-3697')
+    capturaVistaEm, capturaFaltou, recarregouSurdaEm, () => '(31) 97362-3697', recarregaSemSw)
   const NK = '3173623697'
 
   vale('a captura acha de qual numero veio pela pagina', F.nkDaPagina(7) === NK && F.nkDaPagina(99) === '')
@@ -1140,6 +1143,68 @@ console.log('\n=== contas do SellWave Web ===\n')
   vale('o "pronto" reportado guarda a espera', /if \(st === 'pronto' && r\.ok\)[\s\S]{0,120}guardaLivre\(s\.nk, d\.livre, d\.espera\)/.test(fonte))
   const painel = leia('ui/painel-ui.js')
   vale('o painel recusa o clique antes de pôr na fila', /if \(Number\(at\.esperaPareado\) > 0\) \{[\s\S]{0,200}return\s*\}\s*const job = \{/.test(painel))
+}
+
+// ── A TELA BRANCA NA ABERTURA (24/11/2026, Bruno: "abro um dos numeros e ele fica com a tela branca
+//    um tempao"). Medido: com o Service Worker do WhatsApp na particao, a pagina so comeca depois que
+//    ele sobe (~10 s) e, se o site redireciona, fica presa minutos. Sem ele, 3 s. As funcoes de verdade
+//    (tiraServiceWorker, recarregaSemSw) com uma sessao de mentira, e o lugar onde sao chamadas.
+{
+  const fonte = leia('main.js')
+  const notas = []
+  const pedidos = []
+  let comportamento = 'ok'
+  const sessaoFalsa = {
+    fromPartition: (p) => ({
+      clearStorageData: (o) => {
+        pedidos.push({ p, storages: o && o.storages })
+        if (comportamento === 'trava') return new Promise(() => {})
+        if (comportamento === 'erro') return Promise.reject(new Error('disco ocupado'))
+        return Promise.resolve()
+      },
+    }),
+  }
+  const monta = new Function('session', 'particaoDe', 'espera', 'anota',
+    recorta(fonte, 'async function tiraServiceWorker(') + '\n' + recorta(fonte, 'function recarregaSemSw(') + '\nreturn { tiraServiceWorker, recarregaSemSw }')
+  const F = monta(sessaoFalsa, (nk) => 'persist:sw-' + nk, () => Promise.resolve(), (t) => notas.push(t))
+
+  await F.tiraServiceWorker('1127335679', 'abrir')
+  vale('tira SO o Service Worker, da particao do numero',
+    pedidos.length === 1 && pedidos[0].p === 'persist:sw-1127335679' && JSON.stringify(pedidos[0].storages) === '["serviceworkers"]',
+    JSON.stringify(pedidos))
+  vale('o CacheStorage fica (ha suspeita de deslogar quando ele sai)', !/cachestorage/.test(recorta(fonte, 'async function tiraServiceWorker(')))
+  comportamento = 'trava'
+  await F.tiraServiceWorker('1127335679', 'abrir')
+  vale('se a limpeza travar, a abertura segue e o log conta', notas.some((t) => /passou de 3 s \(abrir\)/.test(t)), notas.join(' | '))
+  comportamento = 'erro'
+  let estourou = false
+  try { await F.tiraServiceWorker('1127335679', 'vigia') } catch (_) { estourou = true }
+  vale('se a limpeza der erro, nao derruba a abertura', !estourou && notas.some((t) => /nao tirei o service worker \(vigia\): disco ocupado/.test(t)), notas.join(' | '))
+
+  comportamento = 'ok'
+  const ordem = []
+  const wcVivo = { isDestroyed: () => false, reload: () => ordem.push('reload') }
+  sessaoFalsa.fromPartition = (p) => ({ clearStorageData: () => { ordem.push('limpa'); return Promise.resolve() } })
+  await F.recarregaSemSw('1166632248', wcVivo, 'painel')
+  vale('recarregar: primeiro tira, depois recarrega', ordem.join(',') === 'limpa,reload', ordem.join(','))
+  const wcMorto = { isDestroyed: () => true, reload: () => ordem.push('reload-morto') }
+  await F.recarregaSemSw('1166632248', wcMorto, 'painel')
+  vale('pagina fechada no meio nao recarrega', !ordem.includes('reload-morto'))
+
+  // ONDE: a abertura tira antes de criar a view (e depois do preflight do proxy), e TODA recarga de
+  // pagina de numero passa pela limpeza. Recarga nova que esquecer cai aqui.
+  const abre = recorta(fonte, 'async function abreDeVerdade(')
+  const iTira = abre.indexOf("await tiraServiceWorker(nk, 'abrir')")
+  vale('a abertura tira o Service Worker antes de criar a view', iTira > 0 && iTira < abre.indexOf('new WebContentsView('))
+  vale('e depois de conferir o proxy', iTira > abre.indexOf('testaSaida('))
+  const semComentario = fonte.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+  const recargas = [...semComentario.matchAll(/\.reload\(\)/g)].map((m) => m.index)
+  const soltas = recargas.filter((i) => {
+    const antes = semComentario.slice(Math.max(0, i - 420), i)
+    return !/tiraServiceWorker\(/.test(antes)
+  }).map((i) => semComentario.slice(i - 80, i + 10).replace(/\s+/g, ' '))
+  vale('toda recarga de numero passa pela limpeza (' + recargas.length + ' recargas)', recargas.length >= 3 && soltas.length === 0, soltas.join(' || '))
+  vale('o log conta quanto cada abertura levou', /anota\('\[numero\] ' \+ nk \+ ' carregou em '/.test(abre))
 }
 
 console.log('')
