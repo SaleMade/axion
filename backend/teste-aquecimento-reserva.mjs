@@ -109,9 +109,11 @@ for (const t of VIS31) {
   recebeu[quem.num.slice(-8)].push(t);
 }
 const n1 = recebeu[88948922].length, n2 = recebeu[88931497].length;
-// Desde 16/11 cada vaga segura 2 a caminho (AQ_CLIQUES_POR_VAGA): o teto da hora era 1, entao 2 cada.
-vale('31/10 app fechado ate 08:19: os dois chips levam 2 visitas cada (2 por vaga) em vez de 41 e 35', n1 === 2 && n2 === 2, n1 + ' e ' + n2 + ' (o resto, ' + recebeu[97011859].length + ', foi pro (17) 99701-1859)');
-vale('31/10: no pior caso (toda visita vira lead) nenhum chip passa do dobro do teto da hora', n1 <= 2 && n2 <= 2);
+// Desde 16/11 cada vaga segura 2 a caminho (AQ_CLIQUES_POR_VAGA), e desde 24/11 o teto das 7h e das 8h
+// e 2 (1 da curva + AQ_FOLGA_HORA): 4 cada. Antes de 31/10 eram 41 e 35.
+const lim7 = W._tetoAcumulado(5, 7), lim8 = W._tetoAcumulado(5, 8);
+vale('31/10 app fechado ate 08:19: os dois chips levam 2 visitas por vaga da hora (4 cada) em vez de 41 e 35', lim7 === 2 && lim8 === 2 && n1 === 4 && n2 === 4, n1 + ' e ' + n2 + ' (o resto, ' + recebeu[97011859].length + ', foi pro (17) 99701-1859)');
+vale('31/10: no pior caso (toda visita vira lead) nenhum chip passa do dobro do teto da hora', n1 <= 2 * lim8 && n2 <= 2 * lim8);
 
 // ── 6) REPRISE DE 30/10: rajada com o app aberto no (49) 98890-8842 do Guilherme ──────────────
 // 70 visitas das 14:23 as 14:42. Os leads foram marcados as 14:29 (2), 14:43 (2), 14:45 e 14:52.

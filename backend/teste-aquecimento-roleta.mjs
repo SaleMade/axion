@@ -80,13 +80,17 @@ vale('a curva reflete o dia MEDIDO: as 18h ja passou de 90% do movimento',
 vale('e de madrugada quase nada passou', api.DIA_ACUM[6] < 20, String(api.DIA_ACUM[6]));
 
 // O PISO DE 1 e o ponto da feature: sem ele o chip fica fora da roleta na hora do primeiro lead.
-vale('de madrugada o teto acumulado e 1, nao 0', api._tetoAcumulado(5, 3) === 1, String(api._tetoAcumulado(5, 3)));
+// Desde 24/11 o chip pode estar UMA vaga a frente da curva (AQ_FOLGA_HORA): de madrugada sao 1 + 1.
+vale('de madrugada o teto acumulado e 2 (piso 1 + a folga de 24/11), nao 0', api._tetoAcumulado(5, 3) === 2, String(api._tetoAcumulado(5, 3)));
+vale('a folga nunca passa do teto do dia (teto 1 continua 1)', api._tetoAcumulado(1, 3) === 1 && api._tetoAcumulado(1, 23) === 1);
+vale('as 8h o chip de 5 ja pode ter 2 (era 1: o dono recebe em blocos e o da manha passava em branco)', api._tetoAcumulado(5, 8) === 2, String(api._tetoAcumulado(5, 8)));
+vale('e o de 15 pode ter 2 as 7h, nao a cota inteira', api._tetoAcumulado(15, 7) === 2, String(api._tetoAcumulado(15, 7)));
 vale('teto 0 continua 0 (sem limite nao vira limite 1)', api._tetoAcumulado(0, 12) === 0);
 
 // O GOTEJAMENTO: um chip de 5/dia nao pode ter os 5 disponiveis de manha.
 const gotas = [6, 9, 11, 13, 15, 17].map((h) => api._tetoAcumulado(5, h));
 vale('chip de 5/dia goteja ao longo do dia, nao libera tudo cedo',
-  gotas[0] === 1 && gotas[gotas.length - 1] === 5 && gotas.every((v, i) => i === 0 || v >= gotas[i - 1]),
+  gotas[0] === 2 && gotas[gotas.length - 1] === 5 && gotas.every((v, i) => i === 0 || v >= gotas[i - 1]),
   gotas.join(' -> '));
 vale('as 9h da manha ele ainda nao pode receber 5 de uma vez', api._tetoAcumulado(5, 9) < 5,
   String(api._tetoAcumulado(5, 9)));

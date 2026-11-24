@@ -32430,6 +32430,20 @@ function _textoDaRampa() {
 const DIA_ACUM = [0, 1, 2, 3, 3, 4, 5, 19, 64, 125, 185, 265, 348, 466, 572, 671, 781, 874, 947, 972, 983, 990, 995, 998];
 // O PISO DE 1 E O PONTO DA FEATURE: sem ele o chip fica fora da roleta de madrugada e as 6h, que e
 // exatamente quando chega o primeiro lead que o Bruno quer que caia no numero em aquecimento.
+//
+// UMA VAGA A FRENTE DA CURVA (24/11/2026, pedido do Bruno: "estao recebendo muitos poucos leads (...)
+// as vezes recebem 1, 2 (...) ficar na media de 3, 4 ja seria otimo (...) bem de leve mesmo").
+// A curva e a do trafego da CASA, mas o dono do chip recebe em BLOCOS: em 23/11 o atendente_vra3lh
+// levou 719 cliques das 8h as 10h59, nada das 11h as 15h59 e 256 as 16h. No bloco da manha o teto da
+// hora era 1, entao o chip pegava 1; quando a curva liberava 2, 3 e 4, o dono nao estava recebendo, e
+// quando voltava (16h) sobrava hora e meia de trafego. Com a folga o chip pode estar UM lead a frente
+// da curva, nunca acima do teto do dia.
+//   SIMULADO com os cliques reais de 21 dias-dono (17 a 23/11, quem clicou e escreveu de verdade),
+//   teto 5, dois chips por dono: media 3,54 -> 4,10 por dia; dias com 2 ou menos 21% -> 8%; ate o
+//   meio-dia 1,18 -> 1,95; passa do teto em 1,9% -> 3,5% dos dias (quase sempre por 1). Folga 2 dava
+//   4,30, mas 3 leads as 7h num chip de um dia e a rajada que a curva existe pra impedir.
+// Gemeo: AQ_FOLGA_HORA e tetoAcumulado no lib/chips.js da dash. Mexeu aqui, mexe la.
+const AQ_FOLGA_HORA = 1;
 function _horaBR() {
   const d = new Date(Date.now() - 3 * 3600 * 1000);
   return d.getUTCHours();
@@ -32438,7 +32452,7 @@ function _tetoAcumulado(teto, hora) {
   const t = Math.max(0, Number(teto) || 0);
   if (!t) return 0;
   const h = Math.min(23, Math.max(0, Number(hora == null ? _horaBR() : hora) || 0));
-  return Math.max(1, Math.ceil(t * DIA_ACUM[h] / 1000));
+  return Math.min(t, Math.max(1, Math.ceil(t * DIA_ACUM[h] / 1000)) + AQ_FOLGA_HORA);
 }
 
 // O DIA DE AQUECIMENTO. Sai do `warm_start` do chip (YYYY-MM-DD), em dias de CALENDARIO - mas desde

@@ -84,7 +84,9 @@ const chama = async (tk, path) => {
 const fw = readFileSync(new URL('./worker.js', import.meta.url), 'utf8');
 const DIA_ACUM = JSON.parse(fw.match(/const DIA_ACUM = (\[[^\]]+\])/)[1]);
 const hora = new Date(Date.now() - 3 * 3600 * 1000).getUTCHours();
-const lim = Math.max(1, Math.ceil(5 * DIA_ACUM[hora] / 1000));
+// DESDE 24/11/2026 o chip pode estar uma vaga a frente da curva (AQ_FOLGA_HORA), nunca acima do teto.
+const FOLGA = Number((fw.match(/const AQ_FOLGA_HORA = (\d+);/) || [])[1]) || 0;
+const lim = Math.min(5, Math.max(1, Math.ceil(5 * DIA_ACUM[hora] / 1000)) + FOLGA);
 // DESDE 16/11/2026 cada vaga segura 2 contatos a caminho (AQ_CLIQUES_POR_VAGA no worker).
 const POR_VAGA = Number((fw.match(/const AQ_CLIQUES_POR_VAGA = (\d+);/) || [])[1]) || 1;
 const cabe = Math.min(10, POR_VAGA * lim);
