@@ -7271,6 +7271,30 @@ function _plMetodoDoLead(l) {
   if (bol && !pix && !card) return 'bank_slip';
   return 'other';
 }
+// RETIRADA NA AGENCIA SO COM O CEP DA AGENCIA (24/11/2026, pedido do Bruno). GEMEO de
+// retiradaSemCepDaAgencia em axion-produtor/src/lib/cep.js: regra e texto iguais, mexeu num, mexe no
+// outro. A PayLog escolhe o caminho pelo CEP: agencia so com final 959 ou 970 (regra dela, passada no
+// grupo); outro CEP segue a preferencia da casa, a transportadora, pro endereco. O `transp` e o
+// complemento NAO vao pra ela como escolha. Caso: pedido de 02/11 com "Agencia Correios" no
+// complemento e o CEP da RUA da agencia (final 005): foi pela transportadora.
+const _PL_RETIRADA_FINAIS = ['959', '970'];
+const _PL_RETIRADA_TEXTO = 'Retirada na agência com CEP de rua: use o CEP da agência dos Correios (final 959 ou 970), senão vai pela transportadora pro endereço';
+const _plSemAcento = (s) => String(s == null ? '' : s).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+const _PL_REFERENCIA = /\b(lado|perto|frente|proximo|proxima|atras|vizinho|vizinha|esquina|defronte)\b/;
+function _plFalaDeAgencia(l) {
+  const o = l || {};
+  const livre = _plSemAcento([o.comp, o.num].filter(Boolean).join(' '));
+  const rua = _plSemAcento(o.end);
+  const noLivre = !_PL_REFERENCIA.test(livre) && /\bagencia\b|\bcorr?eios?\b|\bcorreis\b/.test(livre);
+  const naRua = !_PL_REFERENCIA.test(rua) && /\bagencia\b/.test(rua);
+  return noLivre || naRua;
+}
+function _plRetiradaSemCep(l) {
+  const o = l || {};
+  const c = String(o.cep == null ? '' : o.cep).replace(/\D/g, '');
+  if (c.length !== 8 || _PL_RETIRADA_FINAIS.includes(c.slice(5))) return false;
+  return o.transp === 'correios_retirada' || _plFalaDeAgencia(o);
+}
 function _plPedidoDoLead(l) {
   const dig = (v) => String(v == null ? '' : v).replace(/\D/g, '');
   const reais = (n) => Number(n || 0).toFixed(2).replace('.', ',');
@@ -7295,6 +7319,7 @@ function _plPedidoDoLead(l) {
   if (!cidade) problemas.push('Falta a cidade');
   const uf = String((l && l.uf) || '').trim().toUpperCase();
   if (!_UFS_BR.has(uf)) problemas.push('Estado (UF) inválido');
+  if (_plRetiradaSemCep(l)) problemas.push(_PL_RETIRADA_TEXTO);
   const meses = _mesesDoTitulo((l && l.trat) || '') || _mesesDoTitulo((l && l.prod) || '');
   const preco = _PL_KITS_PRECO[meses];
   if (!preco) problemas.push(meses ? ('Não existe kit de ' + meses + ' meses na PayLog') : 'Kit não informado');
