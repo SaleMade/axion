@@ -230,6 +230,11 @@ async function rodar(ctx) {
         !!p.estado && !p.estado.autenticado && (!!p.estado.motor || loginNovo),
         p.estado ? ('motor=' + p.estado.motor + ' autenticado=' + p.estado.autenticado + ' em ' + caminho + (loginNovo && !p.estado.motor ? ' (tela de entrada nova do WhatsApp, sem o app inteiro)' : '')) : '')
       conta('sem aparelho pareado o numero vem vazio', !(p.estado && p.estado.eu), (p.estado && p.estado.eu) || '(vazio)')
+      // O PAREAMENTO DEPENDE DISTO: o app e o servidor so veem que o numero foi conectado agora (espera de
+      // 10 min, 3 min antes de copiar pra nuvem) se o QR aparecer como 'qr'. Na tela de entrada nova
+      // (/login/) o motor nao sobe e o agente le o QR desenhado (24/11/2026).
+      const cx = (p.estado && p.estado.conn) || {}
+      conta('na tela do QR o agente diz que o numero pede QR', cx.st === 'qr', 'st=' + cx.st + ' modo=' + cx.modo)
     }
   }
 

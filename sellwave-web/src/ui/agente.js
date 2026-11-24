@@ -185,6 +185,19 @@
   // novo e a tela do QR de um numero que acabou de ser desconectado sao identicas.
   var jaAutenticou = false
   var ultimaQueda = null   // { modo, motivo, ts } do evento que derrubou, pra calibrar depois
+  // A TELA DE ENTRADA NOVA DO WHATSAPP (medido em 24/11/2026). Sem sessao, o site manda pra /login/, uma
+  // pagina so de entrada que NAO carrega o app inteiro: o motor nao sobe ali (sem getStreamData, sem
+  // ChatStore) e o numero pedindo QR passava como 'naosei'. Sem o 'qr' ninguem via o pareamento: a espera
+  // de 10 min depois de conectar e a de 3 min antes de copiar pra nuvem nao valiam. O QR desenhado so
+  // existe quando o WhatsApp pede pra ler o QR, entao e ele que conta (a tela sozinha nao basta).
+  function qrNaTelaDeEntrada() {
+    try {
+      if (String(location.pathname || '').indexOf('/login') !== 0) return false
+      var cs = document.querySelectorAll('canvas')
+      for (var i = 0; i < cs.length; i++) { if (cs[i].width >= 100 && cs[i].height >= 100) return true }
+      return !!document.querySelector('[data-ref]')
+    } catch (_) { return false }
+  }
   function estadoConn() {
     var modo = '', info = ''
     try {
@@ -192,6 +205,7 @@
       modo = String((d && d.mode) || '')
       info = String((d && d.info) || '')
     } catch (_) { modo = ''; info = '' }
+    if (!modo && qrNaTelaDeEntrada()) modo = 'QR'
     var auth = autenticado()
     if (auth) jaAutenticou = true
     // A ORDEM IMPORTA: bloqueio e conflito ANTES de offline, senao um pisco de internet esconde
