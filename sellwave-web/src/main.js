@@ -5645,7 +5645,7 @@ app.whenReady().then(() => {
       } catch (e) { out.painelErro = String((e && e.message) || e).slice(0, 110) }
       return out
     }
-    const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '', modal: '', aplicaProxy, testaSaida, particaoDe, injeta }
+    const ctx = { cascaOk: false, cascaErro: '', temBarra: false, textoBarra: '', modal: '', aplicaProxy, testaSaida, particaoDe, injeta, tiraServiceWorker }
     // O PAINEL SEM NUMERO ABERTO (13/11/2026): a geometria de verdade, com a casca de verdade. Finge
     // so quem entrou (vendedor, depois direcao) e pede pra casca desenhar as telas dela; quem decide se
     // o painel aparece e o codigo do app. Devolve tudo como estava.

@@ -6,6 +6,8 @@
 //     SW_SMOKE=1 npx electron .
 
 const { app, session, WebContentsView, BaseWindow } = require('electron')
+const fs = require('node:fs')
+const path = require('node:path')
 
 const UA_WA = 'https://web.whatsapp.com'
 const resultados = []
@@ -20,7 +22,13 @@ function conta(nome, passou, detalhe) {
 const vivas = []
 
 // Abre o WhatsApp Web numa particao descartavel, SEM proxy, e conta o que viu.
-function abreWhatsapp() {
+// A PARTICAO E A MESMA EM TODA RODADA, de proposito desde 24/11/2026: o Service Worker que o WhatsApp
+// deixou nela na rodada anterior e o que prendia a abertura dos numeros (tela branca; ver
+// tiraServiceWorker no main.js). Este teste pegou isso sozinho: em 24/11 ele parou de carregar em 45 s.
+// Entao ele passa pela MESMA limpeza que o app faz antes de abrir um numero, e diz se havia o que limpar.
+function abreWhatsapp(tira) {
+  const pastaSw = path.join(app.getPath('userData'), 'Partitions', 'sw-teste-wa', 'Service Worker', 'Database')
+  const tinhaSw = fs.existsSync(pastaSw)
   return new Promise((resolve) => {
     const part = 'persist:sw-teste-wa'
     const ses = session.fromPartition(part)
@@ -37,10 +45,13 @@ function abreWhatsapp() {
     } catch (_) { /* ok */ }
 
     let pronto = false
+    let comecou = Date.now()
     const fim = (r) => {
       if (pronto) return
       pronto = true
       clearTimeout(relogio)
+      r.tinhaSw = tinhaSw
+      r.ms = Date.now() - comecou
       // NAO destroi a view aqui: o teste do painel injeta nela logo depois. Quem derruba tudo e o
       // app.exit no fim do autoteste.
       resolve(r)
@@ -78,7 +89,7 @@ function abreWhatsapp() {
             temApp: (function(){var a=document.getElementById('app');return !!(a&&a.children.length&&(document.visibilityState==='hidden'||a.getBoundingClientRect().height>0))})(),
           })
         })()`
-    wc.loadURL(UA_WA)
+    Promise.resolve(tira ? tira('teste-wa', 'autoteste') : null).catch(() => {}).then(() => { comecou = Date.now(); wc.loadURL(UA_WA) })
   })
 }
 
@@ -192,8 +203,9 @@ async function rodar(ctx) {
   //    Fica atras de SW_SMOKE_WA=1 porque precisa de internet e sai SEM proxy (so pra provar que o
   //    User-Agent passa no portao). Nao use isso como teste de rotina em maquina de vendedor.
   if (process.env.SW_SMOKE_WA === '1') {
-    const r = await abreWhatsapp()
-    conta('o WhatsApp Web carregou', r.carregou, r.erro || r.titulo || '')
+    const r = await abreWhatsapp(ctx.tiraServiceWorker)
+    conta('o WhatsApp Web carregou', r.carregou, (r.erro || r.titulo || '') + ' (' + Math.round(r.ms / 100) / 10 + ' s' + (r.tinhaSw ? ', com o Service Worker da rodada anterior tirado antes' : '') + ')')
+    conta('o autoteste passa pela mesma limpeza do Service Worker que a abertura do numero', typeof ctx.tiraServiceWorker === 'function')
     conta('NAO caiu na tela de navegador nao suportado', !r.bloqueado, r.bloqueado ? 'apareceu o aviso de Chrome desatualizado' : '')
     conta('o QR apareceu', r.temQr, r.temQr ? ('canvas ' + r.qr) : 'sem canvas de QR')
     conta('a vigia da tela branca enxerga a tela do WhatsApp (#app desenhado)', r.temApp === true, String(r.temApp))
