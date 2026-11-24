@@ -220,9 +220,15 @@ async function rodar(ctx) {
       // O TESTE QUE IMPEDE LEAD PAGO IR PRA NINGUEM. Na tela do QR o motor ja responde true, mas
       // ninguem pareou aparelho nenhum: se `autenticado` vier true aqui, o sinal de vida vai dizer
       // que o numero esta de pe e a roleta vai entregar lead pra uma sessao sem dono.
+      // A TELA DE ENTRADA NOVA DO WHATSAPP (medido em 24/11/2026): sem sessao, o site manda pra /login/,
+      // uma pagina so de entrada que NAO carrega o app inteiro. Ali o motor nao sobe (sem ChatStore, sem
+      // getStreamData) e o agente responde motor=false. Continua valendo o que importa aqui: nao dizer
+      // autenticado. Fora do /login/, motor de pe continua obrigatorio.
+      const caminho = await r.wc.executeJavaScript('location.pathname').catch(() => '')
+      const loginNovo = /^\/login/.test(String(caminho))
       conta('na tela do QR o agente NAO se diz autenticado',
-        !!(p.estado && p.estado.motor) && !(p.estado && p.estado.autenticado),
-        p.estado ? ('motor=' + p.estado.motor + ' autenticado=' + p.estado.autenticado) : '')
+        !!p.estado && !p.estado.autenticado && (!!p.estado.motor || loginNovo),
+        p.estado ? ('motor=' + p.estado.motor + ' autenticado=' + p.estado.autenticado + ' em ' + caminho + (loginNovo && !p.estado.motor ? ' (tela de entrada nova do WhatsApp, sem o app inteiro)' : '')) : '')
       conta('sem aparelho pareado o numero vem vazio', !(p.estado && p.estado.eu), (p.estado && p.estado.eu) || '(vazio)')
     }
   }
