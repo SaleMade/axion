@@ -12034,7 +12034,8 @@ function _botCobPadrao() {
 
 // ═══ GRUPO DA LOGISTICA (13/11/2026, pedido do Bruno) ═══════════════════════════════════════════
 // A PayLog pediu: todo pedido pro Ceara tem que ser confirmado no grupo deles antes da postagem. O
-// bot manda UMA mensagem por pedido (nome e CPF do cliente) e NAO FAZ MAIS NADA nesse grupo. Palavras
+// bot avisa cada pedido (nome e CPF do cliente) e NAO FAZ MAIS NADA nesse grupo. Desde 25/11 os pedidos
+// que aparecem juntos saem NUMA mensagem so (ver _botLogTextoLote). Palavras
 // dele: "como e um grupo muito sensivel, eu realmente nao posso falar nada de errado ali (...) eu
 // gostaria que o bot apenas fizesse isso nesse grupo".
 // Por isso o grupo da logistica: nunca entra no `escuta` do agente (o bot nao le nem responde la),
@@ -12044,8 +12045,10 @@ function _botCobPadrao() {
 const BOT_LOG_UFS = ['CE'];
 const BOT_LOG_TEXTO_PADRAO = 'Olá! Temos um novo pedido para o Ceará, podem fazer a postagem.\nCliente: {nome}\nCPF: {cpf}';
 const BOT_LOG_VARS = ['nome', 'cpf', 'cidade', 'codigo'];
-const BOT_LOG_HORA = 6;          // avisos automaticos por hora, no maximo (dado errado nao vira enxurrada no grupo)
+const BOT_LOG_HORA = 6;          // MENSAGENS automaticas por hora, no maximo (dado errado nao vira enxurrada no grupo)
 const BOT_LOG_JANELA_D = 45;     // pedido com mais que isso nunca sai sozinho (ver _botLogTick)
+const BOT_LOG_JUNTA_S = 10 * 60; // o pedido novo espera isso pra juntar com os que entram logo depois
+const BOT_LOG_LOTE = 15;         // pedidos por mensagem, no maximo (o resto vai na seguinte)
 function _botLogPadrao() {
   return { ativo: false, grupo: { id: '', nome: '' }, de: '08:00', ate: '20:00', texto: BOT_LOG_TEXTO_PADRAO };
 }
@@ -12078,6 +12081,30 @@ const _botLogCpf = (v) => { const s = String(v || '').replace(/\D/g, ''); return
 function _botLogTexto(L, p) {
   const v = { nome: p.nome, cpf: _botLogCpf(p.cpf), cidade: p.cidade, codigo: p.code };
   return String((L && L.texto) || BOT_LOG_TEXTO_PADRAO).replace(/\{(nome|cpf|cidade|codigo)\}/g, (_, k) => String(v[k] || ''));
+}
+// JUNTAR (25/11/2026, pedido do Bruno com o print do grupo: dois avisos seguidos as 08:00, cada um com
+// "Ola! Temos um novo pedido..."): "o melhor e mandar os pedidos do Ceara tudo junto, em uma mensagem
+// so (...) ou, quando for mandar separado, nao mandar 'Ola, temos um novo pedido' toda vez".
+// A mensagem gravada se parte em ABERTURA (as linhas antes da primeira com {nome}/{cpf}/{cidade}/{codigo})
+// e PEDIDO (dali pra baixo). Varios pedidos = a abertura uma vez, no plural ("um novo pedido" -> "novos
+// pedidos"), e um bloco por pedido separado por linha em branco. A abertura so vai na PRIMEIRA mensagem
+// do dia nesse grupo; as outras do mesmo dia levam so os blocos (Cliente/CPF).
+function _botLogPartes(L) {
+  const linhas = String((L && L.texto) || BOT_LOG_TEXTO_PADRAO).split('\n');
+  const i = linhas.findIndex((l) => /\{(nome|cpf|cidade|codigo)\}/.test(l));
+  if (i < 0) return { abertura: linhas.join('\n').trim(), bloco: '' };
+  return { abertura: linhas.slice(0, i).join('\n').trim(), bloco: linhas.slice(i).join('\n').trim() };
+}
+const _botLogPlural = (t) => [[/\bum novo pedido\b/gi, 'novos pedidos'], [/\bum pedido novo\b/gi, 'pedidos novos'], [/\bnovo pedido\b/gi, 'novos pedidos'], [/\bum pedido\b/gi, 'pedidos']]
+  .reduce((s, [re, por]) => s.replace(re, (m) => (m[0] !== m[0].toLowerCase() ? por[0].toUpperCase() + por.slice(1) : por)), String(t || ''));
+function _botLogTextoLote(L, ps, primeira) {
+  const lista = (Array.isArray(ps) ? ps : [ps]).filter(Boolean);
+  const { abertura, bloco } = _botLogPartes(L);
+  if (!bloco) return abertura;   // mensagem sem {nome}/{cpf}: e so o texto, nao ha o que repetir
+  const blocos = lista.map((p) => _botLogTexto({ texto: bloco }, p));
+  const ab = primeira && abertura ? (lista.length > 1 ? _botLogPlural(abertura) : abertura) : '';
+  if (!ab) return blocos.join('\n\n');
+  return ab + (lista.length > 1 ? '\n\n' : '\n') + blocos.join('\n\n');
 }
 // Ligou agora (ou trocou o grupo): os pedidos do Ceara que ja existem nao saem sozinhos.
 const _botLogLigou = (atual, cfg) => {
@@ -13973,7 +14000,10 @@ async function _botEntregarGrupo(env, cfg, texto, tipo, dia, midia, grupo) {
 //   usar five_orders.created_at pra isso: ele RECUA pra data do card (auditoria 21/09), e o pedido
 //   aceito hoje de um card de ontem pareceria velho e ficaria sem aviso.
 // - Horario: so entre `de` e `ate`; fora dele espera abrir (o grupo e de trabalho).
-// - Freio: no maximo BOT_LOG_HORA automaticos por hora, e nada com mais de BOT_LOG_JANELA_D dias.
+// - Juntar (25/11/2026): o pedido novo vira linha 'espera' (ts = quando o bot viu) e espera
+//   BOT_LOG_JUNTA_S; quando o mais antigo da espera vence, TODOS os que esperam saem numa mensagem so
+//   (ate BOT_LOG_LOTE). A espera anda fora do horario tambem: o da noite sai as `de` em ponto, junto.
+// - Freio: no maximo BOT_LOG_HORA mensagens automaticas por hora, e nada com mais de BOT_LOG_JANELA_D dias.
 // - Nome incompleto ou CPF invalido NAO sai sozinho (linha 'pulou' com o motivo, aparece na tela).
 // - Sai pela fila do bot do PC (bot_outbox, tipo 'logistica'), igual a tudo que vai pra grupo. PC
 //   desligado = espera; mais de 20h na fila = a faxina descarta e a tela mostra "Não saiu".
@@ -14005,15 +14035,25 @@ const _botLogPula = (p) => (p.nome.split(' ').filter((x) => x.length > 1).length
 // quem liga NAO pode gravar a config sem isto, senao os parados de hoje sairiam todos de uma vez.
 async function _botLogMarcaExistentes(env) {
   await _botLogEnsure(env);
+  // O que estava esperando pra juntar quando desligaram tambem e "de antes": nao sai sozinho ao religar.
+  await env.DB.prepare("UPDATE bot_logistica SET por = 'antes' WHERE por = 'espera'").run();
   const r = await env.DB.prepare("INSERT OR IGNORE INTO bot_logistica (code, ts, por, quem, outbox_id, motivo) SELECT substr(f.order_id, 4), ?, 'antes', '', NULL, '' FROM five_orders f WHERE f.order_id LIKE 'PL-%' AND " + _BOT_LOG_UF_SQL)
     .bind(Math.floor(Date.now() / 1000), JSON.stringify(BOT_LOG_UFS)).run();
   return Number(r && r.meta && r.meta.changes) || 0;
 }
-async function _botLogFila(env, cfg, p) {
+// Ja saiu (ou esta na fila) alguma mensagem nesse grupo hoje? Entao a abertura ("Ola! Temos...") ja foi.
+async function _botLogJaFalouHoje(env, L) {
+  await _botEnsureTables(env);
+  const r = await env.DB.prepare("SELECT 1 AS x FROM bot_outbox WHERE tipo = 'logistica' AND jid = ? AND dia = ? AND status IN ('pend', 'enviado') LIMIT 1")
+    .bind(String(L.grupo.id), _brDay()).first();
+  return !!r;
+}
+// `ps` = um pedido ou a lista (saem numa mensagem so, na ordem em que vieram).
+async function _botLogFila(env, cfg, ps, primeira) {
   await _botEnsureTables(env);
   const L = cfg.logistica;
   const r = await env.DB.prepare("INSERT INTO bot_outbox (ts, dia, tipo, jid, nome, texto, status, tent) VALUES (?, ?, 'logistica', ?, ?, ?, 'pend', 0) RETURNING id")
-    .bind(Math.floor(Date.now() / 1000), _brDay(), String(L.grupo.id), String(L.grupo.nome || ''), _botLogTexto(L, p).slice(0, 4000)).first();
+    .bind(Math.floor(Date.now() / 1000), _brDay(), String(L.grupo.id), String(L.grupo.nome || ''), _botLogTextoLote(L, ps, primeira).slice(0, 4000)).first();
   const id = Number(r && r.id) || 0;
   if (!id) throw new Error('a fila do bot nao devolveu o id');
   return id;
@@ -14021,18 +14061,13 @@ async function _botLogFila(env, cfg, p) {
 async function _botLogTick(env, cfg) {
   const L = cfg && cfg.logistica;
   if (!cfg || !cfg.ativo || !L || !L.ativo || !L.grupo || !L.grupo.id) return;
-  const br = _agoraBR();
-  const min = br.getUTCHours() * 60 + br.getUTCMinutes();
-  if (min < _botMinutos(L.de) || min >= _botMinutos(L.ate)) return;
   await _botLogEnsure(env);
   const agoraS = Math.floor(Date.now() / 1000);
-  const h = await env.DB.prepare("SELECT COUNT(*) AS n FROM bot_logistica WHERE por = 'auto' AND ts > ?").bind(agoraS - 3600).first();
-  const vagas = BOT_LOG_HORA - (Number(h && h.n) || 0);
-  if (vagas <= 0) return;
+  // 1) O pedido novo entra na ESPERA. Fora do horario tambem: o da noite ja chega vencido as `de`.
   const rs = await env.DB.prepare('SELECT ' + _BOT_LOG_COLS + " FROM five_orders f WHERE f.order_id LIKE 'PL-%' AND " + _BOT_LOG_UF_SQL
     + " AND f.created_at > ? AND COALESCE(f.shipping_status, '') = '' AND upper(COALESCE(f.charge_status, '')) NOT IN ('CANCELED', 'REFUNDED')"
     + " AND lower(COALESCE(f.last_status, '')) NOT LIKE '%cancel%' AND NOT EXISTS (SELECT 1 FROM bot_logistica b WHERE b.code = substr(f.order_id, 4))"
-    + ' ORDER BY f.created_at LIMIT ?').bind(JSON.stringify(BOT_LOG_UFS), agoraS - BOT_LOG_JANELA_D * 86400, vagas).all();
+    + ' ORDER BY f.created_at LIMIT 50').bind(JSON.stringify(BOT_LOG_UFS), agoraS - BOT_LOG_JANELA_D * 86400).all();
   for (const row of ((rs && rs.results) || [])) {
     const p = _botLogLinha(row);
     if (!/^ORD[A-Z0-9]+$/i.test(p.code)) continue;
@@ -14042,17 +14077,47 @@ async function _botLogTick(env, cfg) {
       console.log('BOT_LOGISTICA pulou ' + p.code + ': ' + pula);
       continue;
     }
-    const res = await env.DB.prepare("INSERT OR IGNORE INTO bot_logistica (code, ts, por, quem, outbox_id, motivo) VALUES (?, ?, 'auto', '', NULL, '')").bind(p.code, agoraS).run();
-    if (!(res && res.meta && res.meta.changes > 0)) continue;
-    try {
-      const id = await _botLogFila(env, cfg, p);
-      await env.DB.prepare('UPDATE bot_logistica SET outbox_id = ? WHERE code = ?').bind(id, p.code).run();
-      console.log('BOT_LOGISTICA na fila ' + p.code + ' (item ' + id + ')');
-    } catch (e) {
-      // Nao entrou na fila: solta a reserva e a proxima batida tenta de novo.
-      try { await env.DB.prepare('DELETE FROM bot_logistica WHERE code = ? AND outbox_id IS NULL').bind(p.code).run(); } catch (_) {}
-      console.error('BOT_LOGISTICA fila falhou ' + p.code + ': ' + String((e && e.message) || e));
+    await env.DB.prepare("INSERT OR IGNORE INTO bot_logistica (code, ts, por, quem, outbox_id, motivo) VALUES (?, ?, 'espera', '', NULL, '')").bind(p.code, agoraS).run();
+  }
+  // 2) Horario e freio.
+  const br = _agoraBR();
+  const min = br.getUTCHours() * 60 + br.getUTCMinutes();
+  if (min < _botMinutos(L.de) || min >= _botMinutos(L.ate)) return;
+  const h = await env.DB.prepare("SELECT COUNT(DISTINCT outbox_id) AS n FROM bot_logistica WHERE por = 'auto' AND outbox_id IS NOT NULL AND ts > ?").bind(agoraS - 3600).first();
+  if ((Number(h && h.n) || 0) >= BOT_LOG_HORA) return;
+  // 3) A espera: quando o mais antigo venceu, vai todo mundo que espera (o que saiu ou foi cancelado
+  //    no meio da espera sai da lista sem aviso).
+  const es = await env.DB.prepare('SELECT b.ts AS b_ts, ' + _BOT_LOG_COLS + " FROM bot_logistica b JOIN five_orders f ON f.order_id = 'PL-' || b.code WHERE b.por = 'espera' ORDER BY f.created_at").all();
+  const vivos = [];
+  for (const r of ((es && es.results) || [])) {
+    const p = _botLogLinha(r);
+    if (p.saiu || p.cancelado || !BOT_LOG_UFS.includes(p.uf)) {
+      await env.DB.prepare("DELETE FROM bot_logistica WHERE code = ? AND por = 'espera'").bind(p.code).run();
+      continue;
     }
+    vivos.push({ p, ts: Number(r.b_ts) || 0 });
+  }
+  if (!vivos.length) return;
+  const maisVelho = Math.min(...vivos.map((v) => v.ts));
+  if (agoraS - maisVelho < BOT_LOG_JUNTA_S) return;
+  const lote = vivos.slice(0, BOT_LOG_LOTE);
+  // A RESERVA: so leva quem ainda esta esperando (o Avisar da tela pode ter levado algum no meio).
+  const pegos = [];
+  for (const v of lote) {
+    const u = await env.DB.prepare("UPDATE bot_logistica SET por = 'auto', ts = ? WHERE code = ? AND por = 'espera'").bind(agoraS, v.p.code).run();
+    if (u && u.meta && u.meta.changes > 0) pegos.push(v.p);
+  }
+  if (!pegos.length) return;
+  const codes = JSON.stringify(pegos.map((p) => p.code));
+  try {
+    const primeira = !(await _botLogJaFalouHoje(env, L));
+    const id = await _botLogFila(env, cfg, pegos, primeira);
+    await env.DB.prepare("UPDATE bot_logistica SET outbox_id = ? WHERE code IN (SELECT value FROM json_each(?)) AND por = 'auto' AND outbox_id IS NULL").bind(id, codes).run();
+    console.log('BOT_LOGISTICA na fila ' + pegos.map((p) => p.code).join(', ') + ' (item ' + id + ')');
+  } catch (e) {
+    // Nao entrou na fila: volta pra espera, ja vencida, e a proxima batida tenta de novo.
+    try { await env.DB.prepare("UPDATE bot_logistica SET por = 'espera', ts = ? WHERE code IN (SELECT value FROM json_each(?)) AND por = 'auto' AND outbox_id IS NULL").bind(agoraS - BOT_LOG_JUNTA_S, codes).run(); } catch (_) {}
+    console.error('BOT_LOGISTICA fila falhou ' + codes + ': ' + String((e && e.message) || e));
   }
 }
 // GET  /api/bot/logistica          -> os pedidos do Ceara dos ultimos 30 dias e o aviso de cada um
@@ -14075,6 +14140,8 @@ async function handleBotLogistica(req, env) {
       + " WHERE f.order_id LIKE 'PL-%' AND " + _BOT_LOG_UF_SQL + ' AND (f.created_at > ? OR b.ts > ?)'
       + ' ORDER BY f.created_at DESC LIMIT 60').bind(JSON.stringify(BOT_LOG_UFS), desde, desde).all();
     const itens = [];
+    // O texto de cada item e o que o Avisar mandaria AGORA: sem a abertura se o grupo ja ouviu hoje.
+    const primeira = L.grupo.id ? !(await _botLogJaFalouHoje(env, L)) : true;
     for (const r of ((rs && rs.results) || [])) {
       const p = _botLogLinha(r);
       if (p.cancelado) continue;
@@ -14089,7 +14156,7 @@ async function handleBotLogistica(req, env) {
         // Sem item na fila: ou ainda esta entrando (segundos) ou a faxina dos 30 dias levou o registro.
         else aviso = { ...aviso, tipo: r.b_out ? 'enviado' : 'fila', ts: Number(r.b_ts) || 0 };
       }
-      itens.push({ code: p.code, nome: p.nome, cpf: _botLogCpf(p.cpf), cidade: p.cidade, criado: p.criado, saiu: p.saiu, situacao: p.situacao, aviso, pula: _botLogPula(p), texto: _botLogTexto(L, p) });
+      itens.push({ code: p.code, nome: p.nome, cpf: _botLogCpf(p.cpf), cidade: p.cidade, criado: p.criado, saiu: p.saiu, situacao: p.situacao, aviso, pula: _botLogPula(p), texto: _botLogTextoLote(L, [p], primeira) });
     }
     const ag = await _botAgenteEstado(env);
     return json({ ok: true, itens, agente: { vivo: !!ag.vivo, estado: String(ag.estado || '') } });
@@ -14115,7 +14182,7 @@ async function handleBotLogistica(req, env) {
       .bind(code, agoraS, _botTexto300(u.name || u.id, 60), agoraS - 120).run();
     if (!(res && res.meta && res.meta.changes > 0)) return json({ ok: false, error: 'O aviso desse pedido já está na fila do bot.' }, 409);
     let id = 0;
-    try { id = await _botLogFila(env, cfg, p); } catch (e) {
+    try { id = await _botLogFila(env, cfg, [p], !(await _botLogJaFalouHoje(env, L))); } catch (e) {
       try { await env.DB.prepare('DELETE FROM bot_logistica WHERE code = ? AND outbox_id IS NULL').bind(code).run(); } catch (_) {}
       return json({ ok: false, error: 'Não consegui pôr na fila do bot: ' + String((e && e.message) || e) }, 503);
     }

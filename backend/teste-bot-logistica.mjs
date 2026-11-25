@@ -1,7 +1,8 @@
 // GRUPO DA LOGISTICA (13/11/2026).
 //
 // A PayLog pediu: todo pedido pro Ceara tem que ser confirmado no grupo deles antes da postagem. O bot
-// manda UMA mensagem por pedido (nome e CPF) e nao faz mais nada la. Este teste recorta do worker.js o
+// avisa cada pedido (nome e CPF) e nao faz mais nada la. Desde 25/11 os que aparecem juntos saem numa
+// mensagem so, e a abertura ("Ola! Temos...") so vai na primeira mensagem do dia. Este teste recorta do worker.js o
 // codigo de verdade (os dois blocos da logistica e as tres guardas do bot de IA) e roda num SQLite em
 // memoria, com a fila do bot do PC (bot_outbox) e a tabela five_orders.
 //
@@ -42,7 +43,18 @@ const CODIGO = [
 // As mutacoes: cada uma tira uma protecao; alguma conferencia TEM que reclamar.
 const MUTACOES = [
   ['sem a janela de horario', "if (min < _botMinutos(L.de) || min >= _botMinutos(L.ate)) return;", ''],
-  ['sem o freio por hora', 'const vagas = BOT_LOG_HORA - (Number(h && h.n) || 0);', 'const vagas = 99;'],
+  ['sem o freio por hora', 'if ((Number(h && h.n) || 0) >= BOT_LOG_HORA) return;', ''],
+  ['freio contando pedido, nao mensagem', 'SELECT COUNT(DISTINCT outbox_id) AS n', 'SELECT COUNT(*) AS n'],
+  // JUNTAR (25/11/2026)
+  ['sem a espera pra juntar', 'if (agoraS - maisVelho < BOT_LOG_JUNTA_S) return;', ''],
+  ['um pedido por mensagem', 'const lote = vivos.slice(0, BOT_LOG_LOTE);', 'const lote = vivos.slice(0, 1);'],
+  ['lote sem limite', 'const lote = vivos.slice(0, BOT_LOG_LOTE);', 'const lote = vivos;'],
+  ['abertura em toda mensagem', 'const primeira = !(await _botLogJaFalouHoje(env, L));\n    const id', 'const primeira = true;\n    const id'],
+  ['mensagem com erro conta como ja falou', "status IN ('pend', 'enviado') LIMIT 1", 'status IS NOT NULL LIMIT 1'],
+  ['ontem conta como hoje', 'AND dia = ? AND status', 'AND ? IS NOT NULL AND status'],
+  ['sem plural na abertura', '(lista.length > 1 ? _botLogPlural(abertura) : abertura)', 'abertura'],
+  ['sai aviso de quem saiu na espera', 'if (p.saiu || p.cancelado || !BOT_LOG_UFS.includes(p.uf)) {', 'if (false) {'],
+  ['religar solta a espera', "  await env.DB.prepare(\"UPDATE bot_logistica SET por = 'antes' WHERE por = 'espera'\").run();\n", ''],
   ['sem lembrar quem ja foi avisado', ' AND NOT EXISTS (SELECT 1 FROM bot_logistica b WHERE b.code = substr(f.order_id, 4))', ''],
   ['sem o filtro de estado no tick', "f.order_id LIKE 'PL-%' AND \" + _BOT_LOG_UF_SQL\n    + \" AND f.created_at", "f.order_id LIKE 'PL-%' AND (? IS NOT NULL)\"\n    + \" AND f.created_at"],
   ['sem tirar o que ja saiu', " AND COALESCE(f.shipping_status, '') = ''", ''],
@@ -83,11 +95,12 @@ async function roda(codigo, quieto) {
   const env = { DB }
   const agora = Math.floor(Date.now() / 1000)
   let horaBR = 10 * 60   // minutos do dia em Brasilia que o _agoraBR devolve
+  let diaBR = '2026-11-13'   // o dia que o _brDay devolve (a abertura so vai na primeira mensagem do dia)
   let cfg = null
   let agente = { vivo: true, estado: 'open' }
   const stubs = {
     _agoraBR: () => new Date(Date.UTC(2026, 10, 13, Math.floor(horaBR / 60), horaBR % 60)),
-    _brDay: () => '2026-11-13',
+    _brDay: () => diaBR,
     _botEnsureTables: async () => {},
     _botCfgLer: async () => cfg,
     _botAgenteEstado: async () => agente,
@@ -97,7 +110,7 @@ async function roda(codigo, quieto) {
     json: (o, s) => ({ ...o, status: s || 200 }),
     err: (m, s) => ({ erro: m, status: s || 400 }),
   }
-  const nomes = ['_botLogPadrao', '_botLogNormaliza', '_botLogConfere', '_botLogLigou', '_botLogTexto', '_botLogMarcaExistentes', '_botLogTick', 'handleBotLogistica', '_botIaEscuta', '_botIaEhTeste', '_botIaGrupoDe', '_botLogEhGrupo']
+  const nomes = ['_botLogPadrao', '_botLogNormaliza', '_botLogConfere', '_botLogLigou', '_botLogTexto', '_botLogTextoLote', '_botLogPlural', '_botLogMarcaExistentes', '_botLogTick', 'handleBotLogistica', '_botIaEscuta', '_botIaEhTeste', '_botIaGrupoDe', '_botLogEhGrupo']
   let F
   try {
     F = new Function(...Object.keys(stubs), codigo + '\nreturn { ' + nomes.join(', ') + ' };')(...Object.values(stubs))
@@ -180,9 +193,22 @@ async function roda(codigo, quieto) {
   conta('separa os 3 do Ceara da PayLog (o de SP, o endereco quebrado e o da Five ficam fora)', marcados === 3, String(marcados))
   conta('todos como "antes"', ['ORDPARADO1', 'ORDPARADO2', 'ORDSAIU'].every((c) => linhaLog(c) && linhaLog(c).por === 'antes'))
 
-  secao('a varredura:')
+  // 25/11/2026: o pedido novo ESPERA 10 min (linha 'espera') pra juntar com os que entram logo depois;
+  // vencida a espera do mais antigo, todos saem numa mensagem so. Date.now e de verdade: "passar o
+  // tempo" aqui e recuar o ts das linhas.
+  const vence = (codes) => (codes
+    ? db.prepare("UPDATE bot_logistica SET ts = ts - 601 WHERE por = 'espera' AND code IN (SELECT value FROM json_each(?))").run(JSON.stringify(codes))
+    : db.prepare("UPDATE bot_logistica SET ts = ts - 601 WHERE por = 'espera'").run())
+  const passaHora = () => db.prepare("UPDATE bot_logistica SET ts = ts - 3700 WHERE por = 'auto'").run()
+  const nomesDe = (t) => [...String(t || '').matchAll(/Cliente: (.*)/g)].map((m) => m[1])
+  const tick = () => F._botLogTick(env, cfg)
+  const ABRE1 = 'Olá! Temos um novo pedido para o Ceará, podem fazer a postagem.'
+  const ABREN = 'Olá! Temos novos pedidos para o Ceará, podem fazer a postagem.'
+  const CPF = '529.982.247-25'
+
+  secao('a varredura: o pedido novo espera pra juntar com os outros:')
   cfg = base()
-  await F._botLogTick(env, cfg)
+  await tick()
   conta('nada sai logo depois de ligar', fila().length === 0, JSON.stringify(fila()))
   poe('ORDNOVO1', { nome: 'José  Ribamar   da Silva', cpf: '529.982.247-25', cidade: 'Maracanaú', criado: agora - 5 * 86400 })   // card de 5 dias: o created_at recua pro card
   poe('ORDNOVOSP', { uf: 'SP' })
@@ -194,63 +220,151 @@ async function roda(codigo, quieto) {
   poe('ORDVELHO', { criado: agora - 60 * 86400 })
   poe('ORDSEMCPF', { cpf: '11111111111' })
   poe('ORDSEMNOME', { nome: 'Maria' })
-  await F._botLogTick(env, cfg)
-  let f = fila()
-  const codigos = () => fila().map((x) => (/Cliente: (.*)/.exec(x.texto) || [])[1]).join(' | ')
-  conta('sai o pedido novo do Ceara, mesmo com o card de 5 dias atras', f.some((x) => /José Ribamar da Silva/.test(x.texto)), codigos())
-  conta('o que ja tem etiqueta mas nao saiu tambem sai', linhaLog('ORDNOVOPREP') && linhaLog('ORDNOVOPREP').por === 'auto')
-  conta('sao 2 mensagens, nenhuma de SP, entregue, cancelado ou velho', f.length === 2, codigos())
-  const msg = f.find((x) => /Ribamar/.test(x.texto))
-  conta('a mensagem: nome arrumado e CPF com pontos', msg && msg.texto === 'Olá! Temos um novo pedido para o Ceará, podem fazer a postagem.\nCliente: José Ribamar da Silva\nCPF: 529.982.247-25', msg && msg.texto)
-  conta('vai pro grupo da logistica, como item de logistica', f.every((x) => x.jid === G_LOG && x.tipo === 'logistica' && x.status === 'pend' && x.nome === 'SellWave x PayLog'))
+  // De noite a espera anda, mas a parte que manda nao roda: e onde da pra ver o filtro da entrada sozinho
+  // (de dia a conferencia da espera apagaria o que entrou errado, e o erro viraria escrita a cada minuto).
+  horaBR = 22 * 60
+  await tick()
+  const fora = ['ORDNOVOSP', 'ORDNOVOENV', 'ORDNOVOCANC', 'ORDNOVOCANC2', 'ORDNOVOESTORNO', 'ORDVELHO']
+  conta('SP, entregue, cancelado, estornado e velho nem entram na espera', fora.every((c) => !linhaLog(c)), fora.filter((c) => linhaLog(c)).join(' '))
+  horaBR = 10 * 60
+  await tick()
+  conta('nada sai na hora: fica esperando juntar', fila().length === 0, JSON.stringify(fila()))
+  conta('o novo do Ceara espera, mesmo com o card de 5 dias atras', linhaLog('ORDNOVO1') && linhaLog('ORDNOVO1').por === 'espera')
+  conta('o que ja tem etiqueta mas nao saiu tambem espera', linhaLog('ORDNOVOPREP') && linhaLog('ORDNOVOPREP').por === 'espera')
+  conta('...nem de dia', fora.every((c) => !linhaLog(c)), fora.filter((c) => linhaLog(c)).join(' '))
   conta('CPF invalido nao sai sozinho (fica "pulou")', linhaLog('ORDSEMCPF') && linhaLog('ORDSEMCPF').por === 'pulou' && /CPF/.test(linhaLog('ORDSEMCPF').motivo))
   conta('nome incompleto tambem nao', linhaLog('ORDSEMNOME') && linhaLog('ORDSEMNOME').por === 'pulou')
-  conta('a linha guarda o item da fila', linhaLog('ORDNOVO1') && linhaLog('ORDNOVO1').outbox_id > 0)
-  await F._botLogTick(env, cfg)
-  conta('a segunda batida nao repete', fila().length === 2)
+  poe('ORDNOVO2', { nome: 'Francisca Pedro Filho', criado: agora - 60 })
+  vence(['ORDNOVO1', 'ORDNOVOPREP'])
+  await tick()
+  let f = fila()
+  conta('venceu a espera do primeiro: sai TUDO numa mensagem so, ate o que acabou de chegar', f.length === 1 && nomesDe(f[0].texto).join(' | ') === 'José Ribamar da Silva | Maria Lucineide Souza | Francisca Pedro Filho', f.map((x) => x.texto).join(' // '))
+  conta('a mensagem: a abertura uma vez, no plural, e um bloco por pedido', f[0] && f[0].texto === ABREN + '\n\nCliente: José Ribamar da Silva\nCPF: ' + CPF + '\n\nCliente: Maria Lucineide Souza\nCPF: ' + CPF + '\n\nCliente: Francisca Pedro Filho\nCPF: ' + CPF, f[0] && f[0].texto)
+  conta('vai pro grupo da logistica, como item de logistica', f.every((x) => x.jid === G_LOG && x.tipo === 'logistica' && x.status === 'pend' && x.nome === 'SellWave x PayLog'))
+  conta('as tres linhas guardam o mesmo item da fila', f[0] && ['ORDNOVO1', 'ORDNOVOPREP', 'ORDNOVO2'].every((c) => linhaLog(c).por === 'auto' && linhaLog(c).outbox_id === f[0].id))
+  await tick()
+  conta('a batida seguinte nao repete', fila().length === 1)
+
+  secao('a abertura so na primeira mensagem do dia:')
+  poe('ORDTARDE', { nome: 'Raimundo Nonato Lima' })
+  await tick(); vence(); await tick()
+  conta('a segunda mensagem do dia vai sem a abertura, so o cliente', fila().length === 2 && fila()[1].texto === 'Cliente: Raimundo Nonato Lima\nCPF: ' + CPF, fila()[1] && fila()[1].texto)
+  diaBR = '2026-11-14'
+  poe('ORDAMANHA', { nome: 'Cicera Maria Alves' })
+  await tick(); vence(); await tick()
+  conta('no dia seguinte a primeira volta com a abertura (um pedido = singular, como antes)', fila().length === 3 && fila()[2].texto === ABRE1 + '\nCliente: Cicera Maria Alves\nCPF: ' + CPF, fila()[2] && fila()[2].texto)
+  db.prepare("UPDATE bot_outbox SET status = 'erro' WHERE id = ?").run(fila()[2].id)
+  poe('ORDDEPOISERRO', { nome: 'Joana Darc Sousa' })
+  await tick(); vence(); await tick()
+  conta('a primeira do dia nao saiu (erro): a seguinte leva a abertura', fila().length === 4 && fila()[3].texto.startsWith(ABRE1 + '\n'), fila()[3] && fila()[3].texto)
+  diaBR = '2026-11-13'
+
+  secao('as pecas do texto:')
+  {
+    const pA = { nome: 'Ana Maria Souza', cpf: '52998224725', cidade: 'Sobral', code: 'ORDA1' }
+    const pB = { nome: 'Bia Lima', cpf: '', cidade: 'Crato', code: 'ORDB2' }
+    const L1 = { texto: 'Bom dia!\nTemos um pedido novo do Ceará.\nCliente: {nome}\nCidade: {cidade}\nPedido: {codigo}' }
+    conta('abertura de duas linhas, no plural', F._botLogTextoLote(L1, [pA, pB], true) === 'Bom dia!\nTemos pedidos novos do Ceará.\n\nCliente: Ana Maria Souza\nCidade: Sobral\nPedido: ORDA1\n\nCliente: Bia Lima\nCidade: Crato\nPedido: ORDB2', F._botLogTextoLote(L1, [pA, pB], true))
+    conta('um pedido na primeira do dia = a mensagem gravada, igual a antes', F._botLogTextoLote(base().logistica, [pA], true) === F._botLogTexto(base().logistica, pA))
+    conta('maiuscula no comeco fica maiuscula', F._botLogPlural('Um novo pedido chegou') === 'Novos pedidos chegou', F._botLogPlural('Um novo pedido chegou'))
+    conta('mensagem sem {nome}/{cpf}: sai o texto, sem repetir', F._botLogTextoLote({ texto: 'Tem pedido do Ceará pra liberar.' }, [pA, pB], false) === 'Tem pedido do Ceará pra liberar.')
+    conta('mensagem que ja comeca no cliente: sem abertura', F._botLogTextoLote({ texto: 'Cliente: {nome}' }, [pA], true) === 'Cliente: Ana Maria Souza')
+  }
 
   secao('quando nao sai:')
-  poe('ORDNOITE')
+  passaHora()
+  poe('ORDNOITE', { nome: 'Francisco Nogueira Silva' })
   horaBR = 22 * 60
-  await F._botLogTick(env, cfg)
-  conta('fora do horario espera', fila().length === 2)
+  await tick()
+  conta('de noite o pedido ja entra na espera...', linhaLog('ORDNOITE') && linhaLog('ORDNOITE').por === 'espera')
+  vence()
+  await tick()
+  conta('...mas fora do horario nao sai', fila().length === 4)
   horaBR = 7 * 60 + 59
-  await F._botLogTick(env, cfg)
-  conta('07:59 ainda espera', fila().length === 2)
+  await tick()
+  conta('07:59 ainda espera', fila().length === 4)
   horaBR = 10 * 60
   cfg = { ...base(), ativo: false }
-  await F._botLogTick(env, cfg)
-  conta('bot inteiro desligado: nada', fila().length === 2)
+  await tick()
+  conta('bot inteiro desligado: nada', fila().length === 4)
   cfg = base(); cfg.logistica.ativo = false
-  await F._botLogTick(env, cfg)
-  conta('aviso desligado: nada', fila().length === 2)
+  await tick()
+  conta('aviso desligado: nada', fila().length === 4)
   horaBR = 8 * 60
   cfg = base()
-  await F._botLogTick(env, cfg)
-  conta('as 08:00 sai o da noite', fila().length === 3 && /Maria Lucineide/.test(fila()[2].texto))
+  await tick()
+  conta('as 08:00 em ponto sai o da noite (a espera venceu de madrugada)', fila().length === 5 && nomesDe(fila()[4].texto).join() === 'Francisco Nogueira Silva', String(fila().length))
 
-  secao('o freio:')
-  for (let i = 0; i < 8; i++) poe('ORDLOTE' + i)
-  await F._botLogTick(env, cfg)
-  conta('no maximo 6 automaticos por hora (3 ja tinham saido: entram mais 3)', fila().length === 6, String(fila().length))
-  db.prepare("UPDATE bot_logistica SET ts = ts - 3700 WHERE por = 'auto'").run()
-  await F._botLogTick(env, cfg)
-  conta('na hora seguinte sai o resto do lote (5 de 8 faltando, cabem 6)', fila().length === 11, String(fila().length))
+  secao('o que saiu ou foi cancelado durante a espera:')
+  poe('ORDSAIUNAESPERA', { nome: 'Pedro Henrique Costa' })
+  poe('ORDCANCNAESPERA', { nome: 'Ana Paula Moreira' })
+  await tick()
+  conta('os dois esperando', ['ORDSAIUNAESPERA', 'ORDCANCNAESPERA'].every((c) => linhaLog(c) && linhaLog(c).por === 'espera'))
+  db.prepare("UPDATE five_orders SET shipping_status = 'IN_TRANSIT' WHERE order_id = 'PL-ORDSAIUNAESPERA'").run()
+  db.prepare("UPDATE five_orders SET charge_status = 'CANCELED' WHERE order_id = 'PL-ORDCANCNAESPERA'").run()
+  vence(); await tick(); await tick()
+  conta('nao sai aviso de quem saiu ou foi cancelado no meio da espera', fila().length === 5 && !linhaLog('ORDSAIUNAESPERA') && !linhaLog('ORDCANCNAESPERA'), String(fila().length))
+
+  secao('o lote e o freio:')
+  passaHora()
+  for (let i = 0; i < 20; i++) poe('ORDLOTE' + String(i).padStart(2, '0'), { criado: agora - 3600 + i })
+  await tick(); vence(); await tick()
+  conta('no maximo 15 pedidos por mensagem', fila().length === 6 && nomesDe(fila()[5].texto).length === 15, fila().length + ' / ' + nomesDe((fila()[5] || {}).texto).length)
+  await tick()
+  conta('o resto vai na seguinte, sem abertura', fila().length === 7 && nomesDe(fila()[6].texto).length === 5 && !/Olá/.test(fila()[6].texto))
+  poe('ORDAPOSLOTE', { nome: 'Marcos Vinicius Rocha' })
+  await tick(); vence(); await tick()
+  conta('20 pedidos em 2 mensagens contam 2 no freio, nao 20: o seguinte sai', fila().length === 8 && /Marcos Vinicius/.test(fila()[7].texto), String(fila().length))
+  passaHora()
+  const insAuto = db.prepare("INSERT INTO bot_logistica (code, ts, por, quem, outbox_id, motivo) VALUES (?, ?, 'auto', '', ?, '')")
+  for (let i = 0; i < 6; i++) insAuto.run('ORDFREIO' + i, agora - 60, 9000 + i)
+  poe('ORDDEPOISFREIO', { nome: 'Luzia Ferreira Gomes' })
+  await tick(); vence(); await tick()
+  conta('no maximo 6 mensagens por hora: a setima espera', fila().length === 8 && linhaLog('ORDDEPOISFREIO').por === 'espera', String(fila().length))
+  passaHora()
+  await tick()
+  conta('na hora seguinte ela sai', fila().length === 9 && /Luzia/.test(fila()[8].texto))
+
+  secao('muitos pedidos ja conhecidos nao escondem o novo:')
+  for (let i = 0; i < 60; i++) {
+    poe('ORDCONHECIDO' + i, { criado: agora - 7200 })
+    db.prepare("INSERT INTO bot_logistica (code, ts, por, quem, outbox_id, motivo) VALUES (?, ?, 'antes', '', NULL, '')").run('ORDCONHECIDO' + i, agora)
+  }
+  poe('ORDDEPOISDE60', { nome: 'Sebastiao Alves Pinto', criado: agora - 60 })
+  await tick()
+  conta('com 60 pedidos do Ceara ja conhecidos, o novo ainda entra na espera', linhaLog('ORDDEPOISDE60') && linhaLog('ORDDEPOISDE60').por === 'espera')
+  vence(); await tick()
+  conta('...e sai', fila().length === 10 && /Sebastiao/.test(fila()[9].texto))
+  db.prepare("DELETE FROM five_orders WHERE order_id LIKE 'PL-ORDCONHECIDO%'").run()   // a lista da tela mostra so 60
+
+  secao('religar nao solta quem estava esperando:')
+  poe('ORDRELIGA', { nome: 'Rita de Cassia Lopes' })
+  await tick()
+  await F._botLogMarcaExistentes(env)
+  conta('religar (ou trocar o grupo) passa quem esperava pra "antes"', linhaLog('ORDRELIGA').por === 'antes')
+  vence(); await tick()
+  conta('...e ele nao sai sozinho', fila().length === 10)
 
   secao('a tela:')
   db.prepare("UPDATE bot_outbox SET status = 'enviado', feito_ts = ? WHERE texto LIKE '%Ribamar%'").run(agora)
-  const idErro = fila()[2].id
-  db.prepare("UPDATE bot_outbox SET status = 'erro', erro = 'O bot do PC ficou desligado por 20h. Texto descartado.' WHERE id = ?").run(idErro)
+  db.prepare("UPDATE bot_outbox SET erro = 'O bot do PC ficou desligado por 20h. Texto descartado.' WHERE id = ?").run(fila()[2].id)
+  poe('ORDNATELA', { nome: 'Gabriel Lima Souza' })
+  await tick()
   let g = await F.handleBotLogistica({ url: 'https://x/api/bot/logistica', method: 'GET', __user: DIR }, env)
   const item = (c) => (g.itens || []).find((x) => x.code === c)
   conta('lista so do Ceara, sem cancelado', g.ok && !item('ORDSAOPAULO') && !item('ORDNOVOCANC') && !item('ORDNOVOCANC2') && !!item('ORDPARADO1'), JSON.stringify((g.itens || []).map((x) => x.code)))
   conta('"antes de ligar" no que ja existia', item('ORDPARADO1') && item('ORDPARADO1').aviso.tipo === 'antes')
   conta('"enviado" com a hora', item('ORDNOVO1') && item('ORDNOVO1').aviso.tipo === 'enviado' && item('ORDNOVO1').aviso.ts === agora)
-  conta('"erro" com o motivo', (g.itens || []).some((x) => x.aviso.tipo === 'erro' && /20h/.test(x.aviso.erro)))
-  conta('"fila" no que espera', item('ORDLOTE0') && item('ORDLOTE0').aviso.tipo === 'fila')
+  conta('"erro" com o motivo', item('ORDAMANHA') && item('ORDAMANHA').aviso.tipo === 'erro' && /20h/.test(item('ORDAMANHA').aviso.erro))
+  conta('"fila" no que espera pra juntar', item('ORDNATELA') && item('ORDNATELA').aviso.tipo === 'fila')
+  conta('"fila" no que ja esta na fila do PC', item('ORDLOTE00') && item('ORDLOTE00').aviso.tipo === 'fila')
   conta('"pulou" com o motivo', item('ORDSEMCPF') && item('ORDSEMCPF').aviso.tipo === 'pulou' && item('ORDSEMCPF').pula === 'CPF inválido')
   conta('o que ja saiu vem marcado', item('ORDSAIU') && item('ORDSAIU').saiu === true)
-  conta('cada item traz o texto que iria pro grupo', item('ORDPARADO1') && /Cliente: Antonio Cesar Bentes\nCPF: 529\.982\.247-25$/.test(item('ORDPARADO1').texto))
+  conta('o texto de cada item e o que o Avisar mandaria agora: sem a abertura, o grupo ja ouviu hoje', item('ORDPARADO1') && item('ORDPARADO1').texto === 'Cliente: Antonio Cesar Bentes\nCPF: ' + CPF, item('ORDPARADO1') && item('ORDPARADO1').texto)
+  diaBR = '2026-11-15'
+  g = await F.handleBotLogistica({ url: 'https://x/api/bot/logistica', method: 'GET', __user: DIR }, env)
+  conta('...e com a abertura num dia em que o grupo nao ouviu nada', item('ORDPARADO1') && item('ORDPARADO1').texto === ABRE1 + '\nCliente: Antonio Cesar Bentes\nCPF: ' + CPF, item('ORDPARADO1') && item('ORDPARADO1').texto)
+  diaBR = '2026-11-13'
   const vend = await F.handleBotLogistica({ url: 'https://x/api/bot/logistica', method: 'GET', __user: { id: 'v', role: 'atendente' } }, env)
   conta('vendedor nao ve', vend.status === 403)
 
@@ -259,6 +373,7 @@ async function roda(codigo, quieto) {
   const antesN = fila().length
   let r = await avisar('ORDPARADO1')
   conta('o parado de antes de ligar vai pra fila', r.ok && fila().length === antesN + 1 && /Antonio Cesar Bentes/.test(fila().at(-1).texto), JSON.stringify(r))
+  conta('...sem a abertura, que o grupo ja ouviu hoje', fila().at(-1).texto === 'Cliente: Antonio Cesar Bentes\nCPF: ' + CPF, fila().at(-1).texto)
   conta('fica marcado como mandado a mao, por quem', linhaLog('ORDPARADO1').por === 'mao' && linhaLog('ORDPARADO1').quem === 'Bruno')
   r = await avisar('ORDPARADO1')
   conta('segundo clique com o primeiro na fila: recusa', r.status === 409 && fila().length === antesN + 1)
@@ -279,6 +394,12 @@ async function roda(codigo, quieto) {
   r = await avisar('ORDPARADO2')
   conta('sem grupo salvo: recusa', !r.ok && /Escolha o grupo/.test(r.erro))
   cfg = base()
+  db.prepare("UPDATE bot_logistica SET ts = ts - 200 WHERE code = 'ORDNATELA'").run()
+  const n0 = fila().length
+  r = await avisar('ORDNATELA')
+  conta('o Avisar leva o pedido que estava esperando juntar', r.ok && linhaLog('ORDNATELA').por === 'mao' && fila().length === n0 + 1, JSON.stringify(r))
+  vence(); await tick()
+  conta('...e ele nao sai de novo no aviso automatico', fila().length === n0 + 1)
   agente = { vivo: false, estado: 'offline' }
   r = await avisar('ORDPARADO2')
   conta('com o bot do PC desligado entra na fila e avisa', r.ok && /desligado/.test(r.msg))
