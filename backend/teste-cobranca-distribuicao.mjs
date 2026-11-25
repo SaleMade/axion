@@ -273,6 +273,30 @@ sq.prepare("UPDATE swweb_conn SET st = 'qr' WHERE nk = ?").run(NK_B)
 t(['A', 'B'].includes(await clica('5511970000024')), 'os dois fora do ar: o link continua abrindo um numero (nunca link morto)', '')
 sq.exec('DELETE FROM swweb_conn')
 
+// 25/11/2026: o segundo numero do Haynan ficou dias sem abrir em app nenhum, com o "pronto" velho no
+// swweb_conn, e o rodizio mandou metade dos clientes novos pra ele (conversas que ninguem via).
+console.log('\nNUMERO QUE NINGUEM ABRIU NO APP nao recebe cliente novo enquanto o outro esta aberto')
+sq.exec('CREATE TABLE IF NOT EXISTS swweb_uso (nk TEXT PRIMARY KEY, user_id TEXT, nome TEXT, maquina TEXT, desde INTEGER, ate INTEGER)')
+const abreNoApp = (nk, seg) => sq.prepare('INSERT OR REPLACE INTO swweb_uso (nk, user_id, nome, maquina, desde, ate) VALUES (?,?,?,?,?,?)')
+  .run(nk, 'cob_haynan', 'Haynan', 'pc1', Math.floor(Date.now() / 1000) - 600, Math.floor(Date.now() / 1000) + seg)
+sq.prepare("INSERT OR REPLACE INTO swweb_conn (nk, st, ts) VALUES (?, 'pronto', 0)").run(NK_A)
+sq.prepare("INSERT OR REPLACE INTO swweb_conn (nk, st, ts) VALUES (?, 'pronto', 0)").run(NK_B)
+abreNoApp(NK_A, 120)
+let s5 = ''
+for (const f of ['5511970000041', '5511970000042', '5511970000043']) s5 += await clica(f)
+t(s5 === 'AAA', 'so o primeiro aberto no app (o segundo com o pronto velho): os clientes novos vao todos pro aberto', s5)
+t(await clica('5511970000002') === 'B' && marcaDe('5511970000002').nk === NK_B, 'quem ja estava marcado no fechado continua nele (pode ter escrito pelo celular)', JSON.stringify(marcaDe('5511970000002')))
+abreNoApp(NK_B, 120)
+const s7a = await clica('5511970000046'), s7b = await clica('5511970000047')
+t(s7a === 'B' && s7b === 'B', 'abriu o segundo tambem: volta o rodizio, e ele recebe a vez de quem ficou pra tras', s7a + s7b)
+abreNoApp(NK_A, -10); abreNoApp(NK_B, -10)
+const s6 = await clica('5511970000044') + await clica('5511970000045')
+t(/^[AB]{2}$/.test(s6) && s6.includes('B'), 'nenhum aberto (PC desligado de noite): o rodizio de sempre entre os de pe', s6)
+abreNoApp(NK_B, 120)
+sq.prepare("UPDATE swweb_conn SET st = 'qr' WHERE nk = ?").run(NK_B)
+t(await clica('5511970000048') === 'A', 'aberto mas pedindo QR nao conta como aberto: vai pro de pe', '')
+sq.exec('DELETE FROM swweb_conn'); sq.exec('DELETE FROM swweb_uso')
+
 console.log('\nQUAIS NUMEROS ENTRAM NO RODIZIO: os Em uso (flag ou tag), sem restrito')
 r = await req('GET', '/api/cob/regra', TK.dir)
 const rodH = (r.j.rodizio && r.j.rodizio.cob_haynan) || []

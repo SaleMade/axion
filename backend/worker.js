@@ -40364,7 +40364,8 @@ function _entregaFone(codigo) {
 //      pra montar a previa, antes de o cliente clicar);
 //   3. o rodizio: o numero que recebeu MENOS clientes novos nas ultimas 24 h; empate, o que recebeu
 //      ha mais tempo. Numero que o app reportou caido, pedindo QR ou bloqueado fica fora da vez
-//      enquanto outro do mesmo cobrador estiver de pe.
+//      enquanto outro do mesmo cobrador estiver de pe. E, entre os de pe, vai antes o que esta ABERTO
+//      num app agora (swweb_uso), ver "NUMERO QUE NINGUEM ABRIU" no passo 3.
 // Quem ja esta num numero so sai dele se o numero saiu do rodizio (deixou de ser Em uso, foi banido
 // na Contingencia) ou foi bloqueado pelo WhatsApp. Com UM numero nao ha o que dividir: nada e lido
 // nem gravado, e o caminho de antes.
@@ -40455,12 +40456,29 @@ async function _cobNumeroDoCliente(env, data, quem, fone, grava) {
     // 3. o rodizio
     if (!escolhido) {
       const dePe = lista.filter((x) => !_COB_NUM_FORA.has(stDe.get(x.nk) || ''));
+      // NUMERO QUE NINGUEM ABRIU NO APP (25/11/2026). O segundo numero do Haynan ficou de 17/11 a
+      // 25/11 sem abrir em app nenhum, mas o swweb_conn so muda quando o app manda estado novo: ficou
+      // o "pronto" velho e o rodizio continuou mandando metade dos clientes novos pra ele (6 so na
+      // manha de 25/11, conversas que ninguem via; o Heynan reclamou no grupo que "nao chega nada pro
+      // Haynan"). Entre os de pe, vai antes o que esta aberto num app AGORA (aluguel vivo no
+      // swweb_uso, que o app renova a cada 2 min). Nenhum aberto (PC desligado de noite) = o rodizio
+      // de sempre entre os de pe. Quem ja esta marcado num numero fechado continua nele (passos 1 e
+      // 2): pode ter escrito pelo celular, e mensagem de numero desconhecido derruba numero.
+      let noApp = [];
+      if (dePe.length > 1) {
+        try {
+          await _swwebUsoTabela(env);
+          const ru = await env.DB.prepare('SELECT nk FROM swweb_uso WHERE ate > ? AND nk IN (SELECT value FROM json_each(?))').bind(agoraS, nksJson).all();
+          const abertos = new Set(((ru && ru.results) || []).map((x) => String(x.nk)));
+          noApp = dePe.filter((x) => abertos.has(x.nk));
+        } catch (_) { noApp = []; /* sem a leitura vale o rodizio de sempre */ }
+      }
       const r = await env.DB.prepare(
         "SELECT nk, COUNT(*) n, MAX(criado) ult FROM cob_num_cli WHERE origem = 'rodizio' AND criado > ? AND nk IN (SELECT value FROM json_each(?)) GROUP BY nk"
       ).bind(agoraS - COB_NUM_JANELA_S, nksJson).all();
       const cont = new Map(((r && r.results) || []).map((x) => [String(x.nk), { n: Number(x.n) || 0, ult: Number(x.ult) || 0 }]));
       const peso = (x) => cont.get(x.nk) || { n: 0, ult: 0 };
-      escolhido = (dePe.length ? dePe : lista).slice().sort((a, b) => (peso(a).n - peso(b).n) || (peso(a).ult - peso(b).ult))[0];
+      escolhido = (noApp.length ? noApp : dePe.length ? dePe : lista).slice().sort((a, b) => (peso(a).n - peso(b).n) || (peso(a).ult - peso(b).ult))[0];
       porque = 'rodizio';
     }
     // A MARCA: o sorteado sempre; a conversa, so quando a marca diz outra coisa. `criado` e a data que
