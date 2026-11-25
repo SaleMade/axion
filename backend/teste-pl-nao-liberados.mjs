@@ -169,5 +169,37 @@ g = await pede(DIR, '?atualizar=1')
 conta('o diretor dispara e a lista vem nova', chamadas > ch0 && !codigos(g).includes('ORDPARADO1'), codigos(g))
 conta('e nao toca o celular de ninguem', avisos.length === 0)
 
+// PARADO NA CORRECAO DE ENDERECO (25/11/2026): o AfterPayLog poe em aguardando_endereco quando nao
+// aceita o CEP; o webhook 'aprovado' ja tinha chegado, entao o quadro diz Aprovado.
+console.log('\ncorrecao de endereco:')
+poe('PL-ORDENDERECO', { criado: agora - 2 * 86400, ls: 'Pedido Aprovado' })
+poe('PL-ORDENDNOVO', { criado: agora - 300, ls: 'Pedido Aprovado' })
+pl.ORDENDERECO = { status: 'aguardando_endereco', criado: agora - 2 * 86400, nome: 'Raimunda Teste Silva' }
+pl.ORDENDNOVO = { status: 'aguardando_endereco', criado: agora - 300, nome: 'Benedito Teste' }
+avisos.length = 0
+r = await _plVigiaNaoLiberados(env)
+const doCodigo = (x, c) => (x.itens || []).find((i) => i.code === c)
+conta('pedido na Correcao entra na lista com o motivo', doCodigo(r, 'ORDENDERECO')?.motivo === 'endereco', JSON.stringify(r.itens))
+conta('entra na hora, sem esperar a hora da aprovacao automatica', doCodigo(r, 'ORDENDNOVO')?.motivo === 'endereco')
+conta('o de Cadastrado continua sem motivo', !!doCodigo(r, 'ORDNOVINHO') && !('motivo' in doCodigo(r, 'ORDNOVINHO')))
+const avEnd = avisos.filter((a) => a.tag === 'pl-endereco')
+conta('aviso proprio da Correcao, um por diretor, dizendo quantos', avEnd.length === 2 && avEnd[0].title === 'PayLog pede o endereço certo de 2 pedidos', JSON.stringify(avisos))
+conta('e nao repete o aviso do Cadastrado que ja foi dado', avisos.every((a) => a.tag === 'pl-endereco'))
+avisos.length = 0
+r = await _plVigiaNaoLiberados(env)
+conta('segunda vigia nao avisa de novo', avisos.length === 0, JSON.stringify(avisos))
+pl.ORDNOVINHO.status = 'aguardando_endereco'
+r = await _plVigiaNaoLiberados(env)
+conta('o de Cadastrado que cai na Correcao avisa de novo, pelo endereco, com o nome', avisos.length === 2 && avisos[0].title === 'PayLog pede o endereço certo' && /^Joao Y: a PayLog não aceitou o endereço/.test(avisos[0].body), JSON.stringify(avisos[0]))
+g = await pede(DIR)
+conta('o GET mantem o da Correcao com Aprovado no quadro', doCodigo(g, 'ORDENDERECO')?.motivo === 'endereco', codigos(g))
+conta('e entrega so codigo, data e motivo', Object.keys(doCodigo(g, 'ORDENDERECO') || {}).sort().join() === 'code,criado,motivo')
+db.prepare("UPDATE five_orders SET shipping_code = 'AP1BR', last_status = 'Pedido em Preparação' WHERE order_id = 'PL-ORDENDERECO'").run()
+g = await pede(DIR)
+conta('corrigiu e a etiqueta saiu: sai na hora', !doCodigo(g, 'ORDENDERECO') && !!doCodigo(g, 'ORDENDNOVO'), codigos(g))
+db.prepare("UPDATE five_orders SET charge_status = 'CANCELED' WHERE order_id = 'PL-ORDENDNOVO'").run()
+g = await pede(DIR)
+conta('cancelado sai na hora tambem', !doCodigo(g, 'ORDENDNOVO'), codigos(g))
+
 console.log('\n' + ok + ' ok, ' + ruim + ' ruim')
 process.exit(ruim ? 1 : 0)

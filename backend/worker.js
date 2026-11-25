@@ -1904,6 +1904,15 @@ async function _cronPaylogAbertos(env) {
 // avisa de novo). O GET /api/paylog/nao-liberados entrega a lista pras Aceitacoes.
 // Consulta pedido a pedido de proposito: a varredura dos abertos para em 500 pedidos (10 paginas) e
 // em 13/11 os 30 dias ja somavam 489, entao o parado mais velho seria o primeiro a cair fora dela.
+//
+// PARADO NA CORRECAO DE ENDERECO (25/11/2026). O outro jeito de parar sem evento: a PayLog nao
+// aceita o endereco (quase sempre o CEP geral da cidade, final 000, em cidade que tem CEP por rua: os
+// Correios recusam) e o AfterPayLog poe o pedido em `aguardando_endereco` ("Correcao" no painel).
+// Em 25/11 havia dois assim, um parado desde 23/11, e ninguem sabia. Entra na lista na hora (nao ha
+// aprovacao automatica a esperar), com `motivo: 'endereco'`, selo e aviso proprios.
+// Nao confundir com o "Parado / Erro fiscal" da PayLog normal (webhook v2): TODO pedido nasce assim
+// (o produto esta marcado pra nao emitir nota la, a nota sai da dash no pagamento) e a equipe deles
+// solta em umas 6 horas. Medido em 25/11: 345 de 350 desde 04/11 andaram.
 const _PL_NAO_LIB_ESPERA_S = 3600;
 async function _plVigiaNaoLiberados(env, opts) {
   if (!_ehDashDaCasa(env)) return { ok: false, erro: 'so na dash da casa' };
@@ -1924,8 +1933,9 @@ async function _plVigiaNaoLiberados(env, opts) {
     if (!o) continue;
     const st = String((o.platform_status && o.platform_status.value) || '').toLowerCase();
     const criadoMs = Date.parse(String(o.created_at || ''));
-    if (st !== 'cadastrado' || !(criadoMs > 0) || agoraS - criadoMs / 1000 < _PL_NAO_LIB_ESPERA_S) continue;
-    itens.push({ code, criado: String(o.created_at) });
+    if (st === 'aguardando_endereco') itens.push({ code, criado: String(o.created_at), motivo: 'endereco' });
+    else if (st === 'cadastrado' && criadoMs > 0 && agoraS - criadoMs / 1000 >= _PL_NAO_LIB_ESPERA_S) itens.push({ code, criado: String(o.created_at) });
+    else continue;
     nomes[code] = String((o.client && o.client.name) || '').trim().split(/\s+/).slice(0, 2).join(' ');
   }
   itens.sort((a, b) => Date.parse(a.criado) - Date.parse(b.criado));
@@ -1937,23 +1947,41 @@ async function _plVigiaNaoLiberados(env, opts) {
 async function _plAvisaNaoLiberados(env, itens, nomes, agoraS) {
   try {
     await _ensurePushTables(env);
+    // reserva separada por motivo: o pedido que sai de Cadastrado e cai na Correcao avisa de novo
     const novos = [];
     for (const it of itens) {
+      const chave = (it.motivo === 'endereco' ? 'plend:' : 'plnaolib:') + it.code;
       const res = await env.DB.prepare('INSERT OR IGNORE INTO push_avisos (chave, ts) VALUES (?, ?)')
-        .bind('plnaolib:' + it.code, agoraS).run().catch(() => null);
+        .bind(chave, agoraS).run().catch(() => null);
       if (res && res.meta && res.meta.changes > 0) novos.push(it);
     }
     if (!novos.length) return;
     if (!(await _wpChaves(env))) return;
     const apoio = await _wpApoio(env, null);
-    const um = novos.length === 1;
-    const aviso = {
-      title: um ? 'PayLog não liberou um pedido' : 'PayLog não liberou ' + novos.length + ' pedidos',
-      body: (um ? (nomes[novos[0].code] || 'Cliente') + ' está parado em Cadastrado.' : 'Estão parados em Cadastrado.')
-        + ' Abra na AfterPayLog e clique em Aprovar e Enviar para Logística.',
-      tag: 'pl-nao-lib', url: '/pressels/aceitacoes', aviso: true,
-    };
-    for (const id of apoio.diretoresDaCasa) await _wpParaPessoa(env, id, aviso, 'pl-nao-lib');
+    const avisos = [];
+    const cad = novos.filter((x) => x.motivo !== 'endereco');
+    const end = novos.filter((x) => x.motivo === 'endereco');
+    if (cad.length) {
+      const um = cad.length === 1;
+      avisos.push({
+        title: um ? 'PayLog não liberou um pedido' : 'PayLog não liberou ' + cad.length + ' pedidos',
+        body: (um ? (nomes[cad[0].code] || 'Cliente') + ' está parado em Cadastrado.' : 'Estão parados em Cadastrado.')
+          + ' Abra na AfterPayLog e clique em Aprovar e Enviar para Logística.',
+        tag: 'pl-nao-lib', url: '/pressels/aceitacoes', aviso: true,
+      });
+    }
+    if (end.length) {
+      const um = end.length === 1;
+      avisos.push({
+        title: um ? 'PayLog pede o endereço certo' : 'PayLog pede o endereço certo de ' + end.length + ' pedidos',
+        body: (um ? (nomes[end[0].code] || 'Cliente') + ': a' : 'A') + ' PayLog não aceitou o endereço, quase sempre o CEP geral da cidade.'
+          + ' Pegue o CEP da rua com o cliente e corrija na AfterPayLog.',
+        tag: 'pl-endereco', url: '/pressels/aceitacoes', aviso: true,
+      });
+    }
+    for (const aviso of avisos) {
+      for (const id of apoio.diretoresDaCasa) await _wpParaPessoa(env, id, aviso, aviso.tag);
+    }
   } catch (e) {
     console.error('[push] aviso de pedido nao liberado falhou: ' + String((e && e.message) || e));
   }
@@ -1975,14 +2003,19 @@ async function handlePaylogNaoLiberados(req, env) {
   try { salvo = JSON.parse((await _readConfig(env, 'pl_nao_lib')) || 'null'); } catch (_) { salvo = null; }
   let itens = (salvo && Array.isArray(salvo.itens)) ? salvo.itens.filter((x) => x && x.code) : [];
   if (itens.length) {
-    const rr = await env.DB.prepare('SELECT order_id FROM five_orders WHERE order_id IN (SELECT value FROM json_each(?))'
+    // O da Correcao de endereco ja veio Aprovado antes de parar: pra ele, Aprovado ainda e parado.
+    // Corrigiu, a etiqueta sai (preparando grava o shipping_code) e ele cai fora aqui.
+    const rr = await env.DB.prepare('SELECT order_id, last_status FROM five_orders WHERE order_id IN (SELECT value FROM json_each(?))'
       + " AND COALESCE(shipping_status, '') = '' AND COALESCE(shipping_code, '') = ''"
-      + " AND upper(COALESCE(charge_status, '')) NOT IN ('CANCELED', 'REFUNDED')"
-      + " AND (last_status IS NULL OR last_status LIKE '%adastrado%')")
+      + " AND upper(COALESCE(charge_status, '')) NOT IN ('CANCELED', 'REFUNDED')")
       .bind(JSON.stringify(itens.map((x) => 'PL-' + x.code))).all().catch(() => null);
     if (rr && rr.results) {
-      const ainda = new Set(rr.results.map((x) => String(x.order_id)));
-      itens = itens.filter((x) => ainda.has('PL-' + x.code));
+      const ultimo = new Map(rr.results.map((x) => [String(x.order_id), String(x.last_status || '')]));
+      itens = itens.filter((x) => {
+        if (!ultimo.has('PL-' + x.code)) return false;
+        const ls = ultimo.get('PL-' + x.code);
+        return !ls || /adastrado/i.test(ls) || (x.motivo === 'endereco' && /provado/i.test(ls));
+      });
     }
   }
   return json({ ok: true, ts: (salvo && salvo.ts) || 0, itens });
