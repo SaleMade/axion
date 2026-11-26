@@ -81,8 +81,11 @@ const batida = async () => {
 const ler = () => JSON.parse(sq.prepare('SELECT data FROM dashboard_state WHERE id=1').get().data)
 const poe = (...ls) => { const d = ler(); d.leads.push(...ls); sq.prepare('UPDATE dashboard_state SET data=?, version=version+1 WHERE id=1').run(JSON.stringify(d)); return ls }
 const doId = (id) => (ler().leads || []).find((l) => l.id === id) || {}
-const req = async (metodo, caminho, tk, corpo) => {
-  const h = { 'content-type': 'application/json' }
+// O clique de gente chega com o user-agent do navegador do celular; a previa do WhatsApp chega com
+// "WhatsApp/2.x" e nao marca ninguem (26/11/2026). `ua` troca o do navegador.
+const NAVEGADOR = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
+const req = async (metodo, caminho, tk, corpo, ua) => {
+  const h = { 'content-type': 'application/json', 'user-agent': ua === undefined ? NAVEGADOR : ua }
   if (tk) h.authorization = 'Bearer ' + tk
   const ol = console.log; console.log = () => {}
   try {
@@ -297,12 +300,43 @@ sq.prepare("UPDATE swweb_conn SET st = 'qr' WHERE nk = ?").run(NK_B)
 t(await clica('5511970000048') === 'A', 'aberto mas pedindo QR nao conta como aberto: vai pro de pe', '')
 sq.exec('DELETE FROM swweb_conn'); sq.exec('DELETE FROM swweb_uso')
 
+// 26/11/2026: o "26 novos hoje" do Haynan nao batia com o que chegou pra ele. O proprio WhatsApp abre o
+// link pra montar a previa (user-agent WhatsApp/2.x); em 25/11 duas rajadas de previa de mensagens antigas
+// (numero de vendedor reaberto) viraram 24 "clientes novos", e a marca da previa prendia o cliente no
+// segundo numero, que estava fechado.
+console.log('\nA PREVIA DO WHATSAPP nao marca cliente nem gasta a vez do rodizio')
+const PREVIA = 'WhatsApp/2.23.20.0'
+const nM0 = marcas().length
+const pv = await req('GET', '/acompanhar-pedido/' + b36('5511970000051'), null, null, PREVIA)
+t(pv.st === 302 && ['A', 'B'].includes(qual(pv.loc)), 'a previa recebe um numero do Haynan (o link nunca morre)', pv.st + ' ' + pv.loc)
+t(marcas().length === nM0 && !marcaDe('5511970000051').nk, 'e o cliente nao fica marcado', String(marcas().length))
+for (const f of ['5511970000052', '5511970000053', '5511970000054', '5511970000055']) await req('GET', '/acompanhar-pedido/' + b36(f), null, null, PREVIA)
+t(marcas().length === nM0, 'rajada de previa de mensagens antigas nao vira cliente novo nenhum', String(marcas().length))
+for (const ua of ['facebookexternalhit/1.1', 'curl/8.21.0', '']) await req('GET', '/acompanhar-pedido/' + b36('5511970000056'), null, null, ua)
+t(marcas().length === nM0, 'outros robos (previa do Facebook, curl, sem navegador) tambem nao marcam', String(marcas().length))
+const real = await clica('5511970000051')
+t(['A', 'B'].includes(real) && marcaDe('5511970000051').origem === 'rodizio' && marcas().length === nM0 + 1, 'o clique de verdade (navegador) marca normalmente', real + ' ' + JSON.stringify(marcaDe('5511970000051')))
+
 console.log('\nQUAIS NUMEROS ENTRAM NO RODIZIO: os Em uso (flag ou tag), sem restrito')
 r = await req('GET', '/api/cob/regra', TK.dir)
 const rodH = (r.j.rodizio && r.j.rodizio.cob_haynan) || []
 t(rodH.length === 2 && rodH[0].num === '5515991980514' && rodH[1].num === '5515992860587', 'a tela recebe os dois numeros do rodizio do Haynan', JSON.stringify(rodH))
 const hojeA = marcas("origem = 'rodizio' AND nk = '" + NK_A + "'").length, hojeB = marcas("origem = 'rodizio' AND nk = '" + NK_B + "'").length
 t(rodH[0].hoje === hojeA && rodH[1].hoje === hojeB && hojeA > 0 && hojeB > 0, 'com quantos clientes novos cada um recebeu hoje', JSON.stringify(rodH) + ' x ' + hojeA + '/' + hojeB)
+// `chamaram`: dos clientes que clicaram hoje e cairam no numero, quantos mandaram mensagem pra ELE hoje
+const chamou = (j, nk) => { const x = ((j.rodizio && j.rodizio.cob_haynan) || []).find((y) => y.num === '55' + nk.slice(0, 2) + '9' + nk.slice(2)); return x ? x.chamaram : -1 }
+const nk51 = marcaDe('5511970000051').nk, nkOutro = nk51 === NK_A ? NK_B : NK_A
+const c0 = await req('GET', '/api/cob/regra', TK.dir)
+falou('5511970000051', nkOutro.slice(-8), 30)
+const c1 = await req('GET', '/api/cob/regra', TK.dir)
+t(chamou(c1.j, nk51) === chamou(c0.j, nk51) && chamou(c1.j, nkOutro) === chamou(c0.j, nkOutro), 'mensagem no OUTRO numero nao conta como chamou neste', chamou(c0.j, nk51) + '/' + chamou(c1.j, nk51))
+falou('5511970000051', nk51.slice(-8), 20)
+const c2 = await req('GET', '/api/cob/regra', TK.dir)
+t(chamou(c2.j, nk51) === chamou(c0.j, nk51) + 1, 'clicou e mandou mensagem no numero dele: conta 1 em chamaram', chamou(c0.j, nk51) + ' -> ' + chamou(c2.j, nk51))
+sq.prepare('UPDATE cob_num_cli SET criado = criado - 2 * 86400 WHERE k = ?').run('1170000051')
+const c3 = await req('GET', '/api/cob/regra', TK.dir)
+t(chamou(c3.j, nk51) === chamou(c0.j, nk51) && c3.j.rodizio.cob_haynan.every((x) => x.chamaram <= x.hoje), 'quem clicou em outro dia nao entra na conta de hoje (e chamaram nunca passa de clicaram)', JSON.stringify(c3.j.rodizio.cob_haynan))
+sq.prepare('UPDATE cob_num_cli SET criado = criado + 2 * 86400 WHERE k = ?').run('1170000051')
 t(r.j.numeros.cob_haynan === '5515991980514' && (r.j.rodizio.cob_bryan || []).length === 1, 'o campo antigo (um numero por cobrador) continua vindo; o Bryan tem um so', JSON.stringify(r.j.numeros))
 sq.prepare("INSERT OR REPLACE INTO swweb_conn (nk, st, ts) VALUES (?, 'qr', 0)").run(NK_B)
 r = await req('GET', '/api/cob/regra', TK.dir)

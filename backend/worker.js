@@ -40313,7 +40313,7 @@ async function handleCobRegra(req, env) {
     for (const i of ids) {
       const l = _cobNumerosDe(d, i);
       numeros[i] = l.length ? l[0].e164 : '';
-      rodizio[i] = l.map((x) => ({ num: x.e164, nk: x.nk, hoje: 0, fora: false }));
+      rodizio[i] = l.map((x) => ({ num: x.e164, nk: x.nk, hoje: 0, chamaram: 0, fora: false }));
       todos.push(...rodizio[i]);
     }
     if (todos.length) {
@@ -40321,9 +40321,35 @@ async function handleCobRegra(req, env) {
       const iniDiaS = Math.floor((Math.floor((Date.now() - _COB_BRT) / 86400000) * 86400000 + _COB_BRT) / 1000);
       try {
         await _cobNumTabela(env);
-        const r = await env.DB.prepare("SELECT nk, COUNT(*) n FROM cob_num_cli WHERE origem = 'rodizio' AND criado >= ? AND nk IN (SELECT value FROM json_each(?)) GROUP BY nk").bind(iniDiaS, nksJson).all();
-        const n = new Map(((r && r.results) || []).map((x) => [String(x.nk), Number(x.n) || 0]));
-        for (const x of todos) x.hoje = n.get(x.nk) || 0;
+        // `hoje` = clientes que CLICARAM no link hoje e cairam neste numero pela primeira vez (a previa
+        // que o WhatsApp monta sozinho nao marca mais ninguem, ver _entregaEhRobo). `chamaram` = quantos
+        // deles mandaram mensagem pra este numero hoje (26/11/2026: o socio leu "26 novos hoje" como 26
+        // pedidos que chegaram pro Haynan, e o Haynan contou 3). So conta o que o app capturou: numero
+        // que nao esta aberto em app nenhum fica com zero.
+        const r = await env.DB.prepare("SELECT k, nk FROM cob_num_cli WHERE origem = 'rodizio' AND criado >= ? AND nk IN (SELECT value FROM json_each(?))").bind(iniDiaS, nksJson).all();
+        const porNk = new Map(), nkDoCli = new Map();
+        for (const x of ((r && r.results) || [])) {
+          porNk.set(String(x.nk), (porNk.get(String(x.nk)) || 0) + 1);
+          nkDoCli.set(String(x.k), String(x.nk));
+        }
+        for (const x of todos) x.hoje = porNk.get(x.nk) || 0;
+        if (nkDoCli.size) {
+          try {
+            const fones = [];
+            for (const k of nkDoCli.keys()) fones.push(..._cobAutoVariantes('55' + k));
+            const rm = await env.DB.prepare(
+              "SELECT DISTINCT phone, instance FROM wa_messages WHERE phone IN (SELECT value FROM json_each(?)) AND direction = 'in' AND ts >= ? AND " + _msgDoMundoSql('mundo', '')
+            ).bind(JSON.stringify(fones), iniDiaS).all();
+            const chamou = new Set();
+            for (const m of ((rm && rm.results) || [])) {
+              const k = _waNumKey(m.phone), nk = nkDoCli.get(k);
+              if (nk && nk.slice(-8) === _instNum8(m.instance)) chamou.add(k);
+            }
+            const cham = new Map();
+            for (const k of chamou) { const nk = nkDoCli.get(k); cham.set(nk, (cham.get(nk) || 0) + 1); }
+            for (const x of todos) x.chamaram = cham.get(x.nk) || 0;
+          } catch (_) { /* sem as conversas a tela mostra zero em chamaram */ }
+        }
       } catch (_) { /* sem a contagem a tela mostra zero */ }
       try {
         const r = await env.DB.prepare('SELECT nk, st FROM swweb_conn WHERE nk IN (SELECT value FROM json_each(?))').bind(nksJson).all();
@@ -40571,10 +40597,24 @@ async function _entregaDecide(env, fone, grava) {
   if (!num) for (const i of ids) { num = _cobNumeroDe(data, i); if (num) { porque += '+outro'; break; } }
   return { quem, num, porque };
 }
+// A PREVIA DO WHATSAPP NAO E O CLIENTE (26/11/2026). Pedido do Bruno: o "26 novos hoje" do Haynan
+// nao batia com o que chegou pra ele. O proprio WhatsApp abre o link pra montar a previa (user-agent
+// "WhatsApp/2.x"): na hora em que o vendedor manda e de novo quando um numero de vendedor e reaberto e
+// o WhatsApp refaz a previa das mensagens antigas. Em 25/11 duas rajadas assim (08h28 e 11h52, dois
+// numeros de vendedor, atras da proxy) foram 24 dos 36 "novos" do dia: nenhum desses clientes tinha
+// clicado, e os 6 do segundo numero do Haynan eram todos previa. Pior: a marca da previa prendia o
+// cliente naquele numero, e o clique de verdade dias depois ia pro numero fechado. Robo recebe o mesmo
+// numero, mas NAO marca o cliente nem gasta a vez do rodizio: so o clique de gente (navegador) marca.
+const _ENTREGA_ROBO = /^WhatsApp\/|facebookexternalhit|facebot|meta-externalagent|TelegramBot|Twitterbot|Slackbot|Discordbot|LinkedInBot|SkypeUriPreview|Googlebot|bingbot|Applebot|vkShare|curl\/|Wget|python-|Go-http-client|node-fetch|axios|okhttp/i;
+function _entregaEhRobo(req) {
+  const ua = String((req && req.headers && req.headers.get('user-agent')) || '');
+  return !ua || _ENTREGA_ROBO.test(ua);
+}
 async function handleEntregaLink(req, env, codigo) {
   const fone = _entregaFone(codigo);
-  const { quem, num, porque } = await _entregaDecide(env, fone, true);
-  console.log('ENTREGA_LINK ' + (fone ? fone.slice(-4) : '-') + ' -> ' + (quem || '-') + ' (' + porque + ')');
+  const robo = _entregaEhRobo(req);
+  const { quem, num, porque } = await _entregaDecide(env, fone, !robo);
+  console.log('ENTREGA_LINK ' + (fone ? fone.slice(-4) : '-') + ' -> ' + (quem || '-') + ' (' + porque + ')' + (robo ? ' previa' : ''));
   if (!num) return new Response('Este link de entrega está sem atendente no momento. Fale com quem te atendeu na compra.', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
   return new Response(null, { status: 302, headers: { Location: 'https://wa.me/' + num + '?text=' + encodeURIComponent(ENTREGA_TEXTO), 'cache-control': 'no-store' } });
 }
