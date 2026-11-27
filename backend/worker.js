@@ -484,6 +484,62 @@ function _fechaFichaAoPagar(lead, quandoMs, who) {
     valor: Math.round((alvo - soma) * 100) / 100, obs: 'fechou a conta ao marcar pago', who: String(who || 'sistema'),
   }]).slice(-60);
 }
+// A MESMA PARTE ANOTADA DOS DOIS LADOS (27/11/2026). O cobrador gera o boleto da parte na Payt e anota a
+// parte no SellWave Web (ou na dash) antes ou depois de o boleto compensar. Sem casar as duas, o mesmo
+// dinheiro entrava duas vezes na ficha e R$ 250 + R$ 250 "quitavam" um pedido de R$ 497. Casa quando o
+// valor e o mesmo e as duas anotacoes estao a ate 7 dias uma da outra. `lado`: 'payt' procura a parcela
+// que a Payt lancou e ninguem anotou ainda (quem chama e o pagamento_add); 'pessoa' procura a que alguem
+// anotou e a Payt ainda nao confirmou (quem chama e o aviso da Payt).
+function _parcelaGemea(lista, valor, ms, lado) {
+  const v = Math.round((Number(valor) || 0) * 100) / 100;
+  if (!(v > 0)) return null;
+  const SETE = 7 * 86400000, base = Number(ms) || Date.now();
+  return (Array.isArray(lista) ? lista : []).find((p) => {
+    if (!p || Math.abs((Number(p.valor) || 0) - v) > 0.009) return false;
+    const t = (Number(p.ts) || 0) * 1000;
+    if (!(t > 0) || Math.abs(t - base) > SETE) return false;
+    const quem = String(p.who || '');
+    if (lado === 'payt') return quem === 'payt' && !!p.payt && !p.anotada;
+    return !p.payt && !['payt', 'sistema', 'five', 'paylog'].includes(quem) && !/fechou a conta/.test(String(p.obs || ''));
+  }) || null;
+}
+// O LINK DA PAYT PAGOU MENOS QUE O QUE FALTA? Devolve null quando o pagamento quita (ou o valor nao veio:
+// segue o caminho de sempre, pedido Pago). Senao lanca a parte na ficha (ou casa com a que ja estava
+// anotada), poe o pedido em Parcial e devolve { valor, falta, gemea }. Aviso repetido da mesma transacao
+// (a Payt manda finalizada e faturada) devolve { repetido: true } sem mexer em nada.
+// Teste: teste-pagamento-parcial-link.mjs (roda o worker inteiro com o aviso no formato da Payt).
+function _paytParteDoLink(lead, valor, tid, ms) {
+  const v = Math.round((Number(valor) || 0) * 100) / 100;
+  if (!lead || !(v > 0)) return null;
+  const alvo = _cobValorCobrar(lead);
+  if (!(alvo > 0)) return null;
+  const id = String(tid || '');
+  const lista = Array.isArray(lead.pagamentos) ? lead.pagamentos : [];
+  if (id && lista.some((p) => p && String(p.payt || '') === id)) return { repetido: true, valor: v, falta: Math.max(0, alvo - _cobPagoReg(lead)) };
+  const soma = _cobPagoReg(lead);
+  const gemea = _parcelaGemea(lista, v, ms, 'pessoa');
+  const depois = gemea ? soma : soma + v;
+  if (depois + 0.005 >= alvo) {
+    // Quita. Com parcela anterior, a ficha ganha o valor de verdade desta transacao (o _fechaFichaAoPagar
+    // nao precisa inventar o resto); a gemea so ganha a marca de confirmada.
+    if (gemea) gemea.payt = id || true;
+    else if (soma > 0) lead.pagamentos = lista.concat([_parcelaDaPayt(v, ms, id)]).slice(-60);
+    return null;
+  }
+  if (gemea) gemea.payt = id || true;
+  else lead.pagamentos = lista.concat([_parcelaDaPayt(v, ms, id)]).sort((a, b) => (Number(a && a.ts) || 0) - (Number(b && b.ts) || 0)).slice(-60);
+  lead.spg = 'Parcial';
+  return { valor: v, falta: Math.round((alvo - depois) * 100) / 100, gemea: !!gemea };
+}
+function _parcelaDaPayt(v, ms, id) {
+  const t = Number(ms) > 1.5e12 ? Number(ms) : Date.now();
+  const d = new Date(t - 3 * 3600000);
+  return {
+    ts: Math.floor(t / 1000),
+    data: String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear(),
+    valor: v, obs: 'pago pelo link da Payt', who: 'payt', payt: String(id || '') || true,
+  };
+}
 function _carimbaPagoTs(lead, eraPago, tsPlataforma, opts) {
   if (!lead) return;
   const agora = _ehPago(lead);
@@ -8423,7 +8479,13 @@ async function handleUpdateLead(req, env, leadId) {
           // calendario). Sem ele, ou com dia invalido ou no futuro, e agora (ver _quandoPgMs).
           const _msPg = _quandoPgMs(patch.pagamento_add.quando) || Date.now();
           const _d = new Date(_msPg - 3 * 3600000);
-          lead.pagamentos.push({
+          // A PARTE QUE A PAYT JA LANCOU (27/11/2026): o boleto da parte compensou antes de o cobrador
+          // anotar. Mesmo valor a ate 7 dias = o mesmo dinheiro; so ganha quem anotou, nao entra de novo.
+          const _gemeaPt = _parcelaGemea(lead.pagamentos, _pv, _msPg, 'payt');
+          if (_gemeaPt) {
+            _gemeaPt.anotada = String(u.id);
+            if (patch.pagamento_add.conta && !_gemeaPt.conta) _gemeaPt.conta = _contaOk(patch.pagamento_add.conta) || undefined;
+          } else lead.pagamentos.push({
             ts: Math.floor(_msPg / 1000),
             data: String(_d.getUTCDate()).padStart(2, '0') + '/' + String(_d.getUTCMonth() + 1).padStart(2, '0') + '/' + _d.getUTCFullYear(),
             valor: _pv, obs: String(patch.pagamento_add.obs || '').slice(0, 200), who: String(u.id),
@@ -23958,7 +24020,26 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
     if (_lp) {
       const _quando = `${todayBR()} ${nowTimeBR()}`;
       _lp.hist = Array.isArray(_lp.hist) ? _lp.hist : [];
-      if (['finalizada', 'faturada'].includes(data.event) && _lp.spg !== 'Pago') {
+      // PAGOU SO UMA PARTE PELO LINK (27/11/2026, audio do Heynan: "o pagamento parcial esta indo pra
+      // Pagos"). O cobrador gera na Payt um boleto ou Pix do VALOR DA PARTE (R$ 250 de um kit de R$ 497)
+      // e anota a parte no SellWave Web. Quando o boleto compensava (a Payt fecha por volta das 2h),
+      // este bloco marcava o pedido inteiro como Pago e o _fechaFichaAoPagar completava a ficha com o
+      // resto ("fechou a conta ao marcar pago", R$ 247 que ninguem pagou). Casos reais: 1793969176155
+      // (boleto R$ 250 em 25/11) e 1795013624463 (boleto R$ 300 em 27/11), os dois com o proximo
+      // pagamento ja marcado. Agora o valor da transacao decide: so vira Pago quando cobre o que falta.
+      // Abaixo disso entra como parcela (ou casa com a que o cobrador ja anotou) e o pedido continua na
+      // coluna Pagamento parcial, com a etapa dele.
+      const _parteLk = (['finalizada', 'faturada'].includes(data.event) && _lp.spg !== 'Pago')
+        ? _paytParteDoLink(_lp, data.amount, data.order_id, _paidAtPayt(data.paid_at) || Date.now()) : null;
+      if (_parteLk) {
+        if (!_parteLk.repetido) {
+          if (data.payment_method && !_lp.pgto) _lp.pgto = data.payment_method;
+          _lp.hist.push({ from: _lp.col, to: _lp.col, who: 'payt', time: _quando,
+            note: 'Pagou ' + _botBRL(_parteLk.valor) + ' pelo link da Payt' + (data.payment_method ? ' (' + data.payment_method + ')' : '')
+              + ': pagamento parcial, falta ' + _botBRL(_parteLk.falta) + (_parteLk.gemea ? '. E a parte que ja estava anotada no pedido' : '') });
+        }
+        if (!lead_id_result) { lead_id_result = _lp.id; action_taken = 'parcial_pelo_link'; }
+      } else if (['finalizada', 'faturada'].includes(data.event) && _lp.spg !== 'Pago') {
         const _eraPagoLk = _ehPago(_lp);
         _lp.spg = 'Pago';
         _lp.pago_link = Math.floor(Date.now() / 1000);
@@ -24000,6 +24081,15 @@ async function handlePaytWebhook(req, env, urlToken, ctx) {
         delete _lp.pago_link;
         _carimbaPagoTs(_lp, true, 0);   // estornou: deixa de ter data de pagamento
         _lp.hist.push({ from: _lp.col, to: _lp.col, who: 'payt', time: _quando, note: 'Pagamento do link estornado na Payt (' + data.event + ')' });
+      } else if (['cancelada_reembolsada', 'cancelada_chargeback'].includes(data.event) && _lp.spg !== 'Pago' && data.order_id
+        && (Array.isArray(_lp.pagamentos) ? _lp.pagamentos : []).some((p) => p && String(p.payt || '') === String(data.order_id))) {
+        // Estorno de uma PARTE paga pelo link (27/11/2026): sai a parcela que a Payt lancou; a que alguem
+        // anotou na mao fica (quem anotou confere), so perde a marca de confirmada.
+        const _tidE = String(data.order_id);
+        _lp.pagamentos = _lp.pagamentos.filter((p) => !(p && String(p.payt || '') === _tidE && String(p.who || '') === 'payt'));
+        for (const p of _lp.pagamentos) if (p && String(p.payt || '') === _tidE) delete p.payt;
+        _lp.spg = _cobPagoReg(_lp) > 0 ? 'Parcial' : 'Pendente';
+        _lp.hist.push({ from: _lp.col, to: _lp.col, who: 'payt', time: _quando, note: 'Parte paga pelo link estornada na Payt (' + data.event + ')' });
       }
     }
   } catch (_) {}
