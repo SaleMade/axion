@@ -8415,8 +8415,9 @@ async function handleUpdateLead(req, env, leadId) {
           delete lead.cob_pct;
           // RECARIMBA SO PRA COBRADOR: a direcao entra no mapa com taxa zero (ver _cobAceitos), entao
           // um pedido pago que passa pro Bruno fica sem `cob_pct` e nao rende comissao a ninguem.
-          const _q = Number(lead.pago_ts) || 0;
-          if (_ehPago(lead) && _q >= COB_COMISSAO_DESDE) {
+          // Pedido so com PARTE paga tambem (27/11/2026): a parte ja rende comissao pro dono novo.
+          const _q = _ehPago(lead) ? (Number(lead.pago_ts) || 0) : _primeiraParteMs(lead);
+          if (_q >= COB_COMISSAO_DESDE) {
             const _p = _cobOk.get(_novo) || 0;
             if (_p) lead.cob_pct = _p;
           }
@@ -9677,19 +9678,24 @@ function _saldoComissao(data, uRow, mundo, pctAfl) {
   const semAcento = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
   let ganho = 0;
   for (const l of (Array.isArray(data && data.leads) ? data.leads : [])) {
-    if (!l || !pago(l)) continue;
+    if (!l) continue;
+    // A PARTE PAGA JA E COMISSAO (27/11/2026, pedido do Bruno: "ja deveria contabilizar dentro da
+    // comissao que eles podem sacar"). Entra o pedido pago e o que tem parte paga na ficha; a base e o
+    // que ENTROU (a soma da ficha; sem ficha, o valor a cobrar do pago), igual ao totalPago do front.
+    const reg = (Array.isArray(l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
+    if (!pago(l) && !(reg > 0)) continue;
+    const base = reg > 0 ? reg : _wpValor(l);
     // O COBRADOR TAMBEM SACA (03/11/2026): o painel dele ganhou o "Solicitar saque" do vendedor, e
     // sem esta linha todo pedido dele nascia marcado "acima do saldo". E a comissaoCobrador do front:
     // a taxa congelada no pedido (cob_pct, so existe de 01/11 em diante) sobre o que foi pago.
     // `!l.afl` (09/11/2026): pedido de afiliado nunca paga comissao de cobranca da casa, mesmo que um
     // dia carregue `cob` (o handleUpdateLead recusa desde hoje; o que ja estiver gravado nao conta).
     if (String(l.cob || '') === meu && !mundo && !l.afl) {
-      const reg = (Array.isArray(l.pagamentos) ? l.pagamentos : []).reduce((s, p) => s + (Number(p && p.valor) || 0), 0);
-      ganho += (reg > 0 ? reg : _wpValor(l)) * (Number(l.cob_pct) || 0) / 100;
+      ganho += base * (Number(l.cob_pct) || 0) / 100;
     }
     if (String(l.at || '') !== meu) continue;
     if (String(l.afl || '') !== String(mundo || '')) continue;
-    ganho += _wpComissaoVendedor(_wpValor(l), l, uRow, pctAfl).comissao;
+    ganho += _wpComissaoVendedor(base, l, uRow, pctAfl).comissao;
   }
   let comprometido = 0;
   for (const x of (Array.isArray(data && data.saques) ? data.saques : [])) {
@@ -40259,6 +40265,19 @@ async function _cronRastreio(env) {
 // pagar 3% do valor cheio ali sairia caro pelo que a casa recebe. Se o Bruno quiser incluir, e tirar
 // a peneira do `l.afl` daqui e do congelamento logo abaixo.
 const COB_COMISSAO_DESDE = Date.UTC(2026, 10, 1, 3, 0, 0);   // 01/11/2026 00:00 BRT, em ms
+// QUANDO ENTROU A PRIMEIRA PARTE de um pedido (27/11/2026), em ms; 0 = nenhuma. A comissao passou a
+// valer sobre a parte paga, entao a taxa do cobrador congela ai (ver o carimbo no _cronCobrador e a
+// troca de dono no handleUpdateLead). Parcela do pagamento_add vem em segundos; a da Payt, em ms.
+function _primeiraParteMs(l) {
+  let m = 0;
+  for (const p of (Array.isArray(l && l.pagamentos) ? l.pagamentos : [])) {
+    if (!p || !(Number(p.valor) > 0)) continue;
+    const t = Number(p.ts) || 0;
+    const ms = t > 1e12 ? t : t * 1000;
+    if (ms > 0 && (!m || ms < m)) m = ms;
+  }
+  return m;
+}
 
 // Pedido que ainda da trabalho de cobranca: nao esta pago e nao morreu numa coluna terminal.
 // E a carga que importa pra dividir - pedido encerrado nao ocupa ninguem.
@@ -40820,11 +40839,13 @@ async function _cronCobrador(env) {
     // Pedido pago ANTES de 01/11/2026 nao recebe carimbo nenhum: outubro fecha no fixo de R$ 1.400,
     // que e a decisao do Bruno. Como a ausencia do campo ja vale zero na conta do front, nao gasto
     // bytes do estado escrevendo zero em 341 pedidos antigos (o blob ja esta em 80% do teto).
+    // PARTE PAGA TAMBEM CARIMBA (27/11/2026, pedido do Bruno: comissao "em cima daquilo que ja foi
+    // pago"). O pedido com parte paga e nao quitado congela a taxa na PRIMEIRA parte (de 01/11 em
+    // diante); sem isso a parte rendia zero pro cobrador ate o cliente quitar.
     for (const l of data.leads) {
       if (!l || l.afl || !l.cob) continue;
       if (l.cob_pct != null) continue;
-      if (!_ehPago(l)) continue;
-      const quando = Number(l.pago_ts) || 0;
+      const quando = _ehPago(l) ? (Number(l.pago_ts) || 0) : _primeiraParteMs(l);
       if (!quando || quando < COB_COMISSAO_DESDE) continue;
       const pct = pctDe.get(String(l.cob)) || 0;
       if (!pct) continue;
